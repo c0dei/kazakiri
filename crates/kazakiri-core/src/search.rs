@@ -43,6 +43,7 @@ pub enum SearchOutcome {
     Cancelled,
 }
 
+#[allow(clippy::large_enum_variant)] // Query は 1 つしか作らないので気にしない
 enum Matcher {
     Bytes { fwd: memmem::Finder<'static>, rev: memmem::FinderRev<'static> },
     /// UTF-8 のファイルをバイト列のまま正規表現で探す

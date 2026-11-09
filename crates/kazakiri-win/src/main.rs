@@ -2,6 +2,12 @@
 
 #[cfg(windows)]
 mod app;
+#[cfg(windows)]
+mod clipboard;
+#[cfg(windows)]
+mod menu;
+#[cfg(windows)]
+mod recent;
 
 #[cfg(windows)]
 fn main() {

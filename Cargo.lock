@@ -58,6 +58,7 @@ dependencies = [
 name = "kazakiri-win"
 version = "0.1.0"
 dependencies = [
+ "encoding_rs",
  "kazakiri-core",
  "windows",
  "windows-numerics",
