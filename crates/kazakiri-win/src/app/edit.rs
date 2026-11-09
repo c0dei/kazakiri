@@ -357,17 +357,19 @@ impl App {
     /// 行頭からの x 座標（横スクロールを含まない）
     pub(super) fn x_of_offset(&self, doc: &Document, pos: u64) -> f32 {
         let Some((s, _)) = doc.line_of_offset(pos).and_then(|l| doc.line_range(l)) else { return 0.0 };
-        let prefix: Vec<u16> = doc.decode(&doc.read(s, pos)).encode_utf16().take(MAX_RENDER_UNITS).collect();
-        unsafe { self.text_width(&prefix) }.unwrap_or(prefix.len() as f32 * self.char_w)
+        let src = doc.decode(&doc.read(s, pos)).encode_utf16().count();
+        let Some(l) = doc.lines(doc.line_of_offset(pos).unwrap_or(0), 1).into_iter().next() else { return 0.0 };
+        let d = self.display(&l);
+        let prefix = &d.units[..d.to_disp(src).min(d.shown)];
+        unsafe { self.text_width(prefix) }.unwrap_or(prefix.len() as f32 * self.char_w)
     }
 
     /// 行 `line` の中で x 座標に最も近い位置
     pub(super) fn offset_in_line_at_x(&self, doc: &Document, line: u64, x: f32) -> Option<u64> {
         let l = doc.lines(line, 1).into_iter().next()?;
-        let units = render_units(&l).0;
-        let idx = unsafe { self.unit_at_x(&units[..render_units(&l).1], x) }.unwrap_or(0);
-        let text = String::from_utf16_lossy(&units[..idx]);
-        Some((l.start + doc.encode(&text).len() as u64).min(l.end))
+        let d = self.display(&l);
+        let idx = unsafe { self.unit_at_x(&d.units[..d.shown], x) }.unwrap_or(0);
+        Some(self.src_units_to_offset(doc, &l, d.to_src(idx)))
     }
 
     /// 位置が画面に入るようにスクロールする
@@ -469,6 +471,7 @@ impl App {
         self.sel = Some((0, 0));
         self.hit = None;
         self.message = "新規作成（UTF-8）".into();
+        self.csv = None;
         self.update_title();
         self.update_scrollbars();
         self.invalidate();

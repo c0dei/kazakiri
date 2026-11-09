@@ -31,6 +31,14 @@ pub const ID_GREP: u32 = 308;
 pub const ID_NEXT_RESULT: u32 = 309;
 pub const ID_PREV_RESULT: u32 = 310;
 pub const ID_CLOSE_RESULTS: u32 = 311;
+pub const ID_CSV: u32 = 600;
+pub const ID_CSV_HEADER: u32 = 601;
+pub const ID_SORT_ASC: u32 = 602;
+pub const ID_SORT_DESC: u32 = 603;
+/// 区切り文字の選択肢（DELIMS の並びと対応）
+pub const ID_DELIM_BASE: u32 = 610;
+pub const DELIMS: [(&str, char); 4] = [("カンマ ( , )", ','), ("タブ", '\t'), ("セミコロン ( ; )", ';'), ("縦棒 ( | )", '|')];
+
 /// エンコードの選択肢（ENCODINGS の並びと対応）
 pub const ID_ENC_BASE: u32 = 400;
 /// 最近使ったファイル
@@ -53,6 +61,7 @@ pub struct Menus {
     pub search: HMENU,
     pub encoding: HMENU,
     pub recent: HMENU,
+    pub view: HMENU,
 }
 
 fn wide(s: &str) -> Vec<u16> {
@@ -120,6 +129,18 @@ pub unsafe fn build() -> Result<Menus> {
         item(search, ID_GOTO, "行へ移動(&G)...\tCtrl+G")?;
         popup(bar, search, "検索(&S)")?;
 
+        let view = CreatePopupMenu()?;
+        item(view, ID_CSV, "CSV/TSV モード(&C)\tCtrl+Shift+C")?;
+        sep(view)?;
+        for (i, (name, _)) in DELIMS.iter().enumerate() {
+            item(view, ID_DELIM_BASE + i as u32, &format!("区切り: {name}"))?;
+        }
+        item(view, ID_CSV_HEADER, "1 行目は見出し(&H)")?;
+        sep(view)?;
+        item(view, ID_SORT_ASC, "カーソルの列で昇順に並べ替え(&A)")?;
+        item(view, ID_SORT_DESC, "カーソルの列で降順に並べ替え(&D)")?;
+        popup(bar, view, "表示(&V)")?;
+
         let encoding = CreatePopupMenu()?;
         for (i, (name, _)) in ENCODINGS.iter().enumerate() {
             if i == 1 {
@@ -129,11 +150,28 @@ pub unsafe fn build() -> Result<Menus> {
         }
         popup(bar, encoding, "エンコード(&N)")?;
 
-        Ok(Menus { bar, file, search, encoding, recent })
+        Ok(Menus { bar, file, search, encoding, recent, view })
     }
 }
 
 impl Menus {
+    /// 表示メニューのチェック状態（`csv` は CSV モードのときの (区切り, 見出しあり)）
+    pub unsafe fn refresh_view(&self, csv: Option<(char, bool)>) {
+        unsafe {
+            let check = |on: bool| if on { MF_CHECKED.0 } else { MF_UNCHECKED.0 };
+            CheckMenuItem(self.view, ID_CSV, check(csv.is_some()));
+            for (i, (_, d)) in DELIMS.iter().enumerate() {
+                let id = ID_DELIM_BASE + i as u32;
+                CheckMenuItem(self.view, id, check(csv.is_some_and(|(cd, _)| cd == *d)));
+            }
+            CheckMenuItem(self.view, ID_CSV_HEADER, check(csv.is_some_and(|(_, h)| h)));
+            let en = if csv.is_some() { MF_ENABLED } else { MF_GRAYED };
+            for id in [ID_CSV_HEADER, ID_SORT_ASC, ID_SORT_DESC] {
+                let _ = EnableMenuItem(self.view, id, en);
+            }
+        }
+    }
+
     /// メニューを開く直前にチェック状態などを最新にする
     pub unsafe fn refresh(&self, case: bool, regex: bool, follow: bool, forced: Option<Option<&'static Encoding>>, recent: &[PathBuf]) {
         unsafe {
