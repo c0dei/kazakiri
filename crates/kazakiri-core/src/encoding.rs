@@ -77,7 +77,7 @@ fn guess_utf16(sample: &[u8]) -> Option<&'static Encoding> {
         return None;
     }
     let (mut even_zero, mut odd_zero) = (0usize, 0usize);
-    for pair in sample[..n].chunks_exact(2) {
+    for pair in sample[..n].as_chunks::<2>().0 {
         even_zero += (pair[0] == 0) as usize;
         odd_zero += (pair[1] == 0) as usize;
     }

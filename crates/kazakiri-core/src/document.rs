@@ -708,10 +708,10 @@ mod tests {
         std::fs::write(&path, "x\n").unwrap();
         let doc3 = Document::open(&path).unwrap();
         ready(&doc3);
-        // ログのローテーション相当：別ファイルを作って置き換える
-        let rotated = dir.join("grow.log.new");
-        std::fs::write(&rotated, "y\nzzzz\n").unwrap();
-        std::fs::rename(&rotated, &path).unwrap();
+        // ログのローテーション相当：いまのファイルを別名にして、新しいファイルを作る
+        // （開いている＝マップ中のファイルへの上書きの rename は Windows では拒否されるので、この順にする）
+        std::fs::rename(&path, dir.join("grow.log.1")).unwrap();
+        std::fs::write(&path, "y\nzzzz\n").unwrap();
         assert!(matches!(doc3.refresh().unwrap(), Refresh::Replaced));
         drop(doc3);
         let _ = std::fs::remove_dir_all(&dir);

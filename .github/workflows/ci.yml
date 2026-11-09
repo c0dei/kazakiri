@@ -1,0 +1,98 @@
+# ビルドとテスト。
+# - main への push とプルリクエストで実行し、Windows 用の kazakiri.exe を成果物（Artifacts）として残す
+# - v で始まるタグ（例: v0.3.0）を push すると、zip を GitHub Releases に添付する
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  windows:
+    name: Windows（テスト・ビルド）
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust を用意
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: ビルドのキャッシュ
+        uses: Swatinem/rust-cache@v2
+
+      - name: テスト（コア）
+        run: cargo test --release -p kazakiri-core
+
+      - name: clippy（警告はエラー扱い）
+        run: cargo clippy --release --workspace --all-targets -- -D warnings
+
+      - name: ビルド
+        run: cargo build --release -p kazakiri-win -p kazakiri-cli
+
+      - name: 成果物をまとめる
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target/release/kazakiri.exe dist/
+          Copy-Item target/release/kazakiri-bench.exe dist/
+          Copy-Item README.md dist/
+          Compress-Archive -Path dist/* -DestinationPath kazakiri-windows-x64.zip -Force
+
+      - name: 成果物をアップロード
+        uses: actions/upload-artifact@v4
+        with:
+          name: kazakiri-windows-x64
+          path: dist/
+          retention-days: 30
+
+      - name: リリース用にアップロード（タグのとき）
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-zip
+          path: kazakiri-windows-x64.zip
+
+  linux:
+    name: Linux（コアのテスト）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --release -p kazakiri-core
+      - run: cargo clippy --release -p kazakiri-core -p kazakiri-cli --all-targets -- -D warnings
+
+  release:
+    name: リリース（タグのとき）
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-zip
+      - name: GitHub Releases に添付
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" kazakiri-windows-x64.zip \
+            --repo "${GITHUB_REPOSITORY}" --title "kazakiri ${GITHUB_REF_NAME}" --generate-notes
