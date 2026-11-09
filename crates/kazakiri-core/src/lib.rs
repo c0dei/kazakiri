@@ -3,7 +3,9 @@
 pub mod document;
 pub mod encoding;
 pub mod line_index;
+pub mod search;
 pub mod source;
 
-pub use document::{Document, Line, Searcher};
+pub use document::{Document, Line};
+pub use search::{Direction, Query, SearchControl, SearchOptions, SearchOutcome};
 pub use line_index::{Newline, Progress};

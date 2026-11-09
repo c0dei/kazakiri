@@ -71,6 +71,30 @@ pub fn next_line_start(data: &[u8], from: usize, kind: Newline) -> Option<usize>
     None
 }
 
+/// `pos` 以前（`pos` を含む）で最も後ろにある行の開始位置。`floor` より前は見ない
+pub fn line_start_at_or_before(data: &[u8], pos: usize, floor: usize, kind: Newline) -> usize {
+    let needle = kind.needle();
+    let mut end = pos.min(data.len());
+    while end > floor {
+        let Some(q) = memchr::memrchr(needle, &data[floor..end]).map(|r| floor + r) else { break };
+        if let Some(next) = kind.accept(data, q) {
+            if next <= pos {
+                return next;
+            }
+        }
+        end = q;
+    }
+    floor
+}
+
+/// `pos` 以降（`pos` を含む）で最初の行の開始位置。なければ末尾
+pub fn line_start_at_or_after(data: &[u8], pos: usize, floor: usize, kind: Newline) -> usize {
+    if pos <= floor {
+        return floor;
+    }
+    next_line_start(data, pos - 1, kind).unwrap_or(data.len()).max(pos.min(data.len()))
+}
+
 /// 1 チャンクの走査結果
 #[derive(Debug, Default)]
 struct ChunkInfo {
