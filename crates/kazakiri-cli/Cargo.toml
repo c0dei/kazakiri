@@ -1,12 +1,12 @@
 [package]
-name = "hayate-cli"
+name = "kazakiri-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "hayate-bench"
+name = "kazakiri-bench"
 path = "src/main.rs"
 
 [dependencies]
-hayate-core = { path = "../hayate-core" }
+kazakiri-core = { path = "../kazakiri-core" }

@@ -7,7 +7,7 @@ use std::cell::RefCell;
 use std::path::PathBuf;
 use std::time::Instant;
 
-use hayate_core::{Document, Line};
+use kazakiri_core::{Document, Line};
 use windows::core::{w, Interface, Result, BOOL, PCWSTR};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Direct2D::Common::*;
@@ -24,7 +24,7 @@ use windows::Win32::UI::Shell::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows_numerics::Vector2;
 
-const APP_NAME: &str = "hayate";
+const APP_NAME: &str = "kazakiri";
 const FONT_CANDIDATES: [&str; 4] = ["BIZ UDGothic", "BIZ UDゴシック", "MS Gothic", "Consolas"];
 const FONT_SIZE: f32 = 14.0;
 /// 1 行のうち描画する最大 UTF-16 単位数（それ以上は「…」）
@@ -90,7 +90,7 @@ pub fn run() {
         let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
         if let Err((step, e)) = run_inner() {
             let msg = wide(&format!("起動に失敗しました（{step}）: {e}"));
-            MessageBoxW(None, PCWSTR(msg.as_ptr()), w!("hayate"), MB_ICONERROR);
+            MessageBoxW(None, PCWSTR(msg.as_ptr()), w!("kazakiri"), MB_ICONERROR);
         }
     }
 }
@@ -98,7 +98,7 @@ pub fn run() {
 unsafe fn run_inner() -> std::result::Result<(), (&'static str, windows::core::Error)> {
     unsafe {
         let instance = GetModuleHandleW(None).map_err(|e| ("GetModuleHandle", e))?;
-        let class = w!("HayateMain");
+        let class = w!("KazakiriMain");
         let wc = WNDCLASSW {
             style: CS_HREDRAW | CS_VREDRAW,
             lpfnWndProc: Some(wndproc),
@@ -112,7 +112,7 @@ unsafe fn run_inner() -> std::result::Result<(), (&'static str, windows::core::E
         let hwnd = CreateWindowExW(
             WS_EX_ACCEPTFILES,
             class,
-            w!("hayate"),
+            w!("kazakiri"),
             WS_OVERLAPPEDWINDOW | WS_VSCROLL | WS_HSCROLL,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
@@ -172,8 +172,8 @@ unsafe fn create_format(dw: &IDWriteFactory) -> Result<IDWriteTextFormat> {
         let mut fonts = None;
         dw.GetSystemFontCollection(&mut fonts, false)?;
         let fonts = fonts.unwrap();
-        // 環境変数 HAYATE_FONT でフォントを指定できる
-        let user_font = std::env::var("HAYATE_FONT").ok();
+        // 環境変数 KAZAKIRI_FONT でフォントを指定できる
+        let user_font = std::env::var("KAZAKIRI_FONT").ok();
         let candidates = user_font.iter().map(String::as_str).chain(FONT_CANDIDATES);
         let mut family = FONT_CANDIDATES[FONT_CANDIDATES.len() - 1];
         for name in candidates {
@@ -807,7 +807,7 @@ impl App {
 
 /// バイト列をデコードしたときの UTF-16 単位数
 fn decode_units(doc: &Document, bytes: &[u8]) -> usize {
-    hayate_core::encoding::decode(doc.encoding(), bytes).encode_utf16().count()
+    kazakiri_core::encoding::decode(doc.encoding(), bytes).encode_utf16().count()
 }
 
 fn rect(l: f32, t: f32, r: f32, b: f32) -> D2D_RECT_F {

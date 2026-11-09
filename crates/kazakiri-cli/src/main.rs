@@ -1,14 +1,14 @@
-//! hayate-bench: コアの性能を測るためのコマンド。
+//! kazakiri-bench: コアの性能を測るためのコマンド。
 //!
-//!   hayate-bench gen <出力パス> <サイズMB> [log|csv|sjis]   テスト用ファイルを作る
-//!   hayate-bench open <パス> [検索語]                        開く・索引・表示・検索の時間を測る
+//!   kazakiri-bench gen <出力パス> <サイズMB> [log|csv|sjis]   テスト用ファイルを作る
+//!   kazakiri-bench open <パス> [検索語]                        開く・索引・表示・検索の時間を測る
 
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use hayate_core::Document;
+use kazakiri_core::Document;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -19,7 +19,7 @@ fn main() {
         }
         Some("open") if args.len() >= 3 => open(Path::new(&args[2]), args.get(3).map(String::as_str)),
         _ => {
-            eprintln!("usage:\n  hayate-bench gen <path> <MB> [log|csv|sjis]\n  hayate-bench open <path> [needle]");
+            eprintln!("usage:\n  kazakiri-bench gen <path> <MB> [log|csv|sjis]\n  kazakiri-bench open <path> [needle]");
             std::process::exit(2);
         }
     }

@@ -29,14 +29,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "hayate-cli"
+name = "kazakiri-cli"
 version = "0.1.0"
 dependencies = [
- "hayate-core",
+ "kazakiri-core",
 ]
 
 [[package]]
-name = "hayate-core"
+name = "kazakiri-core"
 version = "0.1.0"
 dependencies = [
  "encoding_rs",
@@ -45,10 +45,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "hayate-win"
+name = "kazakiri-win"
 version = "0.1.0"
 dependencies = [
- "hayate-core",
+ "kazakiri-core",
  "windows",
  "windows-numerics",
 ]

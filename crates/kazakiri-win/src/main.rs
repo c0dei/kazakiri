@@ -10,5 +10,5 @@ fn main() {
 
 #[cfg(not(windows))]
 fn main() {
-    eprintln!("hayate の GUI は Windows 専用です。ベンチマークは hayate-bench を使ってください。");
+    eprintln!("kazakiri の GUI は Windows 専用です。ベンチマークは kazakiri-bench を使ってください。");
 }

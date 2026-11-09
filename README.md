@@ -1,4 +1,4 @@
-# hayate（疾風）
+# kazakiri（風切）
 
 数GBのログ・CSV・TSV・テキストを一瞬で開ける、Windows 向けの軽量テキストエディタ（開発中）。
 EmEditor の「大きいファイルが速い」体験を、買い切り不要のオープンソースで目指す。
@@ -32,7 +32,7 @@ Windows で（Rust の stable を [rustup](https://rustup.rs/) で入れてお�
 
 ```
 cargo build --release
-target\release\hayate.exe 開きたいファイル.log
+target\release\kazakiri.exe 開きたいファイル.log
 ```
 
 Linux からのクロスビルド:
@@ -40,14 +40,14 @@ Linux からのクロスビルド:
 ```
 rustup target add x86_64-pc-windows-gnu
 sudo apt-get install gcc-mingw-w64-x86-64
-cargo build --release --target x86_64-pc-windows-gnu -p hayate-win
+cargo build --release --target x86_64-pc-windows-gnu -p kazakiri-win
 ```
 
 ベンチマーク（どの OS でも可）:
 
 ```
-cargo run --release -p hayate-cli -- gen big.log 3072 log     # 3GB のテストログを作る
-cargo run --release -p hayate-cli -- open big.log "ERROR"     # 開く・索引・検索の時間を測る
+cargo run --release -p kazakiri-cli -- gen big.log 3072 log     # 3GB のテストログを作る
+cargo run --release -p kazakiri-cli -- open big.log "ERROR"     # 開く・索引・検索の時間を測る
 ```
 
 ## キー操作
@@ -62,18 +62,18 @@ cargo run --release -p hayate-cli -- open big.log "ERROR"     # 開く・索引�
 | Ctrl+Home / Ctrl+End | 先頭 / 末尾 |
 | ← → Home | 横スクロール |
 
-フォントは BIZ UDゴシック → MS ゴシック → Consolas の順に探す。環境変数 `HAYATE_FONT` で指定できる。
+フォントは BIZ UDゴシック → MS ゴシック → Consolas の順に探す。環境変数 `KAZAKIRI_FONT` で指定できる。
 
 ## 構成
 
 ```
 crates/
-  hayate-core/   UI に依存しないコア（テスト・ベンチ可能）
+  kazakiri-core/   UI に依存しないコア（テスト・ベンチ可能）
     source.rs      メモリマップでファイルを開く
     encoding.rs    文字コード判定・デコード
     line_index.rs  並列・疎な行インデックス
     document.rs    行の取り出し、検索
-  hayate-win/    Windows UI（Win32 + Direct2D/DirectWrite）
-  hayate-cli/    ベンチマーク・テストデータ生成
+  kazakiri-win/    Windows UI（Win32 + Direct2D/DirectWrite）
+  kazakiri-cli/    ベンチマーク・テストデータ生成
 docs/PLAN.md     調査結果と開発ロードマップ
 ```

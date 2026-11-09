@@ -1,4 +1,4 @@
-# hayate 開発計画
+# kazakiri 開発計画
 
 ## 前提
 
