@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use encoding_rs::Encoding;
-use kazakiri_core::{Direction, Document, Line, Query, Refresh, SearchControl, SearchOptions, SearchOutcome};
+use kazakiri_core::{Direction, Document, EditKind, Editor, Line, Query, Refresh, SearchControl, SearchOptions, SearchOutcome};
 use windows::core::{w, Interface, Result, BOOL, PCWSTR};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Direct2D::Common::*;
@@ -30,6 +30,9 @@ use windows_numerics::Vector2;
 
 use crate::menu::{self, Menus};
 use crate::{clipboard, recent};
+
+mod edit;
+use edit::{Pending, SaveJob, WM_RUN_PENDING, WM_SAVE_DONE};
 
 const APP_NAME: &str = "kazakiri";
 const FONT_CANDIDATES: [&str; 4] = ["BIZ UDGothic", "BIZ UDゴシック", "MS Gothic", "Consolas"];
@@ -56,6 +59,7 @@ const COL_STATUS_TEXT: D2D1_COLOR_F = rgb(0xFF, 0xFF, 0xFF);
 const COL_MATCH: D2D1_COLOR_F = rgb(0xFF, 0xE0, 0x6B);
 const COL_SELECT: D2D1_COLOR_F = rgb(0xAD, 0xD6, 0xFF);
 const COL_DIM: D2D1_COLOR_F = rgb(0xB0, 0xB0, 0xB0);
+const COL_CARET: D2D1_COLOR_F = rgb(0x00, 0x00, 0x00);
 
 thread_local! {
     static APP: RefCell<Option<App>> = const { RefCell::new(None) };
@@ -70,7 +74,12 @@ enum Prompt {
 
 /// 借用中に実行できない処理（モーダルダイアログはメッセージを再入させる）
 enum Deferred {
-    OpenDialog,
+    /// 名前を付けて保存ダイアログを出して保存する
+    SaveAs,
+    /// 未保存の変更を確認してから行う
+    Confirm(Pending),
+    /// そのまま行う（ダイアログを伴うことがある）
+    Perform(Pending),
 }
 
 struct Gfx {
@@ -116,7 +125,16 @@ struct App {
     menus: Menus,
     line_h: f32,
     char_w: f32,
+    /// いま表示している Document（編集のたびに editor から取り直す）
     doc: Option<Arc<Document>>,
+    editor: Option<Editor>,
+    /// 上下移動で保つ x 座標
+    goal_x: Option<f32>,
+    /// サロゲートペアの前半
+    high_surrogate: Option<u16>,
+    saving: Option<SaveJob>,
+    /// 保存が終わったら行う操作
+    pending: Option<Pending>,
     top: u64,
     x_off: f32,
     prompt: Option<Prompt>,
@@ -200,6 +218,11 @@ unsafe fn run_inner() -> std::result::Result<(), (&'static str, windows::core::E
             line_h,
             char_w,
             doc: None,
+            editor: None,
+            goal_x: None,
+            high_surrogate: None,
+            saving: None,
+            pending: None,
             top: 0,
             x_off: 0.0,
             prompt: None,
@@ -211,15 +234,16 @@ unsafe fn run_inner() -> std::result::Result<(), (&'static str, windows::core::E
             hit: None,
             sel: None,
             dragging: false,
-            message: "Ctrl+O: 開く / ドラッグ&ドロップでも開けます".into(),
+            message: "Ctrl+O: 開く / Ctrl+N: 新規 / ドラッグ&ドロップでも開けます".into(),
             opened_at: None,
             recent: recent::load(),
             follow: false,
             stick_bottom: false,
             layout_cache: RefCell::new(HashMap::new()),
         };
-        if let Some(arg) = std::env::args_os().nth(1) {
-            app.open(PathBuf::from(arg), None);
+        match std::env::args_os().nth(1) {
+            Some(arg) => app.open(PathBuf::from(arg), None),
+            None => app.new_doc(),
         }
         APP.with(|a| *a.borrow_mut() = Some(app));
         DragAcceptFiles(hwnd, true);
@@ -310,20 +334,68 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
     }
 }
 
+fn with_app<R>(f: impl FnOnce(&mut App) -> R) -> Option<R> {
+    APP.with(|cell| cell.try_borrow_mut().ok().and_then(|mut g| g.as_mut().map(f)))
+}
+
 unsafe fn run_deferred(hwnd: HWND, d: Deferred) {
     match d {
-        Deferred::OpenDialog => {
-            if let Some(path) = unsafe { open_dialog(hwnd) } {
-                APP.with(|cell| {
-                    if let Some(app) = cell.borrow_mut().as_mut() {
-                        app.open(path, None);
+        Deferred::SaveAs => {
+            let current = with_app(|app| app.doc.as_ref().and_then(|d| d.path().map(|p| p.to_path_buf()))).flatten();
+            match unsafe { edit::save_dialog(hwnd, current) } {
+                Some(path) => {
+                    if let Some(Some(d)) = with_app(|app| app.save(Some(path))) {
+                        unsafe { run_deferred(hwnd, d) };
                     }
-                });
-            }
-            unsafe {
-                let _ = InvalidateRect(Some(hwnd), None, false);
+                }
+                // 名前を付けずにやめたら、保留していた操作も取りやめる
+                None => {
+                    with_app(|app| app.pending = None);
+                }
             }
         }
+        Deferred::Confirm(action) => {
+            let name = with_app(|app| app.doc.as_ref().and_then(|d| d.path().map(|p| p.display().to_string()))).flatten();
+            let text = wide(&format!("{} への変更を保存しますか？", name.unwrap_or_else(|| "（無題）".into())));
+            let r = unsafe { MessageBoxW(Some(hwnd), PCWSTR(text.as_ptr()), w!("kazakiri"), MB_YESNOCANCEL | MB_ICONQUESTION) };
+            if r == IDYES {
+                let next = with_app(|app| {
+                    app.pending = Some(action);
+                    app.save(None)
+                });
+                if let Some(Some(d)) = next {
+                    unsafe { run_deferred(hwnd, d) };
+                }
+            } else if r == IDNO {
+                unsafe { run_deferred(hwnd, Deferred::Perform(action)) };
+            }
+        }
+        Deferred::Perform(action) => match action {
+            Pending::OpenDialog => {
+                if let Some(path) = unsafe { open_dialog(hwnd) } {
+                    with_app(|app| app.open(path, None));
+                }
+            }
+            Pending::OpenPath(p) => {
+                with_app(|app| app.open(p, None));
+            }
+            Pending::Reopen(enc) => {
+                with_app(|app| {
+                    app.reopen(enc);
+                    let name = menu::ENCODINGS.iter().find(|(_, e)| *e == enc).map_or("", |(n, _)| n);
+                    app.message = format!("{name} で開き直しました");
+                });
+            }
+            Pending::New => {
+                with_app(|app| app.new_doc());
+            }
+            Pending::Close => unsafe {
+                let _ = DestroyWindow(hwnd);
+            },
+        },
+    }
+    unsafe {
+        let _ = InvalidateRect(Some(hwnd), None, false);
     }
 }
 
@@ -412,7 +484,7 @@ impl App {
                     (DONE, None)
                 }
                 WM_TIMER if wparam.0 == TIMER_SEARCH => {
-                    if self.search.is_none() {
+                    if self.search.is_none() && self.saving.is_none() {
                         let _ = KillTimer(Some(self.hwnd), TIMER_SEARCH);
                     }
                     self.invalidate();
@@ -423,6 +495,25 @@ impl App {
                     self.on_search_done(*done);
                     (DONE, None)
                 }
+                WM_SAVE_DONE => {
+                    let done = Box::from_raw(lparam.0 as *mut edit::SaveDone);
+                    self.on_save_done(*done);
+                    (DONE, None)
+                }
+                WM_RUN_PENDING => (DONE, self.pending.take().map(Deferred::Perform)),
+                WM_CLOSE => {
+                    if self.saving.is_some() {
+                        self.message = "保存が終わるまでお待ちください".into();
+                        self.invalidate();
+                        return (DONE, None);
+                    }
+                    (DONE, self.guarded(Pending::Close))
+                }
+                WM_IME_STARTCOMPOSITION => {
+                    self.update_ime_position();
+                    (None, None)
+                }
+                WM_IME_COMPOSITION if self.ime_result(lparam) => (DONE, None),
                 WM_INITMENUPOPUP => {
                     let forced = self.doc.as_ref().map(|d| d.forced_encoding());
                     self.menus.refresh(self.opts.case_sensitive, self.opts.regex, self.follow, forced, &self.recent);
@@ -519,7 +610,7 @@ impl App {
                     let n = DragQueryFileW(drop, 0, Some(&mut buf)) as usize;
                     DragFinish(drop);
                     if n > 0 {
-                        self.open(PathBuf::from(String::from_utf16_lossy(&buf[..n])), None);
+                        return (DONE, self.guarded(Pending::OpenPath(PathBuf::from(String::from_utf16_lossy(&buf[..n])))));
                     }
                     (DONE, None)
                 }
@@ -545,11 +636,18 @@ impl App {
         self.layout_cache.borrow_mut().clear();
         match Document::open_with(&path, forced) {
             Ok(doc) => {
-                self.doc = Some(Arc::new(doc));
+                let doc = Arc::new(doc);
+                self.editor = Some(Editor::new(doc.clone()));
+                self.doc = Some(doc);
+                self.goal_x = None;
                 if !keep_view {
                     self.top = 0;
                     self.x_off = 0.0;
                     self.sel = None;
+                }
+                if self.sel.is_none() {
+                    let start = self.doc.as_ref().map_or(0, |d| d.text_start() as u64);
+                    self.sel = Some((start, start));
                 }
                 self.hit = None;
                 self.opened_at = Some(Instant::now());
@@ -589,7 +687,11 @@ impl App {
                 let added = new.len() - doc.len();
                 self.cancel_search();
                 self.layout_cache.borrow_mut().clear();
-                self.doc = Some(Arc::new(new));
+                let new = Arc::new(new);
+                if let Some(ed) = &mut self.editor {
+                    ed.reset(new.clone());
+                }
+                self.doc = Some(new);
                 self.message = format!("追記 +{} を読み込みました", human_size(added));
                 if was_bottom && (self.follow || !quiet) {
                     self.stick_bottom = true;
@@ -639,12 +741,31 @@ impl App {
 
     unsafe fn command(&mut self, id: u32) -> Option<Deferred> {
         match id {
-            menu::ID_OPEN => return Some(Deferred::OpenDialog),
-            menu::ID_RELOAD => self.refresh(false),
-            menu::ID_FOLLOW => self.set_follow(!self.follow),
-            menu::ID_EXIT => unsafe {
-                let _ = DestroyWindow(self.hwnd);
-            },
+            menu::ID_NEW => return self.guarded(Pending::New),
+            menu::ID_OPEN => return self.guarded(Pending::OpenDialog),
+            menu::ID_SAVE => return self.save(None),
+            menu::ID_SAVE_AS => return Some(Deferred::SaveAs),
+            menu::ID_RELOAD => {
+                if self.is_modified() {
+                    self.message = "編集中は再読み込みできません（保存するか、元に戻してください）".into();
+                    self.invalidate();
+                } else {
+                    self.refresh(false)
+                }
+            }
+            menu::ID_FOLLOW => {
+                if self.is_modified() && !self.follow {
+                    self.message = "編集中は追従できません".into();
+                    self.invalidate();
+                } else {
+                    self.set_follow(!self.follow)
+                }
+            }
+            menu::ID_EXIT => return self.guarded(Pending::Close),
+            menu::ID_UNDO => self.undo(false),
+            menu::ID_REDO => self.undo(true),
+            menu::ID_CUT => self.cut(),
+            menu::ID_PASTE => self.paste(),
             menu::ID_COPY => self.copy(),
             menu::ID_SELECT_ALL => {
                 if let Some(doc) = &self.doc {
@@ -667,13 +788,12 @@ impl App {
             }
             menu::ID_GOTO => self.start_prompt(Prompt::GotoLine),
             id if (menu::ID_ENC_BASE..menu::ID_ENC_BASE + menu::ENCODINGS.len() as u32).contains(&id) => {
-                let (name, enc) = menu::ENCODINGS[(id - menu::ID_ENC_BASE) as usize];
-                self.reopen(enc);
-                self.message = format!("{name} で開き直しました");
+                let (_, enc) = menu::ENCODINGS[(id - menu::ID_ENC_BASE) as usize];
+                return self.guarded(Pending::Reopen(enc));
             }
             id if (menu::ID_RECENT_BASE..menu::ID_RECENT_BASE + menu::RECENT_MAX as u32).contains(&id) => {
                 if let Some(p) = self.recent.get((id - menu::ID_RECENT_BASE) as usize).cloned() {
-                    self.open(p, None);
+                    return self.guarded(Pending::OpenPath(p));
                 }
             }
             _ => {}
@@ -707,31 +827,55 @@ impl App {
             }
             return None;
         }
-        let page = self.visible_lines() as i64;
         match vk {
             VK_ESCAPE => {
                 if self.search.is_some() {
                     self.cancel_search();
                     self.message = "検索を中止しました".into();
+                } else if let Some(job) = &self.saving {
+                    job.cancel.store(true, Ordering::Relaxed);
                 } else {
-                    self.sel = None;
+                    let c = self.caret();
+                    self.sel = Some((c, c));
                     self.hit = None;
                 }
                 self.invalidate();
             }
-            VK_UP => self.scroll_by(-1),
-            VK_DOWN => self.scroll_by(1),
-            VK_PRIOR => self.scroll_by(-page),
-            VK_NEXT => self.scroll_by(page),
-            VK_HOME if ctrl => self.scroll_to(0),
-            VK_END if ctrl => self.scroll_to(u64::MAX),
-            VK_HOME => self.hscroll_by(-f32::MAX),
-            VK_LEFT => self.hscroll_by(-self.char_w * 4.0),
-            VK_RIGHT => self.hscroll_by(self.char_w * 4.0),
+            // カーソル移動（Shift で選択、Ctrl+↑↓ は画面だけスクロール）
+            VK_UP if ctrl => self.scroll_by(-1),
+            VK_DOWN if ctrl => self.scroll_by(1),
+            VK_UP => self.move_vertical(-1, shift),
+            VK_DOWN => self.move_vertical(1, shift),
+            VK_LEFT if ctrl => self.move_word(false, shift),
+            VK_RIGHT if ctrl => self.move_word(true, shift),
+            VK_LEFT => self.move_horizontal(false, shift),
+            VK_RIGHT => self.move_horizontal(true, shift),
+            VK_PRIOR => self.move_page(false, shift),
+            VK_NEXT => self.move_page(true, shift),
+            VK_HOME if ctrl => self.move_doc_edge(false, shift),
+            VK_END if ctrl => self.move_doc_edge(true, shift),
+            VK_HOME => self.move_line_edge(false, shift),
+            VK_END => self.move_line_edge(true, shift),
+            // 編集
+            VK_RETURN => self.insert_newline(),
+            VK_BACK => self.delete_char(false),
+            VK_DELETE if shift => self.cut(),
+            VK_DELETE => self.delete_char(true),
+            VK_TAB if !ctrl => self.type_text("\t", EditKind::Typing),
+            VK_INSERT if ctrl => self.copy(),
+            VK_INSERT if shift => self.paste(),
             VK_F3 if shift => return unsafe { self.command(menu::ID_FIND_PREV) },
             VK_F3 => return unsafe { self.command(menu::ID_FIND_NEXT) },
             VK_F5 => return unsafe { self.command(menu::ID_RELOAD) },
-            _ if ctrl && vk == VK_O => return Some(Deferred::OpenDialog),
+            _ if ctrl && shift && vk == VK_S => return Some(Deferred::SaveAs),
+            _ if ctrl && shift && vk == VK_Z => self.undo(true),
+            _ if ctrl && vk == VK_N => return unsafe { self.command(menu::ID_NEW) },
+            _ if ctrl && vk == VK_O => return unsafe { self.command(menu::ID_OPEN) },
+            _ if ctrl && vk == VK_S => return unsafe { self.command(menu::ID_SAVE) },
+            _ if ctrl && vk == VK_Z => self.undo(false),
+            _ if ctrl && vk == VK_Y => self.undo(true),
+            _ if ctrl && vk == VK_X => self.cut(),
+            _ if ctrl && vk == VK_V => self.paste(),
             _ if ctrl && vk == VK_F => self.start_prompt(Prompt::Find),
             _ if ctrl && vk == VK_G => self.start_prompt(Prompt::GotoLine),
             _ if ctrl && vk == VK_C => self.copy(),
@@ -743,16 +887,28 @@ impl App {
     }
 
     fn on_char(&mut self, ch: u32) {
-        if self.prompt.is_none() {
-            return;
-        }
-        // 制御文字（Enter, BS, Esc, Ctrl+?）は WM_KEYDOWN 側で処理済み
+        // 制御文字（Enter, BS, Tab, Esc, Ctrl+?）は WM_KEYDOWN 側で処理済み
         if ch < 0x20 || ch == 0x7F {
             return;
         }
-        if let Some(c) = char::from_u32(ch) {
+        // 絵文字などはサロゲートペアで 2 回に分けて届く
+        let c = match ch {
+            0xD800..=0xDBFF => {
+                self.high_surrogate = Some(ch as u16);
+                return;
+            }
+            0xDC00..=0xDFFF => {
+                let Some(hi) = self.high_surrogate.take() else { return };
+                char::decode_utf16([hi, ch as u16]).next().and_then(|r| r.ok())
+            }
+            _ => char::from_u32(ch),
+        };
+        let Some(c) = c else { return };
+        if self.prompt.is_some() {
             self.input.push(c);
             self.invalidate();
+        } else {
+            self.type_text(c.encode_utf8(&mut [0; 4]), EditKind::Typing);
         }
     }
 
@@ -959,9 +1115,14 @@ impl App {
             _ => Some((off, off)),
         };
         self.dragging = true;
+        self.goal_x = None;
+        if let Some(e) = &mut self.editor {
+            e.break_group();
+        }
         unsafe {
             SetCapture(self.hwnd);
         }
+        self.update_ime_position();
         self.invalidate();
     }
 
@@ -1302,6 +1463,16 @@ impl App {
             }
             brush.SetColor(&COL_TEXT);
             rt.DrawTextLayout(Vector2 { X: x, Y: y }, layout, brush, D2D1_DRAW_TEXT_OPTIONS_NONE);
+            // カーソル
+            if let (Some(doc), Some(_)) = (&self.doc, self.sel) {
+                let c = self.caret();
+                if c >= line.start && c <= line.end && self.prompt.is_none() {
+                    let (ua, _) = self.span_units(doc, line, c, c, shown);
+                    let cx = x + self.text_width(&units[..ua as usize])?;
+                    brush.SetColor(&COL_CARET);
+                    rt.FillRectangle(&rect(cx - 0.5, y + 1.0, cx + 1.5, y + self.line_h - 1.0), brush);
+                }
+            }
         }
         Ok(())
     }
@@ -1385,6 +1556,12 @@ impl App {
         match self.prompt {
             Some(Prompt::Find) => format!("検索{flags}: {}|  Enter:次 Shift+Enter:前 Alt+C:大小区別 Alt+R:正規表現 Esc:取消", self.input),
             Some(Prompt::GotoLine) => format!("行番号へ移動: {}|", self.input),
+            None if self.saving.is_some() => {
+                let job = self.saving.as_ref().unwrap();
+                let pct = job.written.load(Ordering::Relaxed) as f64 * 100.0 / job.total.max(1) as f64;
+                let name = job.target.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+                format!("保存中… {:.0}%  {name}  (Esc で中止)", pct.min(100.0))
+            }
             None => match &self.search {
                 Some(job) => {
                     let pct = job.ctl.scanned.load(Ordering::Relaxed) as f64 * 100.0 / job.span.max(1) as f64;
@@ -1420,21 +1597,30 @@ impl App {
                     None => String::new(),
                 };
                 let follow = if self.follow { "追従中   " } else { "" };
+                let modified = if self.is_modified() { "変更あり   " } else { "" };
                 let enc = if doc.forced_encoding().is_some() { format!("{}（指定）", doc.encoding().name()) } else { doc.encoding().name() };
-                format!(
-                    "{follow}{idx}{sel}{} 行目 / {lines} 行   {enc}   {}   {}",
-                    group(self.top + 1),
-                    doc.newline_name(),
-                    human_size(doc.len())
-                )
+                // カーソルの行と列（列は文字数）
+                let c = self.caret();
+                let pos = match doc.line_of_offset(c).and_then(|l| doc.line_range(l).map(|r| (l, r))) {
+                    Some((l, (s, _))) if c - s <= 1 << 20 => {
+                        let col = doc.decode(&doc.read(s, c)).chars().count() + 1;
+                        format!("{} 行, {} 列", group(l + 1), group(col as u64))
+                    }
+                    Some((l, _)) => format!("{} 行", group(l + 1)),
+                    None => format!("{} 行目付近", group(self.top + 1)),
+                };
+                format!("{modified}{follow}{idx}{sel}{pos} / {lines} 行   {enc}   {}   {}", doc.newline_name(), human_size(doc.len()))
             }
         };
         unsafe {
-            self.draw_str(rt, brush, &left, 8.0, top + 3.0, w * 0.55)?;
+            // 右側（ファイルの情報）を優先し、左側（メッセージ）は残りの幅で切る
             let units: Vec<u16> = right.encode_utf16().collect();
-            let layout = self.dw.CreateTextLayout(&units, &self.format, w * 0.45, self.line_h)?;
-            layout.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING)?;
-            rt.DrawTextLayout(Vector2 { X: w * 0.55 - 8.0, Y: top + 3.0 }, &layout, brush, D2D1_DRAW_TEXT_OPTIONS_CLIP);
+            let layout = self.dw.CreateTextLayout(&units, &self.format, w, self.line_h)?;
+            let mut m = DWRITE_TEXT_METRICS::default();
+            layout.GetMetrics(&mut m)?;
+            let rw = m.widthIncludingTrailingWhitespace.min(w * 0.75);
+            rt.DrawTextLayout(Vector2 { X: w - rw - 8.0, Y: top + 3.0 }, &layout, brush, D2D1_DRAW_TEXT_OPTIONS_CLIP);
+            self.draw_str(rt, brush, &left, 8.0, top + 3.0, w - rw - 24.0)?;
         }
         Ok(())
     }
