@@ -65,12 +65,139 @@ pub(super) struct Disp {
     segs: Option<Vec<(u32, u32, u32)>>,
     /// CSV のとき：各列の表示範囲 [開始, 終了)
     pub cols: Vec<(u32, u32)>,
+    /// 色を変える範囲（表示の位置）
+    pub effects: Vec<(u32, u32, Effect)>,
+}
+
+/// 文字の色の種類
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Effect {
+    /// 空白・タブ・改行の印
+    Mark,
+    LogError,
+    LogWarn,
+    LogDebug,
+}
+
+/// ログレベルの語（単語として現れたもの）を探す。戻り値は UTF-16 の位置
+fn log_levels(text: &str) -> Vec<(u32, u32, Effect)> {
+    const WORDS: [(&str, Effect); 9] = [
+        ("FATAL", Effect::LogError),
+        ("CRITICAL", Effect::LogError),
+        ("ERROR", Effect::LogError),
+        ("SEVERE", Effect::LogError),
+        ("WARNING", Effect::LogWarn),
+        ("WARN", Effect::LogWarn),
+        ("DEBUG", Effect::LogDebug),
+        ("TRACE", Effect::LogDebug),
+        ("VERBOSE", Effect::LogDebug),
+    ];
+    let head: &str = match text.char_indices().nth(512) {
+        Some((i, _)) => &text[..i],
+        None => text,
+    };
+    let mut out = Vec::new();
+    for (w, eff) in WORDS {
+        let mut from = 0;
+        while let Some(i) = head[from..].find(w) {
+            let a = from + i;
+            let b = a + w.len();
+            let before = head[..a].chars().next_back().is_none_or(|c| !c.is_alphanumeric());
+            let after = head[b..].chars().next().is_none_or(|c| !c.is_alphanumeric());
+            if before && after && !out.iter().any(|&(s, e, _): &(usize, usize, Effect)| a < e && s < b) {
+                out.push((a, b, eff));
+            }
+            from = b;
+        }
+    }
+    out.into_iter()
+        .map(|(a, b, e)| (head[..a].encode_utf16().count() as u32, head[..b].encode_utf16().count() as u32, e))
+        .collect()
 }
 
 impl Disp {
     pub fn plain(line: &Line) -> Disp {
         let (units, shown) = render_units(line);
-        Disp { units, shown, segs: None, cols: Vec::new() }
+        Disp { units, shown, segs: None, cols: Vec::new(), effects: Vec::new() }
+    }
+
+    /// 空白・タブ・改行を見える印にした行。タブは「>」と空白で次のタブ位置まで埋める
+    pub fn whitespace(line: &Line, tab_width: usize, eol: Option<&str>) -> Disp {
+        let src: Vec<u16> = line.text.encode_utf16().take(MAX_RENDER_UNITS).collect();
+        let cut = line.truncated || src.len() == MAX_RENDER_UNITS;
+        let text = String::from_utf16_lossy(&src);
+        let mut units = Vec::with_capacity(src.len() + 16);
+        let mut segs: Vec<(u32, u32, u32)> = Vec::new();
+        let mut effects = Vec::new();
+        let (mut col, mut src_pos) = (0usize, 0u32);
+        // 1 対 1 で写る区間をまとめる
+        let mut run: Option<(u32, u32, u32)> = None;
+        let flush = |run: &mut Option<(u32, u32, u32)>, segs: &mut Vec<(u32, u32, u32)>| {
+            if let Some(r) = run.take() {
+                segs.push(r);
+            }
+        };
+        for c in text.chars() {
+            let n = c.len_utf16() as u32;
+            let d = units.len() as u32;
+            match c {
+                '\t' => {
+                    flush(&mut run, &mut segs);
+                    let w = tab_width - col % tab_width;
+                    segs.push((src_pos, d, 1));
+                    units.push(b'>' as u16);
+                    units.extend(std::iter::repeat_n(b' ' as u16, w - 1));
+                    effects.push((d, d + 1, Effect::Mark));
+                    col += w;
+                }
+                _ => {
+                    let (shown, w, mark) = match c {
+                        ' ' => ('\u{FF65}', 1, true), // 半角の中黒
+                        '\u{3000}' => ('\u{25A1}', 2, true), // 全角空白は □
+                        _ => (c, kazakiri_core::csv::char_width(c), false),
+                    };
+                    let mut buf = [0u16; 2];
+                    units.extend_from_slice(shown.encode_utf16(&mut buf));
+                    if mark {
+                        effects.push((d, d + n, Effect::Mark));
+                    }
+                    match &mut run {
+                        Some(r) if r.0 + r.2 == src_pos && r.1 + r.2 == d => r.2 += n,
+                        _ => {
+                            flush(&mut run, &mut segs);
+                            run = Some((src_pos, d, n));
+                        }
+                    }
+                    col += w;
+                }
+            }
+            src_pos += n;
+        }
+        flush(&mut run, &mut segs);
+        if segs.is_empty() || segs.last().map(|s| s.0 + s.2) != Some(src_pos) {
+            segs.push((src_pos, units.len() as u32, 0));
+        }
+        let shown = units.len();
+        if let Some(mark) = eol {
+            let d = units.len() as u32;
+            units.extend(mark.encode_utf16());
+            effects.push((d, units.len() as u32, Effect::Mark));
+        }
+        if cut {
+            units.extend("  …(省略)".encode_utf16());
+        }
+        Disp { units, shown, segs: Some(segs), cols: Vec::new(), effects }
+    }
+
+    /// ログレベルの語に色を付ける
+    pub fn with_log_colors(mut self, line: &Line) -> Disp {
+        for (a, b, e) in log_levels(&line.text) {
+            let (da, db) = (self.to_disp(a as usize) as u32, self.to_disp(b as usize) as u32);
+            if db > da {
+                self.effects.push((da, db, e));
+            }
+        }
+        self
     }
 
     /// CSV の行：列をそろえた文字列を作る
@@ -109,7 +236,7 @@ impl Disp {
         if cut {
             units.extend("  …(省略)".encode_utf16());
         }
-        Disp { units, shown, segs: Some(segs), cols }
+        Disp { units, shown, segs: Some(segs), cols, effects: Vec::new() }
     }
 
     /// 元の文字列の位置（UTF-16）→ 表示の位置
@@ -152,10 +279,25 @@ pub(super) struct SortDone {
 impl App {
     /// 表示用の 1 行（CSV モードなら列をそろえる）
     pub(super) fn display(&self, line: &Line) -> Disp {
-        match &self.csv {
+        let d = match &self.csv {
             Some(v) => Disp::csv(line, v),
+            None if self.settings.whitespace => Disp::whitespace(line, self.settings.tab_width, self.eol_mark(line)),
             None => Disp::plain(line),
-        }
+        };
+        if self.settings.log_colors { d.with_log_colors(line) } else { d }
+    }
+
+    /// 行末の印：CRLF は ↵、LF は ↓、CR は ←、ファイルの終わりは [EOF]
+    fn eol_mark(&self, line: &Line) -> Option<&'static str> {
+        let doc = self.doc.as_ref()?;
+        let n = newline_len(doc, line);
+        let unit = if doc.encoding().is_utf16() { 2 } else { 1 };
+        Some(match n {
+            0 => "[EOF]",
+            _ if doc.newline() == kazakiri_core::Newline::Cr => "←",
+            _ if n >= 2 * unit => "↵",
+            _ => "↓",
+        })
     }
 
     /// ファイル名から CSV / TSV かを決め、区切り文字を推定する
@@ -330,4 +472,36 @@ pub(super) fn delim_name(d: char) -> &'static str {
 pub(super) fn sort_status(ctl: &SearchControl, total: u64, name: &str, secs: f64) -> String {
     let pct = ctl.scanned.load(Ordering::Relaxed) as f64 * 100.0 / total.max(1) as f64;
     format!("並べ替え中「{name}」 {:.0}%  {secs:.1} 秒  (Esc で中止)", pct.min(100.0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn line(text: &str) -> Line {
+        Line { number: 0, start: 0, end: text.len() as u64, text: text.into(), truncated: false }
+    }
+
+    #[test]
+    fn log_words() {
+        let r = log_levels("2026 [ERROR] x WARN y ERRORS DEBUG");
+        let kinds: Vec<_> = r.iter().map(|x| x.2).collect();
+        assert_eq!(kinds, [Effect::LogError, Effect::LogWarn, Effect::LogDebug]);
+        assert_eq!((r[0].0, r[0].1), (6, 11));
+    }
+
+    #[test]
+    fn whitespace_mapping() {
+        // "a\tb c　d" → "a>  b･c□d"（タブ幅 4）
+        let d = Disp::whitespace(&line("a\tb c\u{3000}d"), 4, Some("↓"));
+        let shown = String::from_utf16_lossy(&d.units[..d.shown]);
+        assert_eq!(shown, "a>  b\u{FF65}c\u{25A1}d");
+        // 元の位置 → 表示の位置：b は 2 → 4
+        assert_eq!(d.to_disp(2), 4);
+        assert_eq!(d.to_src(4), 2);
+        // タブの途中の空白は、タブの後ろ（b の前）に写る
+        assert_eq!(d.to_src(3), 2);
+        assert_eq!(d.to_disp(7), d.shown);
+        assert_eq!(String::from_utf16_lossy(&d.units[d.shown..]), "↓");
+    }
 }

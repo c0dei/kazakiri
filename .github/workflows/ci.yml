@@ -35,8 +35,8 @@ jobs:
       - name: ビルドのキャッシュ
         uses: Swatinem/rust-cache@v2
 
-      - name: テスト（コア）
-        run: cargo test --release -p kazakiri-core
+      - name: テスト（コアと画面）
+        run: cargo test --release --workspace
 
       - name: clippy（警告はエラー扱い）
         run: cargo clippy --release --workspace --all-targets -- -D warnings

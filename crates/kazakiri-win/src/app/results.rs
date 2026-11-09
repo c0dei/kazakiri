@@ -10,7 +10,6 @@ use std::time::{Duration, Instant};
 
 use kazakiri_core::grep::{self, GrepOptions, GrepProgress, GrepResult};
 use kazakiri_core::{Document, EditKind, FindAll, Query, SearchControl};
-use windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F;
 
 use super::edit::Pending;
 use super::*;
@@ -29,10 +28,6 @@ const GREP_LIMIT: usize = 200_000;
 /// GREP で対象にするファイルの既定
 pub(super) const GREP_DEFAULT_FILES: &str = "*.log;*.txt;*.csv;*.tsv";
 
-const COL_PANEL_BG: D2D1_COLOR_F = rgb(0xF7, 0xF7, 0xF7);
-const COL_PANEL_HEAD: D2D1_COLOR_F = rgb(0xE4, 0xE8, 0xEE);
-const COL_PANEL_SEL: D2D1_COLOR_F = rgb(0xCC, 0xE4, 0xFF);
-const COL_PANEL_FILE: D2D1_COLOR_F = rgb(0x1F, 0x5F, 0xA8);
 
 pub(super) enum ResultKind {
     /// いま開いているファイルの中の一致
@@ -363,11 +358,11 @@ impl App {
             return Ok(());
         }
         unsafe {
-            brush.SetColor(&COL_PANEL_BG);
+            brush.SetColor(&self.theme.panel_bg);
             rt.FillRectangle(&rect(0.0, top, w, top + h), brush);
-            brush.SetColor(&COL_PANEL_HEAD);
+            brush.SetColor(&self.theme.panel_head);
             rt.FillRectangle(&rect(0.0, top, w, top + self.line_h + 2.0), brush);
-            brush.SetColor(&COL_TEXT);
+            brush.SetColor(&self.theme.text);
             let head = match (&self.results, &self.rjob) {
                 (_, Some(job)) if matches!(job.what, JobKind::Grep { .. }) => self.job_status(job),
                 (Some(r), _) => format!("{}    F8: 次  Shift+F8: 前  Esc: 閉じる", r.summary),
@@ -383,7 +378,7 @@ impl App {
                 }
                 let y = top + 2.0 + (row + 1) as f32 * self.line_h;
                 if i == r.sel {
-                    brush.SetColor(&COL_PANEL_SEL);
+                    brush.SetColor(&self.theme.panel_sel);
                     rt.FillRectangle(&rect(0.0, y, w, y + self.line_h), brush);
                 }
                 match &r.kind {
@@ -393,9 +388,9 @@ impl App {
                             Some((d, l)) => (group(l + 1), d.lines(l, 1).into_iter().next().map(|x| x.text).unwrap_or_default()),
                             None => ("?".into(), String::new()),
                         };
-                        brush.SetColor(&COL_GUTTER_TEXT);
+                        brush.SetColor(&self.theme.gutter_text);
                         self.draw_str(rt, brush, &format!("{num:>12}"), 4.0, y, self.char_w * 14.0)?;
-                        brush.SetColor(&COL_TEXT);
+                        brush.SetColor(&self.theme.text);
                         let text: String = text.chars().take(400).collect();
                         self.draw_str(rt, brush, &text, self.char_w * 15.0, y, w - 4.0)?;
                     }
@@ -404,10 +399,10 @@ impl App {
                         let path = &res.files[hit.file];
                         let rel = path.strip_prefix(root).unwrap_or(path).display().to_string();
                         let loc = format!("{rel}({})", group(hit.line + 1));
-                        brush.SetColor(&COL_PANEL_FILE);
+                        brush.SetColor(&self.theme.panel_file);
                         let lw = self.text_width(&loc.encode_utf16().collect::<Vec<_>>())?.min(w * 0.45);
                         self.draw_str(rt, brush, &loc, 8.0, y, 8.0 + lw)?;
-                        brush.SetColor(&COL_TEXT);
+                        brush.SetColor(&self.theme.text);
                         self.draw_str(rt, brush, &format!(": {}", hit.text), 8.0 + lw, y, w - 4.0)?;
                     }
                 }

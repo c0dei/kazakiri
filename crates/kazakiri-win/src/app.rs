@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use encoding_rs::Encoding;
 use kazakiri_core::{Direction, Document, EditKind, Editor, Line, Query, Refresh, SearchControl, SearchOptions, SearchOutcome};
-use windows::core::{w, Interface, Result, BOOL, PCWSTR};
+use windows::core::{w, IUnknown, Interface, Result, BOOL, PCWSTR};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Direct2D::Common::*;
 use windows::Win32::Graphics::Direct2D::*;
@@ -32,15 +32,18 @@ use crate::menu::{self, Menus};
 use crate::{clipboard, recent};
 
 mod csv_view;
+mod theme;
+mod view;
 mod edit;
 mod results;
-use csv_view::{CsvView, Disp, SortDone, WM_SORT_DONE};
+use csv_view::{CsvView, Disp, Effect, SortDone, WM_SORT_DONE};
+use crate::settings::{self, Settings};
+use theme::Theme;
 use edit::{Pending, SaveJob, WM_RUN_PENDING, WM_SAVE_DONE};
 use results::{JobDone, Results, ResultsJob, WM_REPLACE_FOUND, WM_RESULTS_DONE};
 
 const APP_NAME: &str = "kazakiri";
 const FONT_CANDIDATES: [&str; 4] = ["BIZ UDGothic", "BIZ UDゴシック", "MS Gothic", "Consolas"];
-const FONT_SIZE: f32 = 14.0;
 /// 1 行のうち描画する最大 UTF-16 単位数（それ以上は「…」）
 const MAX_RENDER_UNITS: usize = 8192;
 /// クリップボードへコピーできる最大バイト数
@@ -54,17 +57,6 @@ const WM_SEARCH_DONE: u32 = WM_APP + 1;
 const fn rgb(r: u8, g: u8, b: u8) -> D2D1_COLOR_F {
     D2D1_COLOR_F { r: r as f32 / 255.0, g: g as f32 / 255.0, b: b as f32 / 255.0, a: 1.0 }
 }
-const COL_BG: D2D1_COLOR_F = rgb(0xFF, 0xFF, 0xFF);
-const COL_TEXT: D2D1_COLOR_F = rgb(0x1E, 0x1E, 0x1E);
-const COL_GUTTER_BG: D2D1_COLOR_F = rgb(0xF3, 0xF3, 0xF3);
-const COL_GUTTER_TEXT: D2D1_COLOR_F = rgb(0x8A, 0x8A, 0x8A);
-const COL_STATUS_BG: D2D1_COLOR_F = rgb(0x2B, 0x57, 0x9A);
-const COL_STATUS_TEXT: D2D1_COLOR_F = rgb(0xFF, 0xFF, 0xFF);
-const COL_MATCH: D2D1_COLOR_F = rgb(0xFF, 0xE0, 0x6B);
-const COL_SELECT: D2D1_COLOR_F = rgb(0xAD, 0xD6, 0xFF);
-const COL_DIM: D2D1_COLOR_F = rgb(0xB0, 0xB0, 0xB0);
-const COL_CARET: D2D1_COLOR_F = rgb(0x00, 0x00, 0x00);
-const COL_COLUMN: D2D1_COLOR_F = rgb(0xEE, 0xF6, 0xEA);
 
 thread_local! {
     static APP: RefCell<Option<App>> = const { RefCell::new(None) };
@@ -97,6 +89,8 @@ enum Deferred {
 struct Gfx {
     target: ID2D1HwndRenderTarget,
     brush: ID2D1SolidColorBrush,
+    /// 文字の色を変える範囲用（空白の印、ERROR、WARN、DEBUG）
+    effects: [IUnknown; 4],
 }
 
 /// 実行中の検索
@@ -159,6 +153,8 @@ struct App {
     pending_goto: Option<(u64, u64, u64)>,
     /// CSV / TSV モード
     csv: Option<CsvView>,
+    theme: &'static Theme,
+    settings: Settings,
     top: u64,
     x_off: f32,
     prompt: Option<Prompt>,
@@ -227,10 +223,12 @@ unsafe fn run_inner() -> std::result::Result<(), (&'static str, windows::core::E
 
         let d2d: ID2D1Factory = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None).map_err(|e| ("D2D1CreateFactory", e))?;
         let dw: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED).map_err(|e| ("DWriteCreateFactory", e))?;
-        let format = create_format(&dw).map_err(|e| ("CreateTextFormat", e))?;
+        let settings = Settings::load();
+        let format = create_format(&dw, &settings.font, settings.font_size).map_err(|e| ("CreateTextFormat", e))?;
         // フォントが見つからない環境でも起動できるよう、計測失敗時は既定値
-        let (char_w, line_h) = measure(&dw, &format).unwrap_or((FONT_SIZE * 0.5, (FONT_SIZE * 1.4).ceil()));
-        let _ = format.SetIncrementalTabStop(char_w * 4.0);
+        let fs = settings.font_size;
+        let (char_w, line_h) = measure(&dw, &format).unwrap_or((fs * 0.5, (fs * 1.4).ceil()));
+        let _ = format.SetIncrementalTabStop(char_w * settings.tab_width as f32);
 
         let mut app = App {
             hwnd,
@@ -254,6 +252,8 @@ unsafe fn run_inner() -> std::result::Result<(), (&'static str, windows::core::E
             grep_files: results::GREP_DEFAULT_FILES.into(),
             pending_goto: None,
             csv: None,
+            theme: if settings.dark { &theme::DARK } else { &theme::LIGHT },
+            settings,
             top: 0,
             x_off: 0.0,
             prompt: None,
@@ -276,6 +276,7 @@ unsafe fn run_inner() -> std::result::Result<(), (&'static str, windows::core::E
             Some(arg) => app.open(PathBuf::from(arg), None),
             None => app.new_doc(),
         }
+        app.apply_title_theme();
         APP.with(|a| *a.borrow_mut() = Some(app));
         DragAcceptFiles(hwnd, true);
         let _ = ShowWindow(hwnd, SW_SHOW);
@@ -294,14 +295,16 @@ unsafe fn run_inner() -> std::result::Result<(), (&'static str, windows::core::E
     }
 }
 
-unsafe fn create_format(dw: &IDWriteFactory) -> Result<IDWriteTextFormat> {
+unsafe fn create_format(dw: &IDWriteFactory, font: &str, size: f32) -> Result<IDWriteTextFormat> {
     unsafe {
         let mut fonts = None;
         dw.GetSystemFontCollection(&mut fonts, false)?;
         let fonts = fonts.unwrap();
         // 環境変数 KAZAKIRI_FONT でフォントを指定できる
+        // 次に設定ファイルの font
         let user_font = std::env::var("KAZAKIRI_FONT").ok();
-        let candidates = user_font.iter().map(String::as_str).chain(FONT_CANDIDATES);
+        let setting = (!font.is_empty()).then_some(font);
+        let candidates = user_font.iter().map(String::as_str).chain(setting).chain(FONT_CANDIDATES);
         let mut family = FONT_CANDIDATES[FONT_CANDIDATES.len() - 1];
         for name in candidates {
             let (mut idx, mut exists) = (0u32, BOOL(0));
@@ -319,7 +322,7 @@ unsafe fn create_format(dw: &IDWriteFactory) -> Result<IDWriteTextFormat> {
             DWRITE_FONT_WEIGHT_NORMAL,
             DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_STRETCH_NORMAL,
-            FONT_SIZE,
+            size,
             w!("ja-jp"),
         )?;
         format.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)?;
@@ -568,7 +571,7 @@ impl App {
                 WM_INITMENUPOPUP => {
                     let forced = self.doc.as_ref().map(|d| d.forced_encoding());
                     self.menus.refresh(self.opts.case_sensitive, self.opts.regex, self.follow, forced, &self.recent);
-                    self.menus.refresh_view(self.csv.as_ref().map(|v| (v.delim, v.header)));
+                    self.menus.refresh_view(self.csv.as_ref().map(|v| (v.delim, v.header)), &self.settings);
                     (DONE, None)
                 }
                 WM_COMMAND => (DONE, self.command(loword(wparam.0))),
@@ -616,7 +619,10 @@ impl App {
                     let mut pt = POINT { x: loword(lparam.0 as usize) as i16 as i32, y: hiword(lparam.0 as usize) as i16 as i32 };
                     let _ = ScreenToClient(self.hwnd, &mut pt);
                     let scale = GetDpiForWindow(self.hwnd) as f32 / 96.0;
-                    if self.in_panel(pt.y as f32 / scale) {
+                    if GetKeyState(VK_CONTROL.0 as i32) < 0 {
+                        // Ctrl+ホイールで文字の大きさ
+                        self.zoom(if delta > 0 { 1.0 } else { -1.0 });
+                    } else if self.in_panel(pt.y as f32 / scale) {
                         self.panel_scroll(-delta * 3 / 120);
                     } else if GetKeyState(VK_SHIFT.0 as i32) < 0 {
                         self.hscroll_by(-(delta as f32) / 120.0 * self.char_w * 8.0);
@@ -867,6 +873,12 @@ impl App {
             }
             menu::ID_GOTO => self.start_prompt(Prompt::GotoLine),
             menu::ID_CSV => self.toggle_csv(),
+            menu::ID_WHITESPACE => self.toggle_whitespace(),
+            menu::ID_LOG_COLORS => self.toggle_log_colors(),
+            menu::ID_DARK => self.set_dark(!self.settings.dark),
+            menu::ID_ZOOM_IN => self.zoom(1.0),
+            menu::ID_ZOOM_OUT => self.zoom(-1.0),
+            menu::ID_ZOOM_RESET => self.zoom(0.0),
             menu::ID_CSV_HEADER => self.toggle_header(),
             menu::ID_SORT_ASC => self.sort_by_column(false),
             menu::ID_SORT_DESC => self.sort_by_column(true),
@@ -971,6 +983,10 @@ impl App {
             _ if ctrl && shift && vk == VK_S => return Some(Deferred::SaveAs),
             _ if ctrl && shift && vk == VK_F => self.start_prompt(Prompt::GrepQuery),
             _ if ctrl && shift && vk == VK_C => self.toggle_csv(),
+            _ if ctrl && shift && vk == VK_W => self.toggle_whitespace(),
+            _ if ctrl && matches!(vk, VK_OEM_PLUS | VK_ADD) => self.zoom(1.0),
+            _ if ctrl && matches!(vk, VK_OEM_MINUS | VK_SUBTRACT) => self.zoom(-1.0),
+            _ if ctrl && matches!(vk, VK_0 | VK_NUMPAD0) => self.zoom(0.0),
             _ if ctrl && vk == VK_H => self.start_prompt(Prompt::ReplaceFind),
             _ if ctrl && shift && vk == VK_Z => self.undo(true),
             _ if ctrl && vk == VK_N => return unsafe { self.command(menu::ID_NEW) },
@@ -1525,8 +1541,13 @@ impl App {
             };
             let target = self.d2d.CreateHwndRenderTarget(&props, &hprops)?;
             target.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_CLEARTYPE);
-            let brush = target.CreateSolidColorBrush(&COL_TEXT, None)?;
-            self.gfx = Some(Gfx { target, brush });
+            let brush = target.CreateSolidColorBrush(&self.theme.text, None)?;
+            let t = self.theme;
+            let mk = |c: &D2D1_COLOR_F| -> Result<IUnknown> { target.CreateSolidColorBrush(c, None)?.cast() };
+            let effects = [mk(&t.marks)?, mk(&t.log_error)?, mk(&t.log_warn)?, mk(&t.log_debug)?];
+            self.gfx = Some(Gfx { target, brush, effects });
+            // レイアウトは古いブラシを指しているので作り直す
+            self.layout_cache.borrow_mut().clear();
         }
         Ok(())
     }
@@ -1539,7 +1560,7 @@ impl App {
             let rt: ID2D1RenderTarget = g.target.cast()?;
             let brush = &g.brush;
             rt.BeginDraw();
-            rt.Clear(Some(&COL_BG));
+            rt.Clear(Some(&self.theme.bg));
 
             let text_h = self.text_height();
             let digits = group(self.total_lines()).len().max(4);
@@ -1551,7 +1572,7 @@ impl App {
             };
 
             // 行番号の欄
-            brush.SetColor(&COL_GUTTER_BG);
+            brush.SetColor(&self.theme.gutter_bg);
             rt.FillRectangle(&rect(0.0, 0.0, gutter, text_h), brush);
 
             // 本文
@@ -1569,12 +1590,21 @@ impl App {
                     _ => {
                         let disp = self.display(line);
                         let layout = self.dw.CreateTextLayout(&disp.units, &self.format, 1.0e6, self.line_h)?;
+                        for &(a, b, e) in &disp.effects {
+                            let brush = match e {
+                                Effect::Mark => &g.effects[0],
+                                Effect::LogError => &g.effects[1],
+                                Effect::LogWarn => &g.effects[2],
+                                Effect::LogDebug => &g.effects[3],
+                            };
+                            let _ = layout.SetDrawingEffect(brush, DWRITE_TEXT_RANGE { startPosition: a, length: b - a });
+                        }
                         CachedLine { end: line.end, generation, layout, disp }
                     }
                 };
                 if let Some(k) = caret_col {
                     if let Some(&(a, b)) = entry.disp.cols.get(k) {
-                        self.fill_units(&rt, brush, &entry.layout, &entry.disp.units, a, b, self.text_left(), y, COL_COLUMN)?;
+                        self.fill_units(&rt, brush, &entry.layout, &entry.disp.units, a, b, self.text_left(), y, self.theme.column)?;
                     }
                 }
                 self.draw_line(&rt, brush, line, &entry, self.text_left(), y)?;
@@ -1586,11 +1616,11 @@ impl App {
             for (i, line) in lines.iter().enumerate() {
                 let y = i as f32 * self.line_h;
                 let num = format!("{:>width$}", group(line.number + 1), width = digits);
-                brush.SetColor(&COL_GUTTER_TEXT);
+                brush.SetColor(&self.theme.gutter_text);
                 self.draw_str(&rt, brush, &num, self.char_w * 0.5, y, gutter)?;
             }
             if lines.is_empty() && self.doc.is_some() {
-                brush.SetColor(&COL_DIM);
+                brush.SetColor(&self.theme.dim);
                 self.draw_str(&rt, brush, "索引作成中…", gutter + 8.0, 0.0, w)?;
             }
 
@@ -1609,7 +1639,7 @@ impl App {
                     let next = line.end + newline_len(doc, line);
                     if a < next.max(line.start + 1) && b > line.start {
                         let (ua, ub) = self.span_units(doc, line, a, b, d);
-                        self.fill_units(rt, brush, layout, units, ua, ub, x, y, COL_SELECT)?;
+                        self.fill_units(rt, brush, layout, units, ua, ub, x, y, self.theme.select)?;
                         // 改行まで選択していたら行末に印
                         if b > line.end && a <= line.end {
                             let ex = x + self.text_width(&units[..shown])?;
@@ -1621,11 +1651,11 @@ impl App {
                 if let Some((hs, he)) = self.hit {
                     if hs < line.end.max(line.start + 1) && he > line.start {
                         let (ua, ub) = self.span_units(doc, line, hs, he, d);
-                        self.fill_units(rt, brush, layout, units, ua, ub, x, y, COL_MATCH)?;
+                        self.fill_units(rt, brush, layout, units, ua, ub, x, y, self.theme.matched)?;
                     }
                 }
             }
-            brush.SetColor(&COL_TEXT);
+            brush.SetColor(&self.theme.text);
             rt.DrawTextLayout(Vector2 { X: x, Y: y }, layout, brush, D2D1_DRAW_TEXT_OPTIONS_NONE);
             // カーソル
             if let (Some(doc), Some(_)) = (&self.doc, self.sel) {
@@ -1633,7 +1663,7 @@ impl App {
                 if c >= line.start && c <= line.end && self.prompt.is_none() {
                     let (ua, _) = self.span_units(doc, line, c, c, d);
                     let cx = x + self.text_width(&units[..ua as usize])?;
-                    brush.SetColor(&COL_CARET);
+                    brush.SetColor(&self.theme.caret);
                     rt.FillRectangle(&rect(cx - 0.5, y + 1.0, cx + 1.5, y + self.line_h - 1.0), brush);
                 }
             }
@@ -1756,9 +1786,9 @@ impl App {
     unsafe fn draw_status(&self, rt: &ID2D1RenderTarget, brush: &ID2D1SolidColorBrush, w: f32, h: f32) -> Result<()> {
         let top = h - self.status_h();
         unsafe {
-            brush.SetColor(&COL_STATUS_BG);
+            brush.SetColor(&self.theme.status_bg);
             rt.FillRectangle(&rect(0.0, top, w, h), brush);
-            brush.SetColor(&COL_STATUS_TEXT);
+            brush.SetColor(&self.theme.status_text);
         }
         let left = self.status_left();
         let right = match &self.doc {
