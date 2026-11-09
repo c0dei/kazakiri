@@ -137,6 +137,38 @@ fn open(path: &Path, needle: Option<&str>) {
             println!("{:<12}  backward last hit in {:?} (matches forward: {ok})", "", t.elapsed());
         }
     }
+    // 編集：ランダムな位置に 1000 回挿入し、そのあとの表示・検索の速さ
+    {
+        use kazakiri_core::{EditKind, Editor};
+        let mut ed = Editor::new(std::sync::Arc::new(doc));
+        let t = Instant::now();
+        let mut x = 0x2545F4914F6CDD1Du64;
+        for i in 0..1000u64 {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            let line = x % lines;
+            let pos = ed.doc().line_start(line).unwrap();
+            ed.break_group();
+            ed.replace(pos, pos, &format!("EDIT{i} "), EditKind::Other, (pos, pos)).unwrap();
+        }
+        println!("edit x1000: {:?} total ({} pieces)", t.elapsed(), ed.doc().piece_count());
+        let t = Instant::now();
+        for _ in 0..1000 {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            std::hint::black_box(ed.doc().lines(x % lines, 60));
+        }
+        println!("edited jump+60l: {:?} / screen", t.elapsed() / 1000);
+        let t = Instant::now();
+        let q = Query::new(ed.doc(), "EDIT999 ", SearchOptions { case_sensitive: true, regex: false }).unwrap();
+        let r = q.find(ed.doc(), 0, Direction::Forward, &SearchControl::default());
+        println!("edited find: {:?} in {:?}", matches!(r, SearchOutcome::Found(..)), t.elapsed());
+        let t = Instant::now();
+        while ed.undo().is_some() {}
+        println!("undo all  : {:?}, modified={}", t.elapsed(), ed.is_modified());
+    }
     println!("peak RSS  : {}", peak_rss());
 }
 

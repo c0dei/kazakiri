@@ -1,14 +1,41 @@
-//! 開いているファイル 1 つぶんの状態（いまは閲覧専用）。
+//! 開いているファイル 1 つぶんの状態。
+//!
+//! 編集していないあいだは、元ファイル（メモリマップ）と行インデックスをそのまま使う。
+//! 編集するとピーステーブル（`pieces`）を作り、以降の読み出しはそれを通す。
+//! `Document` は複製が安く（中身は `Arc`）、編集は新しい `Document` を返す。
 
-use std::io;
+use std::borrow::Cow;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use encoding_rs::{Encoding, UTF_16BE, UTF_16LE};
 
 use crate::encoding::{self, Detected};
-use crate::line_index::{next_line_start, LineIndex, Newline, Progress};
+use crate::line_index::{line_start_at_or_after, line_start_at_or_before, next_line_start, LineIndex, Newline, Progress};
+use crate::pieces::{Ctx, Piece, Pieces};
 use crate::source::Source;
+
+/// 編集できなかった理由
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EditError {
+    /// 行インデックスの作成中
+    NotReady,
+    /// 位置がおかしい（BOM の中、末尾より後ろ、UTF-16 の奇数位置）
+    OutOfRange,
+}
+
+impl std::fmt::Display for EditError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            EditError::NotReady => write!(f, "索引の作成中は編集できません"),
+            EditError::OutOfRange => write!(f, "編集できない位置です"),
+        }
+    }
+}
+
+impl std::error::Error for EditError {}
 
 /// ファイルを読み直した結果
 pub enum Refresh {
@@ -23,12 +50,15 @@ pub enum Refresh {
 /// 1 行あたり表示用にデコードする上限（巨大な 1 行 JSON 対策）
 pub const MAX_LINE_DISPLAY_BYTES: usize = 64 * 1024;
 
+#[derive(Clone)]
 pub struct Document {
     path: Option<PathBuf>,
     source: Arc<Source>,
     detected: Detected,
-    index: LineIndex,
+    index: Arc<LineIndex>,
     forced: Option<&'static Encoding>,
+    /// 編集後のテキスト。`None` なら元ファイルのまま
+    text: Option<Arc<Pieces>>,
 }
 
 #[derive(Debug, Clone)]
@@ -70,15 +100,19 @@ impl Document {
             Some(enc) => encoding::forced(enc, source.bytes()),
         };
         let kind = newline_kind(&detected, source.bytes());
-        let index = LineIndex::build(source.clone(), kind, detected.bom_len as u64);
-        Document { path: None, source, detected, index, forced }
+        let index = Arc::new(LineIndex::build(source.clone(), kind, detected.bom_len as u64));
+        Document { path: None, source, detected, index, forced, text: None }
     }
 
     /// ディスク上のファイルを確認し、追記だけなら索引を引き継いで読み直す
     pub fn refresh(&self) -> io::Result<Refresh> {
         let Some(path) = &self.path else { return Ok(Refresh::Unchanged) };
+        // 編集中は読み直さない
+        if self.text.is_some() {
+            return Ok(Refresh::Unchanged);
+        }
         let new_len = std::fs::metadata(path)?.len();
-        let old_len = self.len();
+        let old_len = self.source.len();
         if new_len == old_len {
             return Ok(Refresh::Unchanged);
         }
@@ -100,8 +134,9 @@ impl Document {
             path: self.path.clone(),
             source,
             detected: self.detected,
-            index,
+            index: Arc::new(index),
             forced: self.forced,
+            text: None,
         }))
     }
 
@@ -110,9 +145,13 @@ impl Document {
         self.forced
     }
 
-    /// ファイル全体のバイト列
-    pub fn data(&self) -> &[u8] {
-        self.source.bytes()
+    fn ctx(&self) -> Ctx<'_> {
+        Ctx { data: self.source.bytes(), index: &self.index, kind: self.index.kind() }
+    }
+
+    /// 編集していなければ元ファイルのバイト列
+    pub(crate) fn raw(&self) -> Option<&[u8]> {
+        self.text.is_none().then(|| self.source.bytes())
     }
 
     /// 本文の開始位置（BOM の直後）
@@ -130,18 +169,26 @@ impl Document {
     }
 
     pub fn len(&self) -> u64 {
-        self.source.len()
+        match &self.text {
+            Some(t) => t.len(),
+            None => self.source.len(),
+        }
     }
 
     pub fn is_empty(&self) -> bool {
-        self.source.is_empty()
+        self.len() == 0
     }
 
-    /// ファイルの生バイト列の一部
-    pub fn slice(&self, start: u64, end: u64) -> &[u8] {
-        let data = self.source.bytes();
-        let e = (end as usize).min(data.len());
-        &data[(start as usize).min(e)..e]
+    /// バイト列 [start, end)。編集していない範囲はコピーせずに返す
+    pub fn read(&self, start: u64, end: u64) -> Cow<'_, [u8]> {
+        match &self.text {
+            Some(t) => t.read(&self.ctx(), start, end),
+            None => {
+                let data = self.source.bytes();
+                let e = (end as usize).min(data.len());
+                Cow::Borrowed(&data[(start as usize).min(e)..e])
+            }
+        }
     }
 
     pub fn encoding(&self) -> &Detected {
@@ -157,13 +204,13 @@ impl Document {
         match self.index.kind() {
             Newline::Cr => "CR",
             Newline::Lf => match self.line_range(0) {
-                Some((_, end)) if self.source.bytes().get(end as usize) == Some(&b'\r') => "CRLF",
+                Some((_, end)) if self.read(end, end + 1).first() == Some(&b'\r') => "CRLF",
                 _ => "LF",
             },
             Newline::Utf16Le | Newline::Utf16Be => {
                 let unit = if self.index.kind() == Newline::Utf16Le { [0x0D, 0] } else { [0, 0x0D] };
                 match self.line_range(0) {
-                    Some((_, end)) if self.source.bytes().get(end as usize..end as usize + 2) == Some(&unit[..]) => "CRLF",
+                    Some((_, end)) if *self.read(end, end + 2) == unit[..] => "CRLF",
                     _ => "LF",
                 }
             }
@@ -176,17 +223,92 @@ impl Document {
 
     /// (行数, 確定しているか)。索引作成中は推定値
     pub fn line_count(&self) -> (u64, bool) {
-        self.index.total_lines()
+        match &self.text {
+            Some(t) => (t.total_lines(), true),
+            None => self.index.total_lines(),
+        }
     }
 
     pub fn line_of_offset(&self, offset: u64) -> Option<u64> {
-        self.index.line_of_offset(offset)
+        match &self.text {
+            Some(t) => Some(t.line_of_offset(&self.ctx(), offset)),
+            None => self.index.line_of_offset(offset),
+        }
+    }
+
+    /// 行の開始位置
+    pub fn line_start(&self, line: u64) -> Option<u64> {
+        match &self.text {
+            Some(t) => t.line_start(&self.ctx(), line, self.text_start() as u64),
+            None => self.index.line_start(line),
+        }
     }
 
     /// 行の [開始, 終了)。終了は改行コードを含まない
     pub fn line_range(&self, line: u64) -> Option<(u64, u64)> {
-        let start = self.index.line_start(line)?;
-        Some((start, self.line_end(start as usize) as u64))
+        let start = self.line_start(line)?;
+        let end = match &self.text {
+            None => self.line_end(start as usize) as u64,
+            Some(_) => match self.line_start(line + 1) {
+                None => self.len(),
+                Some(next) => next - self.terminator_len(start, next),
+            },
+        };
+        Some((start, end))
+    }
+
+    /// `next`（行の開始位置）の直前にある改行コードの長さ。行の先頭 `start` より前は見ない
+    fn terminator_len(&self, start: u64, next: u64) -> u64 {
+        let tail = self.read(next.saturating_sub(4).max(start), next);
+        let t = &tail[..];
+        let n = t.len();
+        match self.index.kind() {
+            Newline::Cr => 1,
+            Newline::Lf => {
+                if n >= 2 && t[n - 2] == b'\r' { 2 } else { 1 }
+            }
+            Newline::Utf16Le => {
+                if n >= 4 && t[n - 4..n - 2] == [0x0D, 0] { 4 } else { 2 }
+            }
+            Newline::Utf16Be => {
+                if n >= 4 && t[n - 4..n - 2] == [0, 0x0D] { 4 } else { 2 }
+            }
+        }
+    }
+
+    /// `pos` 以前で最も後ろの行頭（検索のチャンク分け用）
+    pub(crate) fn line_start_at_or_before(&self, pos: u64) -> u64 {
+        let floor = self.text_start() as u64;
+        match self.raw() {
+            Some(data) => line_start_at_or_before(data, pos as usize, floor as usize, self.newline()) as u64,
+            None => {
+                let pos = pos.min(self.len());
+                let n = self.line_of_offset(pos).unwrap_or(0);
+                self.line_start(n).unwrap_or(floor)
+            }
+        }
+    }
+
+    /// `pos` 以降で最初の行頭（なければ末尾）
+    pub(crate) fn line_start_at_or_after(&self, pos: u64) -> u64 {
+        let floor = self.text_start() as u64;
+        match self.raw() {
+            Some(data) => line_start_at_or_after(data, pos as usize, floor as usize, self.newline()) as u64,
+            None => {
+                let len = self.len();
+                if pos <= floor {
+                    return floor;
+                }
+                if pos >= len {
+                    return len;
+                }
+                let n = self.line_of_offset(pos).unwrap_or(0);
+                match self.line_start(n) {
+                    Some(s) if s == pos => pos,
+                    _ => self.line_start(n + 1).unwrap_or(len),
+                }
+            }
+        }
     }
 
     fn line_end(&self, start: usize) -> usize {
@@ -215,6 +337,9 @@ impl Document {
     /// `first` 行目から最大 `count` 行を表示用に取り出す。
     /// 開始位置がまだ分からない行（索引作成中）は返さない。
     pub fn lines(&self, first: u64, count: usize) -> Vec<Line> {
+        if self.text.is_some() {
+            return self.lines_edited(first, count);
+        }
         let mut out = Vec::with_capacity(count);
         let Some(mut start) = self.index.line_start(first) else { return out };
         let data = self.source.bytes();
@@ -241,6 +366,140 @@ impl Document {
         out
     }
 
+    fn lines_edited(&self, first: u64, count: usize) -> Vec<Line> {
+        let mut out = Vec::with_capacity(count);
+        for number in first..first + count as u64 {
+            let Some((start, end)) = self.line_range(number) else { break };
+            let mut take = end - start;
+            let truncated = take > MAX_LINE_DISPLAY_BYTES as u64;
+            if truncated {
+                take = MAX_LINE_DISPLAY_BYTES as u64;
+                if self.detected.is_utf16() {
+                    take &= !1;
+                }
+            }
+            let text = self.decode(&self.read(start, start + take)).into_owned();
+            out.push(Line { number, start, end, text, truncated });
+        }
+        out
+    }
+
+    // ---- 編集 ----
+
+    /// 編集しているか（保存していない変更があるかどうかは `Editor` が管理する）
+    pub fn is_edited(&self) -> bool {
+        self.text.is_some()
+    }
+
+    /// いま編集できるか（行インデックスの完成が必要）
+    pub fn can_edit(&self) -> bool {
+        self.text.is_some() || self.index.is_done()
+    }
+
+    /// ピースの数（断片化の目安）
+    pub fn piece_count(&self) -> usize {
+        self.text.as_ref().map_or(1, |t| t.piece_count())
+    }
+
+    fn check_pos(&self, pos: u64) -> Result<(), EditError> {
+        if pos < self.text_start() as u64 || pos > self.len() || (self.detected.is_utf16() && pos % 2 == 1) {
+            Err(EditError::OutOfRange)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn editable_pieces(&self) -> Result<Pieces, EditError> {
+        match &self.text {
+            Some(t) => Ok((**t).clone()),
+            None if self.index.is_done() => Ok(Pieces::new(&self.ctx())),
+            None => Err(EditError::NotReady),
+        }
+    }
+
+    fn check_range(&self, a: u64, b: u64) -> Result<(), EditError> {
+        self.check_pos(a)?;
+        self.check_pos(b)?;
+        if a > b { Err(EditError::OutOfRange) } else { Ok(()) }
+    }
+
+    /// [a, b) を `bytes`（このファイルの文字コードのバイト列）で置き換えた新しい Document
+    pub fn replace(&self, a: u64, b: u64, bytes: &[u8]) -> Result<Document, EditError> {
+        self.replace_tracked(a, b, bytes).map(|(d, _)| d)
+    }
+
+    /// `replace` と同じだが、取り除いたピース列も返す（Undo 用）
+    pub(crate) fn replace_tracked(&self, a: u64, b: u64, bytes: &[u8]) -> Result<(Document, Vec<Piece>), EditError> {
+        self.check_range(a, b)?;
+        let mut t = self.editable_pieces()?;
+        let removed = t.replace(&self.ctx(), a, b, bytes);
+        let mut doc = self.clone();
+        doc.text = Some(Arc::new(t));
+        Ok((doc, removed))
+    }
+
+    /// [a, b) をピース列で置き換える（Undo / Redo 用）
+    pub(crate) fn splice(&self, a: u64, b: u64, pieces: Vec<Piece>) -> Result<(Document, Vec<Piece>), EditError> {
+        self.check_range(a, b)?;
+        let mut t = self.editable_pieces()?;
+        let removed = t.splice(&self.ctx(), a, b, pieces);
+        let mut doc = self.clone();
+        doc.text = Some(Arc::new(t));
+        Ok((doc, removed))
+    }
+
+    pub fn insert(&self, pos: u64, bytes: &[u8]) -> Result<Document, EditError> {
+        self.replace(pos, pos, bytes)
+    }
+
+    pub fn delete(&self, a: u64, b: u64) -> Result<Document, EditError> {
+        self.replace(a, b, &[])
+    }
+
+    // ---- 保存 ----
+
+    /// 内容を書き出す。`written` に書いたバイト数を加え、`cancel` が立ったら中断する
+    pub fn write_to(&self, w: &mut dyn Write, written: &AtomicU64, cancel: &AtomicBool) -> io::Result<()> {
+        const BLOCK: usize = 4 << 20;
+        let ctx = self.ctx();
+        let whole = [self.source.bytes()];
+        let segments: Box<dyn Iterator<Item = &[u8]>> = match &self.text {
+            Some(t) => Box::new(t.segments(&ctx)),
+            None => Box::new(whole.into_iter()),
+        };
+        for seg in segments {
+            for block in seg.chunks(BLOCK) {
+                if cancel.load(Ordering::Relaxed) {
+                    return Err(io::Error::new(io::ErrorKind::Interrupted, "保存を中止しました"));
+                }
+                w.write_all(block)?;
+                written.fetch_add(block.len() as u64, Ordering::Relaxed);
+            }
+        }
+        Ok(())
+    }
+
+    /// `target` と同じフォルダに一時ファイルとして書き出し、そのパスを返す。
+    /// 書き出しが終わったら、この Document（と複製）をすべて閉じてから
+    /// `commit_save` で置き換える（Windows ではマップ中のファイルは置き換えられないため）
+    pub fn write_temp(&self, target: &Path, written: &AtomicU64, cancel: &AtomicBool) -> io::Result<PathBuf> {
+        let name = target.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "file".into());
+        let temp = target.with_file_name(format!(".{name}.kazakiri-save"));
+        let result = (|| {
+            let file = std::fs::File::create(&temp)?;
+            let mut w = io::BufWriter::with_capacity(1 << 20, file);
+            self.write_to(&mut w, written, cancel)?;
+            let file = w.into_inner().map_err(|e| e.into_error())?;
+            file.sync_all()?;
+            Ok(())
+        })();
+        if let Err(e) = result {
+            let _ = std::fs::remove_file(&temp);
+            return Err(e);
+        }
+        Ok(temp)
+    }
+
     /// 文字列を前方検索し、見つかったバイト範囲を返す（大文字小文字は区別）。
     /// 繰り返し検索するときは `search::Query` を使う
     pub fn find(&self, pattern: &str, from: u64) -> Option<(u64, u64)> {
@@ -263,6 +522,11 @@ impl Document {
             enc.encode(s).0.into_owned()
         }
     }
+}
+
+/// `write_temp` で書き出した一時ファイルで `target` を置き換える
+pub fn commit_save(temp: &Path, target: &Path) -> io::Result<()> {
+    std::fs::rename(temp, target)
 }
 
 fn newline_kind(det: &Detected, bytes: &[u8]) -> Newline {

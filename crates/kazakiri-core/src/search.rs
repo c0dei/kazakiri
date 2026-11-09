@@ -15,7 +15,6 @@ use std::thread;
 use memchr::memmem;
 
 use crate::document::Document;
-use crate::line_index::{line_start_at_or_after, line_start_at_or_before, next_line_start};
 
 /// 1 スレッドが一度に受け持つ大きさ
 const SUB_CHUNK: usize = 8 << 20;
@@ -106,16 +105,15 @@ impl Query {
     }
 
     fn find_forward(&self, doc: &Document, from: usize, ctl: &SearchControl) -> SearchOutcome {
-        let data = doc.data();
-        let (floor, kind) = (doc.text_start(), doc.newline());
-        let len = data.len();
+        let floor = doc.text_start();
+        let len = doc.len() as usize;
         let from = from.max(floor);
         if from >= len {
             return SearchOutcome::NotFound;
         }
         // 近くは 1 スレッドで
-        let cs = line_start_at_or_before(data, from, floor, kind);
-        let near_end = line_start_at_or_after(data, from + NEAR, floor, kind);
+        let cs = doc.line_start_at_or_before(from as u64) as usize;
+        let near_end = doc.line_start_at_or_after((from + NEAR) as u64) as usize;
         if let Some(hit) = self.chunk(doc, cs, near_end, from, near_end) {
             return SearchOutcome::Found(hit.0 as u64, hit.1 as u64);
         }
@@ -127,8 +125,8 @@ impl Query {
             if ctl.cancel.load(Ordering::Relaxed) {
                 return SearchOutcome::Cancelled;
             }
-            let win_end = line_start_at_or_after(data, pos + self.sub_chunk() * threads, floor, kind);
-            let ranges = split(data, pos, win_end, floor, doc, self.sub_chunk());
+            let win_end = doc.line_start_at_or_after((pos + self.sub_chunk() * threads) as u64) as usize;
+            let ranges = split(doc, pos, win_end, self.sub_chunk());
             let results = run_parallel(&ranges, |&(a, b)| {
                 if ctl.cancel.load(Ordering::Relaxed) {
                     return None;
@@ -146,15 +144,14 @@ impl Query {
     }
 
     fn find_backward(&self, doc: &Document, to: usize, ctl: &SearchControl) -> SearchOutcome {
-        let data = doc.data();
-        let (floor, kind) = (doc.text_start(), doc.newline());
-        let to = to.min(data.len());
+        let floor = doc.text_start();
+        let to = to.min(doc.len() as usize);
         if to <= floor {
             return SearchOutcome::NotFound;
         }
         // `to` を含む行の終わりまでを上端にする（一致は `to` より前で始まればよい）
-        let top = next_line_start(data, to.saturating_sub(1), kind).unwrap_or(data.len()).max(to);
-        let near_start = line_start_at_or_before(data, to.saturating_sub(NEAR), floor, kind);
+        let top = (doc.line_start_at_or_after(to as u64) as usize).max(to);
+        let near_start = doc.line_start_at_or_before(to.saturating_sub(NEAR) as u64) as usize;
         if let Some(hit) = self.chunk_last(doc, near_start, top, near_start, to) {
             return SearchOutcome::Found(hit.0 as u64, hit.1 as u64);
         }
@@ -166,8 +163,8 @@ impl Query {
             if ctl.cancel.load(Ordering::Relaxed) {
                 return SearchOutcome::Cancelled;
             }
-            let win_start = line_start_at_or_before(data, pos.saturating_sub(self.sub_chunk() * threads), floor, kind);
-            let ranges = split(data, win_start, pos, floor, doc, self.sub_chunk());
+            let win_start = doc.line_start_at_or_before(pos.saturating_sub(self.sub_chunk() * threads) as u64) as usize;
+            let ranges = split(doc, win_start, pos, self.sub_chunk());
             let results = run_parallel(&ranges, |&(a, b)| {
                 if ctl.cancel.load(Ordering::Relaxed) {
                     return None;
@@ -186,14 +183,15 @@ impl Query {
 
     /// [cs, ce) の中で、開始位置が [lo, hi) にある最初の一致
     fn chunk(&self, doc: &Document, cs: usize, ce: usize, lo: usize, hi: usize) -> Option<(usize, usize)> {
-        let data = doc.data();
+        // 編集していない範囲はコピーせずに読める
+        let buf = doc.read(cs as u64, ce as u64);
         let utf16 = doc.encoding().is_utf16();
         match &self.matcher {
             Matcher::Bytes { fwd, .. } => {
                 let n = fwd.needle().len();
                 let mut pos = lo;
                 while pos < hi {
-                    let p = pos + fwd.find(&data[pos..ce])?;
+                    let p = pos + fwd.find(&buf[pos - cs..])?;
                     if p >= hi {
                         return None;
                     }
@@ -205,13 +203,13 @@ impl Query {
                 None
             }
             Matcher::BytesRegex(re) => {
-                let m = re.find_at(&data[cs..ce], lo - cs)?;
+                let m = re.find_at(&buf, lo - cs)?;
                 (cs + m.start() < hi).then(|| (cs + m.start(), cs + m.end()))
             }
             Matcher::TextRegex(re) => {
-                let text = doc.decode(&data[cs..ce]);
-                let dlo = if lo > cs { doc.decode(&data[cs..lo]).len() } else { 0 };
-                let dhi = if hi < ce { doc.decode(&data[cs..hi]).len() } else { text.len() };
+                let text = doc.decode(&buf);
+                let dlo = if lo > cs { doc.decode(&buf[..lo - cs]).len() } else { 0 };
+                let dhi = if hi < ce { doc.decode(&buf[..hi - cs]).len() } else { text.len() };
                 let m = re.find_at(&text, floor_char(&text, dlo))?;
                 (m.start() < dhi).then(|| map_back(doc, cs, &text, m.start(), m.end()))
             }
@@ -220,14 +218,14 @@ impl Query {
 
     /// [cs, ce) の中で、開始位置が [lo, hi) にある最後の一致
     fn chunk_last(&self, doc: &Document, cs: usize, ce: usize, lo: usize, hi: usize) -> Option<(usize, usize)> {
-        let data = doc.data();
+        let buf = doc.read(cs as u64, ce as u64);
         let utf16 = doc.encoding().is_utf16();
         match &self.matcher {
             Matcher::Bytes { rev, .. } => {
                 let n = rev.needle().len();
                 let mut end = (hi + n - 1).min(ce);
                 while end > lo {
-                    let p = lo + rev.rfind(&data[lo..end])?;
+                    let p = lo + rev.rfind(&buf[lo - cs..end - cs])?;
                     if !utf16 || p.is_multiple_of(2) {
                         return Some((p, p + n));
                     }
@@ -236,7 +234,7 @@ impl Query {
                 None
             }
             Matcher::BytesRegex(re) => {
-                let hay = &data[cs..ce];
+                let hay = &buf[..];
                 let mut last = None;
                 let mut at = lo - cs;
                 while at <= hay.len() {
@@ -250,9 +248,9 @@ impl Query {
                 last
             }
             Matcher::TextRegex(re) => {
-                let text = doc.decode(&data[cs..ce]);
-                let dlo = if lo > cs { doc.decode(&data[cs..lo]).len() } else { 0 };
-                let dhi = if hi < ce { doc.decode(&data[cs..hi]).len() } else { text.len() };
+                let text = doc.decode(&buf);
+                let dlo = if lo > cs { doc.decode(&buf[..lo - cs]).len() } else { 0 };
+                let dhi = if hi < ce { doc.decode(&buf[..hi - cs]).len() } else { text.len() };
                 let mut last = None;
                 let mut at = floor_char(&text, dlo);
                 while at <= text.len() {
@@ -291,11 +289,11 @@ fn ceil_char(s: &str, mut i: usize) -> usize {
 }
 
 /// [a, b) を行の境目でおおよそ `size` ずつに分ける
-fn split(data: &[u8], a: usize, b: usize, floor: usize, doc: &Document, size: usize) -> Vec<(usize, usize)> {
+fn split(doc: &Document, a: usize, b: usize, size: usize) -> Vec<(usize, usize)> {
     let mut out = Vec::new();
     let mut s = a;
     while s < b {
-        let e = line_start_at_or_after(data, s + size, floor, doc.newline()).min(b).max(s + 1);
+        let e = (doc.line_start_at_or_after((s + size) as u64) as usize).min(b).max(s + 1);
         out.push((s, e));
         s = e;
     }
@@ -337,17 +335,12 @@ mod tests {
         let ctl = SearchControl::default();
         let mut out = Vec::new();
         let mut pos = if dir == Direction::Forward { 0 } else { d.len() };
-        loop {
-            match q.find(d, pos, dir, &ctl) {
-                SearchOutcome::Found(s, e) => {
-                    out.push((s, e));
-                    pos = match dir {
-                        Direction::Forward => e.max(s + 1),
-                        Direction::Backward => s,
-                    };
-                }
-                _ => break,
-            }
+        while let SearchOutcome::Found(s, e) = q.find(d, pos, dir, &ctl) {
+            out.push((s, e));
+            pos = match dir {
+                Direction::Forward => e.max(s + 1),
+                Direction::Backward => s,
+            };
         }
         out
     }

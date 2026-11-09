@@ -9,3 +9,6 @@ memmap2.workspace = true
 encoding_rs.workspace = true
 memchr.workspace = true
 regex = "1.13.1"
+
+[dev-dependencies]
+encoding_rs.workspace = true
