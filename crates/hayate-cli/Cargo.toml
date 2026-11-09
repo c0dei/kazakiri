@@ -1,0 +1,12 @@
+[package]
+name = "hayate-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "hayate-bench"
+path = "src/main.rs"
+
+[dependencies]
+hayate-core = { path = "../hayate-core" }
