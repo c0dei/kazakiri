@@ -9,6 +9,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 pub const ID_OPEN: u32 = 100;
 pub const ID_RELOAD: u32 = 101;
 pub const ID_EXIT: u32 = 102;
+pub const ID_FOLLOW: u32 = 103;
 pub const ID_COPY: u32 = 200;
 pub const ID_SELECT_ALL: u32 = 201;
 pub const ID_FIND: u32 = 300;
@@ -35,6 +36,7 @@ pub const ENCODINGS: [(&str, Option<&'static Encoding>); 6] = [
 
 pub struct Menus {
     pub bar: HMENU,
+    pub file: HMENU,
     pub search: HMENU,
     pub encoding: HMENU,
     pub recent: HMENU,
@@ -66,6 +68,7 @@ pub unsafe fn build() -> Result<Menus> {
         let recent = CreatePopupMenu()?;
         item(file, ID_OPEN, "開く(&O)...\tCtrl+O")?;
         item(file, ID_RELOAD, "再読み込み(&R)\tF5")?;
+        item(file, ID_FOLLOW, "末尾を追従(&T)\tCtrl+T")?;
         sep(file)?;
         popup(file, recent, "最近使ったファイル(&F)")?;
         sep(file)?;
@@ -97,15 +100,16 @@ pub unsafe fn build() -> Result<Menus> {
         }
         popup(bar, encoding, "エンコード(&N)")?;
 
-        Ok(Menus { bar, search, encoding, recent })
+        Ok(Menus { bar, file, search, encoding, recent })
     }
 }
 
 impl Menus {
     /// メニューを開く直前にチェック状態などを最新にする
-    pub unsafe fn refresh(&self, case: bool, regex: bool, forced: Option<Option<&'static Encoding>>, recent: &[PathBuf]) {
+    pub unsafe fn refresh(&self, case: bool, regex: bool, follow: bool, forced: Option<Option<&'static Encoding>>, recent: &[PathBuf]) {
         unsafe {
             let check = |on: bool| if on { MF_CHECKED.0 } else { MF_UNCHECKED.0 };
+            CheckMenuItem(self.file, ID_FOLLOW, check(follow));
             CheckMenuItem(self.search, ID_CASE, check(case));
             CheckMenuItem(self.search, ID_REGEX, check(regex));
             for i in 0..ENCODINGS.len() as u32 {
