@@ -25,6 +25,12 @@ pub const ID_FIND_PREV: u32 = 302;
 pub const ID_CASE: u32 = 303;
 pub const ID_REGEX: u32 = 304;
 pub const ID_GOTO: u32 = 305;
+pub const ID_REPLACE: u32 = 306;
+pub const ID_FIND_ALL: u32 = 307;
+pub const ID_GREP: u32 = 308;
+pub const ID_NEXT_RESULT: u32 = 309;
+pub const ID_PREV_RESULT: u32 = 310;
+pub const ID_CLOSE_RESULTS: u32 = 311;
 /// エンコードの選択肢（ENCODINGS の並びと対応）
 pub const ID_ENC_BASE: u32 = 400;
 /// 最近使ったファイル
@@ -100,6 +106,13 @@ pub unsafe fn build() -> Result<Menus> {
         item(search, ID_FIND, "検索(&F)...\tCtrl+F")?;
         item(search, ID_FIND_NEXT, "次を検索(&N)\tF3")?;
         item(search, ID_FIND_PREV, "前を検索(&P)\tShift+F3")?;
+        item(search, ID_FIND_ALL, "すべて検索して一覧(&L)\t検索欄で Alt+Enter")?;
+        item(search, ID_REPLACE, "置換(&H)...\tCtrl+H")?;
+        sep(search)?;
+        item(search, ID_GREP, "フォルダ内を検索 (GREP)(&G)...\tCtrl+Shift+F")?;
+        item(search, ID_NEXT_RESULT, "次の結果(&X)\tF8")?;
+        item(search, ID_PREV_RESULT, "前の結果(&V)\tShift+F8")?;
+        item(search, ID_CLOSE_RESULTS, "結果一覧を閉じる\tEsc")?;
         sep(search)?;
         item(search, ID_CASE, "大文字と小文字を区別(&C)\tAlt+C")?;
         item(search, ID_REGEX, "正規表現(&R)\tAlt+R")?;

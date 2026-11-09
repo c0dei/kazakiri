@@ -91,6 +91,11 @@ impl Editor {
     /// [a, b) を文字列 `s` で置き換える。戻り値は置き換えた後の [a, a + 新しい長さ)
     pub fn replace(&mut self, a: u64, b: u64, s: &str, kind: EditKind, sel_before: (u64, u64)) -> Result<(u64, u64), EditError> {
         let bytes = self.doc().encode(s);
+        self.replace_bytes(a, b, bytes, kind, sel_before)
+    }
+
+    /// `replace` と同じだが、置き換える内容をファイルの文字コードのバイト列で渡す
+    pub fn replace_bytes(&mut self, a: u64, b: u64, bytes: Vec<u8>, kind: EditKind, sel_before: (u64, u64)) -> Result<(u64, u64), EditError> {
         self.doc().check_edit(&[(a, b)])?;
         let removed = self.edit(|t, ctx| t.replace(ctx, a, b, &bytes));
         let n = bytes.len() as u64;
