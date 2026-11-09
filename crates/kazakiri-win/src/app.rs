@@ -919,7 +919,7 @@ impl App {
     /// 一致が横にはみ出していたら横スクロールする
     fn reveal_column(&mut self, doc: &Document, line: u64, offset: u64) {
         let Some(l) = doc.lines(line, 1).into_iter().next() else { return };
-        let prefix = decode_units(doc, doc.slice(l.start, offset.min(l.end)));
+        let prefix = decode_units(doc, &doc.read(l.start, offset.min(l.end)));
         let x = prefix as f32 * self.char_w; // おおよその位置で十分
         let (w, _) = self.client_size();
         let view = w - self.gutter_width() - 8.0;
@@ -989,7 +989,7 @@ impl App {
         let Some(line) = doc.lines(line_no, 1).into_iter().next() else { return };
         let Some(off) = self.offset_at(&doc, x, y) else { return };
         let chars: Vec<char> = line.text.chars().collect();
-        let prefix_chars = doc.decode(doc.slice(line.start, off)).chars().count();
+        let prefix_chars = doc.decode(&doc.read(line.start, off)).chars().count();
         let i = prefix_chars.min(chars.len().saturating_sub(1));
         if chars.is_empty() {
             return;
@@ -1073,7 +1073,7 @@ impl App {
     fn selected_text(&self, limit: u64) -> Option<String> {
         let doc = self.doc.as_ref()?;
         let (a, b) = self.selection()?;
-        (b - a <= limit).then(|| doc.decode(doc.slice(a, b)).into_owned())
+        (b - a <= limit).then(|| doc.decode(&doc.read(a, b)).into_owned())
     }
 
     fn copy(&mut self) {
@@ -1310,8 +1310,8 @@ impl App {
     fn span_units(&self, doc: &Document, line: &Line, s: u64, e: u64, shown: usize) -> (u32, u32) {
         let s = s.clamp(line.start, line.end);
         let e = e.clamp(s, line.end);
-        let a = decode_units(doc, doc.slice(line.start, s)).min(shown);
-        let b = (a + decode_units(doc, doc.slice(s, e))).min(shown);
+        let a = decode_units(doc, &doc.read(line.start, s)).min(shown);
+        let b = (a + decode_units(doc, &doc.read(s, e))).min(shown);
         (a as u32, b as u32)
     }
 
