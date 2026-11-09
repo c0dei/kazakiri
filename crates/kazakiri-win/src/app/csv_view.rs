@@ -287,7 +287,7 @@ impl App {
         if self.settings.log_colors { d.with_log_colors(line) } else { d }
     }
 
-    /// 行末の印：CRLF は ↵、LF は ↓、CR は ←、ファイルの終わりは [EOF]
+    /// 行末の印：CRLF は ¶、LF は ↓、CR は ←、ファイルの終わりは [EOF]
     fn eol_mark(&self, line: &Line) -> Option<&'static str> {
         let doc = self.doc.as_ref()?;
         let n = newline_len(doc, line);
@@ -295,7 +295,7 @@ impl App {
         Some(match n {
             0 => "[EOF]",
             _ if doc.newline() == kazakiri_core::Newline::Cr => "←",
-            _ if n >= 2 * unit => "↵",
+            _ if n >= 2 * unit => "¶",
             _ => "↓",
         })
     }

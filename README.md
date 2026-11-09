@@ -7,7 +7,7 @@ EmEditor の「大きいファイルが速い」体験を、買い切り不要�
 
 ![Wine 上での動作画面（1GB の Shift_JIS CSV、1,500万行目付近で検索）](docs/screenshot-wine.png)
 
-## いまできること（v0.5）
+## いまできること（v0.6）
 
 ### 編集
 - 数GBのファイルでもそのまま編集（ピーステーブル：元ファイルはコピーせず、変更部分だけを持つ）
@@ -18,6 +18,15 @@ EmEditor の「大きいファイルが速い」体験を、買い切り不要�
 - ファイルの文字コード（Shift_JIS など）のまま保存。表せない文字（Shift_JIS での絵文字など）は入力時に止める
 - 上書き保存・名前を付けて保存（別スレッドで書き出すので大きなファイルでも止まらない）
 - 新規作成、閉じる・開くときに未保存の変更を確認
+
+### 表示の設定
+- ダークテーマ（表示メニュー。タイトルバーも暗くなる）
+- 空白・タブ・改行の表示（Ctrl+Shift+W）：空白は `･`、全角空白は `□`、タブは `>` と桁送り、改行は CRLF が `¶`・LF が `↓`・CR が `←`、ファイルの終わりは `[EOF]`
+- ログレベルの色分け：ERROR / FATAL は赤、WARN は橙、DEBUG / TRACE は灰（単語として現れたものだけ。既定でオン）
+- 文字の大きさ：Ctrl++ / Ctrl+- / Ctrl+0（標準に戻す）、Ctrl+ホイール
+- 設定は `%APPDATA%\kazakiri\settings.ini` に自動で保存（font, font_size, dark, whitespace, log_colors, tab_width。テキストエディタで直接編集もできる）
+
+![空白の表示とログの色分け（ダークテーマ）](docs/screenshot-whitespace.png)
 
 ### CSV / TSV
 - 拡張子が .csv / .tsv なら自動で CSV/TSV モード（それ以外も Ctrl+Shift+C で切り替え）
@@ -132,6 +141,8 @@ cargo run --release -p kazakiri-cli -- open big.log "ERROR"     # 開く・索�
 | Ctrl+Shift+F | GREP（検索語 → フォルダ → 対象ファイル `*.log;*.txt` など） |
 | F8 / Shift+F8 | 一覧の次 / 前の結果へ |
 | Ctrl+Shift+C | CSV/TSV モードの切り替え（並べ替えは「表示」メニュー） |
+| Ctrl+Shift+W | 空白・タブ・改行の表示の切り替え |
+| Ctrl++ / Ctrl+- / Ctrl+0 / Ctrl+ホイール | 文字の拡大 / 縮小 / 標準 / 拡大縮小 |
 
 コピー・切り取りは 256MB まで。編集は行インデックスの作成が終わってから（数GBでも 1 秒前後）。
 編集中は再読み込み・末尾の追従はできない。
@@ -158,7 +169,10 @@ crates/
     app.rs         ウィンドウ、描画、検索、選択
     app/edit.rs    カーソル移動、入力、IME、保存
     app/results.rs 置換、結果一覧パネル、GREP
-    app/csv_view.rs CSV / TSV の表示、列の強調、並べ替え
+    app/csv_view.rs CSV / TSV の表示、列の強調、並べ替え、空白の可視化、ログの色分け
+    app/theme.rs   明るい・暗いテーマの配色
+    app/view.rs    文字の大きさ、テーマ、表示の切り替え
+  （kazakiri-win/src/settings.rs  設定ファイルの読み書き）
   kazakiri-cli/    ベンチマーク・テストデータ生成
 docs/PLAN.md     調査結果と開発ロードマップ
 ```
