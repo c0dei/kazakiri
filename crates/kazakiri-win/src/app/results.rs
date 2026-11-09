@@ -69,6 +69,8 @@ pub(super) struct ResultsJob {
 pub(super) enum JobKind {
     FindAll { ctl: Arc<SearchControl>, total: u64, replace: bool },
     Grep { prog: Arc<GrepProgress> },
+    /// CSV の並べ替え
+    Sort { ctl: Arc<SearchControl>, total: u64, name: String },
 }
 
 impl ResultsJob {
@@ -76,6 +78,7 @@ impl ResultsJob {
         match &self.what {
             JobKind::FindAll { ctl, .. } => ctl.cancel.store(true, Ordering::Relaxed),
             JobKind::Grep { prog } => prog.cancel(),
+            JobKind::Sort { ctl, .. } => ctl.cancel.store(true, Ordering::Relaxed),
         }
     }
 }
@@ -422,6 +425,7 @@ impl App {
                 let what = if *replace { "置換の対象を検索中" } else { "すべて検索中" };
                 format!("{what}「{}」 {:.0}%  {secs:.1} 秒  (Esc で中止)", self.last_find, pct.min(100.0))
             }
+            JobKind::Sort { ctl, total, name } => super::csv_view::sort_status(ctl, *total, name, secs),
             JobKind::Grep { prog } => format!(
                 "GREP 中「{}」 {} / {} ファイル  {} 件  {} 読み込み  {secs:.1} 秒  (Esc で中止)",
                 self.last_find,

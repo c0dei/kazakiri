@@ -31,8 +31,10 @@ use windows_numerics::Vector2;
 use crate::menu::{self, Menus};
 use crate::{clipboard, recent};
 
+mod csv_view;
 mod edit;
 mod results;
+use csv_view::{CsvView, Disp, SortDone, WM_SORT_DONE};
 use edit::{Pending, SaveJob, WM_RUN_PENDING, WM_SAVE_DONE};
 use results::{JobDone, Results, ResultsJob, WM_REPLACE_FOUND, WM_RESULTS_DONE};
 
@@ -62,6 +64,7 @@ const COL_MATCH: D2D1_COLOR_F = rgb(0xFF, 0xE0, 0x6B);
 const COL_SELECT: D2D1_COLOR_F = rgb(0xAD, 0xD6, 0xFF);
 const COL_DIM: D2D1_COLOR_F = rgb(0xB0, 0xB0, 0xB0);
 const COL_CARET: D2D1_COLOR_F = rgb(0x00, 0x00, 0x00);
+const COL_COLUMN: D2D1_COLOR_F = rgb(0xEE, 0xF6, 0xEA);
 
 thread_local! {
     static APP: RefCell<Option<App>> = const { RefCell::new(None) };
@@ -113,9 +116,10 @@ struct SearchJob {
 /// 描画済みの行レイアウト（スクロールで使い回す）
 struct CachedLine {
     end: u64,
+    /// CSV の列幅の世代（変わったら作り直す）
+    generation: u64,
     layout: IDWriteTextLayout,
-    units: Vec<u16>,
-    shown: usize,
+    disp: Disp,
 }
 
 /// 検索スレッドから UI へ渡す結果
@@ -153,6 +157,8 @@ struct App {
     grep_files: String,
     /// 索引ができたら移動する位置（行, 開始, 終了）
     pending_goto: Option<(u64, u64, u64)>,
+    /// CSV / TSV モード
+    csv: Option<CsvView>,
     top: u64,
     x_off: f32,
     prompt: Option<Prompt>,
@@ -247,6 +253,7 @@ unsafe fn run_inner() -> std::result::Result<(), (&'static str, windows::core::E
             grep_folder: String::new(),
             grep_files: results::GREP_DEFAULT_FILES.into(),
             pending_goto: None,
+            csv: None,
             top: 0,
             x_off: 0.0,
             prompt: None,
@@ -535,6 +542,11 @@ impl App {
                     (DONE, None)
                 }
                 WM_RUN_PENDING => (DONE, self.pending.take().map(Deferred::Perform)),
+                WM_SORT_DONE => {
+                    let done = Box::from_raw(lparam.0 as *mut SortDone);
+                    self.on_sort_done(*done);
+                    (DONE, None)
+                }
                 WM_RESULTS_DONE | WM_REPLACE_FOUND => {
                     let done = Box::from_raw(lparam.0 as *mut JobDone);
                     self.on_job_done(*done);
@@ -556,6 +568,7 @@ impl App {
                 WM_INITMENUPOPUP => {
                     let forced = self.doc.as_ref().map(|d| d.forced_encoding());
                     self.menus.refresh(self.opts.case_sensitive, self.opts.regex, self.follow, forced, &self.recent);
+                    self.menus.refresh_view(self.csv.as_ref().map(|v| (v.delim, v.header)));
                     (DONE, None)
                 }
                 WM_COMMAND => (DONE, self.command(loword(wparam.0))),
@@ -709,6 +722,7 @@ impl App {
                     self.top = 0;
                     self.x_off = 0.0;
                     self.sel = None;
+                    self.auto_csv();
                 }
                 if self.sel.is_none() {
                     let start = self.doc.as_ref().map_or(0, |d| d.text_start() as u64);
@@ -852,6 +866,13 @@ impl App {
                 self.invalidate();
             }
             menu::ID_GOTO => self.start_prompt(Prompt::GotoLine),
+            menu::ID_CSV => self.toggle_csv(),
+            menu::ID_CSV_HEADER => self.toggle_header(),
+            menu::ID_SORT_ASC => self.sort_by_column(false),
+            menu::ID_SORT_DESC => self.sort_by_column(true),
+            id if (menu::ID_DELIM_BASE..menu::ID_DELIM_BASE + menu::DELIMS.len() as u32).contains(&id) => {
+                self.set_delim(menu::DELIMS[(id - menu::ID_DELIM_BASE) as usize].1)
+            }
             menu::ID_REPLACE => self.start_prompt(Prompt::ReplaceFind),
             menu::ID_FIND_ALL => self.find_all(),
             menu::ID_GREP => self.start_prompt(Prompt::GrepQuery),
@@ -949,6 +970,7 @@ impl App {
             VK_F5 => return unsafe { self.command(menu::ID_RELOAD) },
             _ if ctrl && shift && vk == VK_S => return Some(Deferred::SaveAs),
             _ if ctrl && shift && vk == VK_F => self.start_prompt(Prompt::GrepQuery),
+            _ if ctrl && shift && vk == VK_C => self.toggle_csv(),
             _ if ctrl && vk == VK_H => self.start_prompt(Prompt::ReplaceFind),
             _ if ctrl && shift && vk == VK_Z => self.undo(true),
             _ if ctrl && vk == VK_N => return unsafe { self.command(menu::ID_NEW) },
@@ -1315,12 +1337,10 @@ impl App {
         let Some(line) = doc.lines(line_no, 1).into_iter().next() else {
             return doc.progress().done.then(|| doc.len());
         };
-        let units = render_units(&line).0;
+        let d = self.display(&line);
         let tx = x - self.text_left();
-        let idx = unsafe { self.unit_at_x(&units, tx) }.unwrap_or(0).min(units.len());
-        let text = String::from_utf16_lossy(&units[..idx]);
-        let off = line.start + doc.encode(&text).len() as u64;
-        Some(off.min(line.end))
+        let idx = unsafe { self.unit_at_x(&d.units[..d.shown], tx) }.unwrap_or(0).min(d.shown);
+        Some(self.src_units_to_offset(doc, &line, d.to_src(idx)))
     }
 
     /// x 座標（行頭基準）に最も近い文字境界の UTF-16 位置
@@ -1537,18 +1557,26 @@ impl App {
             // 本文
             rt.PushAxisAlignedClip(&rect(gutter, 0.0, w, text_h), D2D1_ANTIALIAS_MODE_ALIASED);
             // 直前に描いた行のレイアウトは使い回す（1 行スクロールなら作り直すのは 1 行だけ）
+            self.csv_measure(&lines);
+            let generation = self.csv.as_ref().map_or(0, |v| v.generation.get());
+            let caret_col = self.caret_column().map(|(c, _, _)| c);
             let mut old = std::mem::take(&mut *self.layout_cache.borrow_mut());
             let mut cache = HashMap::with_capacity(lines.len());
             for (i, line) in lines.iter().enumerate() {
                 let y = i as f32 * self.line_h;
                 let entry = match old.remove(&line.start) {
-                    Some(c) if c.end == line.end => c,
+                    Some(c) if c.end == line.end && c.generation == generation => c,
                     _ => {
-                        let (units, shown) = render_units(line);
-                        let layout = self.dw.CreateTextLayout(&units, &self.format, 1.0e6, self.line_h)?;
-                        CachedLine { end: line.end, layout, units, shown }
+                        let disp = self.display(line);
+                        let layout = self.dw.CreateTextLayout(&disp.units, &self.format, 1.0e6, self.line_h)?;
+                        CachedLine { end: line.end, generation, layout, disp }
                     }
                 };
+                if let Some(k) = caret_col {
+                    if let Some(&(a, b)) = entry.disp.cols.get(k) {
+                        self.fill_units(&rt, brush, &entry.layout, &entry.disp.units, a, b, self.text_left(), y, COL_COLUMN)?;
+                    }
+                }
                 self.draw_line(&rt, brush, line, &entry, self.text_left(), y)?;
                 cache.insert(line.start, entry);
             }
@@ -1573,14 +1601,14 @@ impl App {
     }
 
     unsafe fn draw_line(&self, rt: &ID2D1RenderTarget, brush: &ID2D1SolidColorBrush, line: &Line, c: &CachedLine, x: f32, y: f32) -> Result<()> {
-        let (layout, units, shown) = (&c.layout, &c.units, c.shown);
+        let (layout, units, shown, d) = (&c.layout, &c.disp.units, c.disp.shown, &c.disp);
         unsafe {
             if let Some(doc) = &self.doc {
                 // 選択範囲
                 if let Some((a, b)) = self.selection() {
                     let next = line.end + newline_len(doc, line);
                     if a < next.max(line.start + 1) && b > line.start {
-                        let (ua, ub) = self.span_units(doc, line, a, b, shown);
+                        let (ua, ub) = self.span_units(doc, line, a, b, d);
                         self.fill_units(rt, brush, layout, units, ua, ub, x, y, COL_SELECT)?;
                         // 改行まで選択していたら行末に印
                         if b > line.end && a <= line.end {
@@ -1592,7 +1620,7 @@ impl App {
                 // 検索一致（選択と同じなら一致の色を優先）
                 if let Some((hs, he)) = self.hit {
                     if hs < line.end.max(line.start + 1) && he > line.start {
-                        let (ua, ub) = self.span_units(doc, line, hs, he, shown);
+                        let (ua, ub) = self.span_units(doc, line, hs, he, d);
                         self.fill_units(rt, brush, layout, units, ua, ub, x, y, COL_MATCH)?;
                     }
                 }
@@ -1603,7 +1631,7 @@ impl App {
             if let (Some(doc), Some(_)) = (&self.doc, self.sel) {
                 let c = self.caret();
                 if c >= line.start && c <= line.end && self.prompt.is_none() {
-                    let (ua, _) = self.span_units(doc, line, c, c, shown);
+                    let (ua, _) = self.span_units(doc, line, c, c, d);
                     let cx = x + self.text_width(&units[..ua as usize])?;
                     brush.SetColor(&COL_CARET);
                     rt.FillRectangle(&rect(cx - 0.5, y + 1.0, cx + 1.5, y + self.line_h - 1.0), brush);
@@ -1614,12 +1642,19 @@ impl App {
     }
 
     /// バイト範囲 [s, e) を、この行の描画文字列中の UTF-16 範囲に直す
-    fn span_units(&self, doc: &Document, line: &Line, s: u64, e: u64, shown: usize) -> (u32, u32) {
+    fn span_units(&self, doc: &Document, line: &Line, s: u64, e: u64, d: &Disp) -> (u32, u32) {
         let s = s.clamp(line.start, line.end);
         let e = e.clamp(s, line.end);
-        let a = decode_units(doc, &doc.read(line.start, s)).min(shown);
-        let b = (a + decode_units(doc, &doc.read(s, e))).min(shown);
-        (a as u32, b as u32)
+        let a = decode_units(doc, &doc.read(line.start, s));
+        let b = a + decode_units(doc, &doc.read(s, e));
+        (d.to_disp(a) as u32, d.to_disp(b) as u32)
+    }
+
+    /// 行の中の UTF-16 位置 → ファイルのバイト位置
+    fn src_units_to_offset(&self, doc: &Document, line: &Line, units: usize) -> u64 {
+        let prefix: Vec<u16> = line.text.encode_utf16().take(units).collect();
+        let text = String::from_utf16_lossy(&prefix);
+        (line.start + doc.encode(&text).len() as u64).min(line.end)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1747,10 +1782,16 @@ impl App {
                 // カーソルの行と列（列は文字数）
                 let c = self.caret();
                 let pos = match doc.line_of_offset(c).and_then(|l| doc.line_range(l).map(|r| (l, r))) {
-                    Some((l, (s, _))) if c - s <= 1 << 20 => {
-                        let col = doc.decode(&doc.read(s, c)).chars().count() + 1;
-                        format!("{} 行, {} 列", group(l + 1), group(col as u64))
-                    }
+                    Some((l, (s, _))) if c - s <= 1 << 20 => match self.caret_column() {
+                        Some((k, n, name)) => {
+                            let name = if name.is_empty() { String::new() } else { format!("「{}」", name.chars().take(24).collect::<String>()) };
+                            format!("{} 行, {}/{} 列{name}", group(l + 1), k + 1, n)
+                        }
+                        None => {
+                            let col = doc.decode(&doc.read(s, c)).chars().count() + 1;
+                            format!("{} 行, {} 列", group(l + 1), group(col as u64))
+                        }
+                    },
                     Some((l, _)) => format!("{} 行", group(l + 1)),
                     None => format!("{} 行目付近", group(self.top + 1)),
                 };
