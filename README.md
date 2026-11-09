@@ -1,5 +1,7 @@
 # kazakiri（風切）
 
+[![CI](https://github.com/c0dei/kazakiri/actions/workflows/ci.yml/badge.svg)](https://github.com/c0dei/kazakiri/actions/workflows/ci.yml)
+
 数GBのログ・CSV・TSV・テキストを一瞬で開いて編集できる、Windows 向けの軽量テキストエディタ（開発中）。
 EmEditor の「大きいファイルが速い」体験を、買い切り不要のオープンソースで目指す。
 
@@ -43,6 +45,14 @@ UTF-8 なら同程度（3GB ログで 8〜18 GB/s）。Shift_JIS などは一度
 
 ファイル本体は OS のページキャッシュに置かれ、アプリ固有のメモリはほぼ増えない。
 初回（ディスクから読む）の索引時間はディスク速度に依存する（NVMe SSD なら数GB/秒）。
+
+## ダウンロード（ビルド不要）
+
+GitHub Actions が Windows 用の実行ファイルを自動でビルドしている。
+
+- 最新の開発版：[Actions](https://github.com/c0dei/kazakiri/actions/workflows/ci.yml) で main の一番新しい成功した実行を開き、
+  下の「Artifacts」から `kazakiri-windows-x64` をダウンロード（GitHub へのログインが必要）
+- リリース版：`v` で始まるタグ（例：`v0.3.0`）を push すると [Releases](https://github.com/c0dei/kazakiri/releases) に zip が付く
 
 ## ビルド
 
