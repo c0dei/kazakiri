@@ -96,7 +96,7 @@ pub fn line_start_at_or_after(data: &[u8], pos: usize, floor: usize, kind: Newli
 }
 
 /// 1 チャンクの走査結果
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct ChunkInfo {
     start: u64,
     end: u64,
@@ -105,7 +105,7 @@ struct ChunkInfo {
     checkpoints: Vec<u64>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct ReadyChunk {
     /// このチャンクより前にある改行の総数
     newlines_before: u64,
@@ -165,11 +165,43 @@ impl LineIndex {
             scanned: AtomicU64::new(0),
         });
         let s = shared.clone();
+        let start = text_start;
         thread::Builder::new()
             .name("line-index".into())
-            .spawn(move || run(s, chunk_size, threads.max(1)))
+            .spawn(move || run(s, chunk_size, threads.max(1), start))
             .expect("spawn line-index thread");
         LineIndex { shared }
+    }
+
+    /// 末尾に追記されたファイル用。`prev` の索引を引き継ぎ、増えた部分だけを走査する。
+    /// `prev` の索引作成が終わっていないとき、または小さくなったときは `None`
+    pub fn extend(prev: &LineIndex, source: Arc<Source>) -> Option<LineIndex> {
+        let old = prev.shared.state.read().unwrap();
+        let old_len = prev.shared.source.len();
+        if !old.done || source.len() < old_len {
+            return None;
+        }
+        let state = State {
+            chunks: old.chunks.clone(),
+            newlines_ready: old.newlines_ready,
+            bytes_ready: old_len,
+            done: false,
+        };
+        drop(old);
+        let shared = Arc::new(Shared {
+            source,
+            kind: prev.shared.kind,
+            text_start: prev.shared.text_start,
+            state: RwLock::new(state),
+            cancel: AtomicBool::new(false),
+            scanned: AtomicU64::new(old_len),
+        });
+        let s = shared.clone();
+        thread::Builder::new()
+            .name("line-index".into())
+            .spawn(move || run(s, DEFAULT_CHUNK, default_threads(), old_len))
+            .expect("spawn line-index thread");
+        Some(LineIndex { shared })
     }
 
     pub fn kind(&self) -> Newline {
@@ -276,9 +308,10 @@ fn default_threads() -> usize {
     thread::available_parallelism().map(|n| n.get()).unwrap_or(4).min(8)
 }
 
-fn run(shared: Arc<Shared>, chunk_size: u64, threads: usize) {
+/// `scan_from` から末尾までを走査し、既存の状態の後ろに追加していく
+fn run(shared: Arc<Shared>, chunk_size: u64, threads: usize, scan_from: u64) {
     let len = shared.source.len();
-    let start = shared.text_start.min(len);
+    let start = scan_from.min(len);
     let n_chunks = (len - start).div_ceil(chunk_size) as usize;
     let next = Arc::new(AtomicUsize::new(0));
     let (tx, rx) = mpsc::channel::<(usize, ChunkInfo)>();
@@ -400,6 +433,34 @@ mod tests {
         check(b"\n\n\n".to_vec(), Newline::Lf, 0);
         check(b"no newline".to_vec(), Newline::Lf, 0);
         check(Vec::new(), Newline::Lf, 0);
+    }
+
+    #[test]
+    fn extend_appended() {
+        for kind_text in [("\n", Newline::Lf), ("\r\n", Newline::Lf), ("\r", Newline::Cr)] {
+            let (sep, kind) = kind_text;
+            let first = format!("{}{sep}half", lines_text(900, sep));
+            let src = Arc::new(Source::from_vec(first.clone().into_bytes()));
+            let ix = LineIndex::build_with(src, kind, 0, 64, 3);
+            wait(&ix);
+            // 追記（途中の行の続きから）
+            let full = format!("{first} line continues{sep}{}", lines_text(700, sep));
+            let src2 = Arc::new(Source::from_vec(full.clone().into_bytes()));
+            let ix2 = LineIndex::extend(&ix, src2).unwrap();
+            wait(&ix2);
+            let expected = naive_starts(full.as_bytes(), kind, 0);
+            assert_eq!(ix2.total_lines(), (expected.len() as u64, true));
+            for (i, &st) in expected.iter().enumerate() {
+                assert_eq!(ix2.line_start(i as u64), Some(st as u64), "{sep:?} line {i}");
+            }
+            for off in (0..=full.len()).step_by(7) {
+                let want = expected.partition_point(|&s| s <= off) as u64 - 1;
+                assert_eq!(ix2.line_of_offset(off as u64), Some(want));
+            }
+            // 小さくなったら引き継げない
+            let short = Arc::new(Source::from_vec(b"x".to_vec()));
+            assert!(LineIndex::extend(&ix2, short).is_none());
+        }
     }
 
     #[test]

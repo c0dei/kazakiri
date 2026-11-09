@@ -4,13 +4,14 @@
 //! 関係なく描画コストは一定になる。検索は別スレッドで行い、UI は止めない。
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use encoding_rs::Encoding;
-use kazakiri_core::{Direction, Document, Line, Query, SearchControl, SearchOptions, SearchOutcome};
+use kazakiri_core::{Direction, Document, Line, Query, Refresh, SearchControl, SearchOptions, SearchOutcome};
 use windows::core::{w, Interface, Result, BOOL, PCWSTR};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Direct2D::Common::*;
@@ -39,6 +40,7 @@ const MAX_RENDER_UNITS: usize = 8192;
 const COPY_LIMIT: u64 = 256 << 20;
 const TIMER_INDEX: usize = 1;
 const TIMER_SEARCH: usize = 2;
+const TIMER_FOLLOW: usize = 3;
 /// 検索スレッドからの完了通知
 const WM_SEARCH_DONE: u32 = WM_APP + 1;
 
@@ -84,6 +86,18 @@ struct SearchJob {
     dir: Direction,
     /// 進捗表示用：探す範囲の大きさ
     span: u64,
+    /// 先頭（後方なら末尾）に戻って探し直している最中か
+    wrapped: bool,
+    /// 検索を始めた位置（折り返したときの上限の目安）
+    origin: u64,
+}
+
+/// 描画済みの行レイアウト（スクロールで使い回す）
+struct CachedLine {
+    end: u64,
+    layout: IDWriteTextLayout,
+    units: Vec<u16>,
+    shown: usize,
 }
 
 /// 検索スレッドから UI へ渡す結果
@@ -119,6 +133,12 @@ struct App {
     message: String,
     opened_at: Option<Instant>,
     recent: Vec<PathBuf>,
+    /// 末尾の追従（tail -f）
+    follow: bool,
+    /// 追記を読み込んだら末尾へスクロールする
+    stick_bottom: bool,
+    /// 行の開始位置 → レイアウト。直前に描いた行だけを持つ
+    layout_cache: RefCell<HashMap<u64, CachedLine>>,
 }
 
 pub fn run() {
@@ -194,6 +214,9 @@ unsafe fn run_inner() -> std::result::Result<(), (&'static str, windows::core::E
             message: "Ctrl+O: 開く / ドラッグ&ドロップでも開けます".into(),
             opened_at: None,
             recent: recent::load(),
+            follow: false,
+            stick_bottom: false,
+            layout_cache: RefCell::new(HashMap::new()),
         };
         if let Some(arg) = std::env::args_os().nth(1) {
             app.open(PathBuf::from(arg), None);
@@ -364,13 +387,28 @@ impl App {
                     if done {
                         let _ = KillTimer(Some(self.hwnd), TIMER_INDEX);
                         if let (Some(t), Some(d)) = (self.opened_at.take(), &self.doc) {
-                            if self.search.is_none() {
+                            // 開き直し・再読み込みのメッセージは残す
+                            if self.search.is_none() && self.message.is_empty() {
                                 self.message = format!("索引作成完了 {:.2} 秒（{} 行）", t.elapsed().as_secs_f64(), group(d.line_count().0));
                             }
                         }
                     }
+                    if self.stick_bottom {
+                        self.top = self.max_top();
+                        if done {
+                            self.stick_bottom = false;
+                        }
+                    }
                     self.update_scrollbars();
                     self.invalidate();
+                    (DONE, None)
+                }
+                WM_TIMER if wparam.0 == TIMER_FOLLOW => {
+                    if self.follow {
+                        self.refresh(true);
+                    } else {
+                        let _ = KillTimer(Some(self.hwnd), TIMER_FOLLOW);
+                    }
                     (DONE, None)
                 }
                 WM_TIMER if wparam.0 == TIMER_SEARCH => {
@@ -387,7 +425,7 @@ impl App {
                 }
                 WM_INITMENUPOPUP => {
                     let forced = self.doc.as_ref().map(|d| d.forced_encoding());
-                    self.menus.refresh(self.opts.case_sensitive, self.opts.regex, forced, &self.recent);
+                    self.menus.refresh(self.opts.case_sensitive, self.opts.regex, self.follow, forced, &self.recent);
                     (DONE, None)
                 }
                 WM_COMMAND => (DONE, self.command(loword(wparam.0))),
@@ -504,6 +542,7 @@ impl App {
     /// `keep_view` なら表示位置と選択を保つ（再読み込み・開き直し）
     fn open_keep(&mut self, path: PathBuf, forced: Option<&'static Encoding>, keep_view: bool) {
         self.cancel_search();
+        self.layout_cache.borrow_mut().clear();
         match Document::open_with(&path, forced) {
             Ok(doc) => {
                 self.doc = Some(Arc::new(doc));
@@ -528,18 +567,81 @@ impl App {
         self.invalidate();
     }
 
-    fn reload(&mut self, forced: Option<Option<&'static Encoding>>) {
-        let Some(doc) = &self.doc else { return };
-        let Some(path) = doc.path().map(|p| p.to_path_buf()) else { return };
-        let forced = forced.unwrap_or(doc.forced_encoding());
+    /// 文字コードを変えて開き直す
+    fn reopen(&mut self, forced: Option<&'static Encoding>) {
+        let Some(path) = self.doc.as_ref().and_then(|d| d.path().map(|p| p.to_path_buf())) else { return };
         self.open_keep(path, forced, true);
-        self.message = "再読み込みしました".into();
+    }
+
+    /// ディスク上の変更を読み込む。追記だけなら増えた分だけ索引を作る。
+    /// `quiet` なら変化がないときに何も表示しない（追従モード用）
+    fn refresh(&mut self, quiet: bool) {
+        let Some(doc) = self.doc.clone() else { return };
+        let was_bottom = self.top >= self.max_top();
+        match doc.refresh() {
+            Ok(Refresh::Unchanged) => {
+                if !quiet {
+                    self.message = "変更はありません".into();
+                    self.invalidate();
+                }
+            }
+            Ok(Refresh::Appended(new)) => {
+                let added = new.len() - doc.len();
+                self.cancel_search();
+                self.layout_cache.borrow_mut().clear();
+                self.doc = Some(Arc::new(new));
+                self.message = format!("追記 +{} を読み込みました", human_size(added));
+                if was_bottom && (self.follow || !quiet) {
+                    self.stick_bottom = true;
+                }
+                unsafe {
+                    SetTimer(Some(self.hwnd), TIMER_INDEX, 50, None);
+                }
+                self.update_scrollbars();
+                self.invalidate();
+            }
+            Ok(Refresh::Replaced) => {
+                let path = doc.path().map(|p| p.to_path_buf());
+                if let Some(path) = path {
+                    self.open_keep(path, doc.forced_encoding(), true);
+                    self.message = "ファイルが置き換わったため開き直しました".into();
+                    if self.follow {
+                        self.stick_bottom = true;
+                    }
+                }
+            }
+            Err(e) => {
+                if !quiet {
+                    self.message = format!("再読み込みに失敗しました: {e}");
+                    self.invalidate();
+                }
+            }
+        }
+    }
+
+    fn set_follow(&mut self, on: bool) {
+        self.follow = on;
+        unsafe {
+            if on {
+                SetTimer(Some(self.hwnd), TIMER_FOLLOW, 1000, None);
+            } else {
+                let _ = KillTimer(Some(self.hwnd), TIMER_FOLLOW);
+            }
+        }
+        if on {
+            self.refresh(true);
+            self.scroll_to(u64::MAX);
+            self.stick_bottom = true;
+        }
+        self.message = format!("末尾の追従: {}", on_off(on));
+        self.invalidate();
     }
 
     unsafe fn command(&mut self, id: u32) -> Option<Deferred> {
         match id {
             menu::ID_OPEN => return Some(Deferred::OpenDialog),
-            menu::ID_RELOAD => self.reload(None),
+            menu::ID_RELOAD => self.refresh(false),
+            menu::ID_FOLLOW => self.set_follow(!self.follow),
             menu::ID_EXIT => unsafe {
                 let _ = DestroyWindow(self.hwnd);
             },
@@ -566,7 +668,7 @@ impl App {
             menu::ID_GOTO => self.start_prompt(Prompt::GotoLine),
             id if (menu::ID_ENC_BASE..menu::ID_ENC_BASE + menu::ENCODINGS.len() as u32).contains(&id) => {
                 let (name, enc) = menu::ENCODINGS[(id - menu::ID_ENC_BASE) as usize];
-                self.reload(Some(enc));
+                self.reopen(enc);
                 self.message = format!("{name} で開き直しました");
             }
             id if (menu::ID_RECENT_BASE..menu::ID_RECENT_BASE + menu::RECENT_MAX as u32).contains(&id) => {
@@ -634,6 +736,7 @@ impl App {
             _ if ctrl && vk == VK_G => self.start_prompt(Prompt::GotoLine),
             _ if ctrl && vk == VK_C => self.copy(),
             _ if ctrl && vk == VK_A => return unsafe { self.command(menu::ID_SELECT_ALL) },
+            _ if ctrl && vk == VK_T => return unsafe { self.command(menu::ID_FOLLOW) },
             _ => {}
         }
         None
@@ -716,16 +819,22 @@ impl App {
             (Direction::Backward, Some((s, _))) => s,
             (_, None) => view_start,
         };
-        let span = match dir {
-            Direction::Forward => doc.len().saturating_sub(from),
-            Direction::Backward => from,
+        self.start_search(doc, query, dir, from, false, from);
+    }
+
+    fn start_search(&mut self, doc: Arc<Document>, query: Query, dir: Direction, from: u64, wrapped: bool, origin: u64) {
+        let span = match (dir, wrapped) {
+            (Direction::Forward, false) => doc.len().saturating_sub(from),
+            (Direction::Backward, false) => from,
+            (Direction::Forward, true) => origin,
+            (Direction::Backward, true) => doc.len().saturating_sub(origin),
         };
 
         self.cancel_search();
         let id = self.next_job;
         self.next_job += 1;
         let ctl = Arc::new(SearchControl::default());
-        self.search = Some(SearchJob { id, ctl: ctl.clone(), started: Instant::now(), dir, span });
+        self.search = Some(SearchJob { id, ctl: ctl.clone(), started: Instant::now(), dir, span, wrapped, origin });
         let hwnd = self.hwnd.0 as isize;
         std::thread::spawn(move || {
             let t = Instant::now();
@@ -756,13 +865,25 @@ impl App {
         let job = self.search.take().unwrap();
         let ms = done.elapsed.as_secs_f64() * 1000.0;
         let Some(doc) = self.doc.clone() else { return };
-        match done.outcome {
+        // 折り返し後に、検索を始めた位置より先で見つかったものは「見つからない」扱い
+        let outcome = match done.outcome {
+            SearchOutcome::Found(s, _) if job.wrapped && ((job.dir == Direction::Forward && s >= job.origin) || (job.dir == Direction::Backward && s < job.origin)) => {
+                SearchOutcome::NotFound
+            }
+            o => o,
+        };
+        match outcome {
             SearchOutcome::Found(s, e) => {
                 self.hit = Some((s, e));
                 self.sel = Some((s, e));
+                let wrap_note = match (job.wrapped, job.dir) {
+                    (true, Direction::Forward) => "末尾まで達したので先頭から探しました。",
+                    (true, Direction::Backward) => "先頭まで達したので末尾から探しました。",
+                    _ => "",
+                };
                 match doc.line_of_offset(s) {
                     Some(line) => {
-                        self.message = format!("{} 行目で見つかりました（{ms:.0} ms）", group(line + 1));
+                        self.message = format!("{wrap_note}{} 行目で見つかりました（{ms:.0} ms）", group(line + 1));
                         let vis = self.visible_lines() as u64;
                         if line < self.top || line >= self.top + vis.saturating_sub(1) {
                             self.scroll_to(line.saturating_sub(vis / 3));
@@ -772,9 +893,23 @@ impl App {
                     None => self.message = "見つかりましたが、索引作成中のためまだ移動できません".into(),
                 }
             }
+            // まだ探していない側（前方なら先頭〜開始位置、後方なら開始位置〜末尾）があれば折り返す
+            SearchOutcome::NotFound
+                if !job.wrapped
+                    && match job.dir {
+                        Direction::Forward => job.origin > doc.text_start() as u64,
+                        Direction::Backward => job.origin < doc.len(),
+                    } =>
+            {
+                // 反対の端から、始めた位置まで探し直す
+                if let Ok(query) = Query::new(&doc, &self.last_find, self.opts) {
+                    let from = if job.dir == Direction::Forward { doc.text_start() as u64 } else { doc.len() };
+                    self.start_search(doc, query, job.dir, from, true, job.origin);
+                    return;
+                }
+            }
             SearchOutcome::NotFound => {
-                let end = if job.dir == Direction::Forward { "末尾" } else { "先頭" };
-                self.message = format!("「{}」は{end}まで見つかりませんでした（{ms:.0} ms）", self.last_find);
+                self.message = format!("「{}」は見つかりませんでした（{ms:.0} ms）", self.last_find);
             }
             SearchOutcome::Cancelled => self.message = "検索を中止しました".into(),
         }
@@ -996,6 +1131,9 @@ impl App {
     }
 
     fn scroll_by(&mut self, delta: i64) {
+        if delta < 0 {
+            self.stick_bottom = false;
+        }
         let t = (self.top as i64 + delta).max(0) as u64;
         self.scroll_to(t);
     }
@@ -1102,10 +1240,23 @@ impl App {
 
             // 本文
             rt.PushAxisAlignedClip(&rect(gutter, 0.0, w, text_h), D2D1_ANTIALIAS_MODE_ALIASED);
+            // 直前に描いた行のレイアウトは使い回す（1 行スクロールなら作り直すのは 1 行だけ）
+            let mut old = std::mem::take(&mut *self.layout_cache.borrow_mut());
+            let mut cache = HashMap::with_capacity(lines.len());
             for (i, line) in lines.iter().enumerate() {
                 let y = i as f32 * self.line_h;
-                self.draw_line(&rt, brush, line, self.text_left(), y)?;
+                let entry = match old.remove(&line.start) {
+                    Some(c) if c.end == line.end => c,
+                    _ => {
+                        let (units, shown) = render_units(line);
+                        let layout = self.dw.CreateTextLayout(&units, &self.format, 1.0e6, self.line_h)?;
+                        CachedLine { end: line.end, layout, units, shown }
+                    }
+                };
+                self.draw_line(&rt, brush, line, &entry, self.text_left(), y)?;
+                cache.insert(line.start, entry);
             }
+            *self.layout_cache.borrow_mut() = cache;
             rt.PopAxisAlignedClip();
 
             for (i, line) in lines.iter().enumerate() {
@@ -1124,17 +1275,16 @@ impl App {
         }
     }
 
-    unsafe fn draw_line(&self, rt: &ID2D1RenderTarget, brush: &ID2D1SolidColorBrush, line: &Line, x: f32, y: f32) -> Result<()> {
-        let (units, shown) = render_units(line);
+    unsafe fn draw_line(&self, rt: &ID2D1RenderTarget, brush: &ID2D1SolidColorBrush, line: &Line, c: &CachedLine, x: f32, y: f32) -> Result<()> {
+        let (layout, units, shown) = (&c.layout, &c.units, c.shown);
         unsafe {
-            let layout = self.dw.CreateTextLayout(&units, &self.format, 1.0e6, self.line_h)?;
             if let Some(doc) = &self.doc {
                 // 選択範囲
                 if let Some((a, b)) = self.selection() {
                     let next = line.end + newline_len(doc, line);
                     if a < next.max(line.start + 1) && b > line.start {
                         let (ua, ub) = self.span_units(doc, line, a, b, shown);
-                        self.fill_units(rt, brush, &layout, &units, ua, ub, x, y, COL_SELECT)?;
+                        self.fill_units(rt, brush, layout, units, ua, ub, x, y, COL_SELECT)?;
                         // 改行まで選択していたら行末に印
                         if b > line.end && a <= line.end {
                             let ex = x + self.text_width(&units[..shown])?;
@@ -1146,12 +1296,12 @@ impl App {
                 if let Some((hs, he)) = self.hit {
                     if hs < line.end.max(line.start + 1) && he > line.start {
                         let (ua, ub) = self.span_units(doc, line, hs, he, shown);
-                        self.fill_units(rt, brush, &layout, &units, ua, ub, x, y, COL_MATCH)?;
+                        self.fill_units(rt, brush, layout, units, ua, ub, x, y, COL_MATCH)?;
                     }
                 }
             }
             brush.SetColor(&COL_TEXT);
-            rt.DrawTextLayout(Vector2 { X: x, Y: y }, &layout, brush, D2D1_DRAW_TEXT_OPTIONS_NONE);
+            rt.DrawTextLayout(Vector2 { X: x, Y: y }, layout, brush, D2D1_DRAW_TEXT_OPTIONS_NONE);
         }
         Ok(())
     }
@@ -1269,9 +1419,10 @@ impl App {
                     Some((a, b)) => format!("選択 {}   ", human_size(b - a)),
                     None => String::new(),
                 };
+                let follow = if self.follow { "追従中   " } else { "" };
                 let enc = if doc.forced_encoding().is_some() { format!("{}（指定）", doc.encoding().name()) } else { doc.encoding().name() };
                 format!(
-                    "{idx}{sel}{} 行目 / {lines} 行   {enc}   {}   {}",
+                    "{follow}{idx}{sel}{} 行目 / {lines} 行   {enc}   {}   {}",
                     group(self.top + 1),
                     doc.newline_name(),
                     human_size(doc.len())

@@ -6,6 +6,6 @@ pub mod line_index;
 pub mod search;
 pub mod source;
 
-pub use document::{Document, Line};
+pub use document::{Document, Line, Refresh};
 pub use search::{Direction, Query, SearchControl, SearchOptions, SearchOutcome};
 pub use line_index::{Newline, Progress};

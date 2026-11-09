@@ -10,6 +10,16 @@ use crate::encoding::{self, Detected};
 use crate::line_index::{next_line_start, LineIndex, Newline, Progress};
 use crate::source::Source;
 
+/// ファイルを読み直した結果
+pub enum Refresh {
+    /// 変わっていない（大きさが同じ）
+    Unchanged,
+    /// 末尾に追記された。索引は増えた分だけ作り直す
+    Appended(Document),
+    /// 小さくなった・中身が変わった。最初から開き直す必要がある
+    Replaced,
+}
+
 /// 1 行あたり表示用にデコードする上限（巨大な 1 行 JSON 対策）
 pub const MAX_LINE_DISPLAY_BYTES: usize = 64 * 1024;
 
@@ -62,6 +72,37 @@ impl Document {
         let kind = newline_kind(&detected, source.bytes());
         let index = LineIndex::build(source.clone(), kind, detected.bom_len as u64);
         Document { path: None, source, detected, index, forced }
+    }
+
+    /// ディスク上のファイルを確認し、追記だけなら索引を引き継いで読み直す
+    pub fn refresh(&self) -> io::Result<Refresh> {
+        let Some(path) = &self.path else { return Ok(Refresh::Unchanged) };
+        let new_len = std::fs::metadata(path)?.len();
+        let old_len = self.len();
+        if new_len == old_len {
+            return Ok(Refresh::Unchanged);
+        }
+        if new_len < old_len || old_len == 0 {
+            return Ok(Refresh::Replaced);
+        }
+        let source = Source::open(path)?;
+        // 先頭と、元の末尾付近が同じなら「追記」とみなす
+        let old = self.source.bytes();
+        let new = source.bytes();
+        let head = old.len().min(4096);
+        let tail = old.len().saturating_sub(4096);
+        if new.len() < old.len() || old[..head] != new[..head] || old[tail..] != new[tail..old.len()] {
+            return Ok(Refresh::Replaced);
+        }
+        let source = Arc::new(source);
+        let Some(index) = LineIndex::extend(&self.index, source.clone()) else { return Ok(Refresh::Replaced) };
+        Ok(Refresh::Appended(Document {
+            path: self.path.clone(),
+            source,
+            detected: self.detected,
+            index,
+            forced: self.forced,
+        }))
     }
 
     /// 文字コードを指定して開いたか（`None` なら自動判定）
@@ -284,6 +325,38 @@ mod tests {
         assert_eq!(lines, ["あいう", "えお", ""]);
         let (s, _) = doc.find("えお", 0).unwrap();
         assert_eq!(doc.line_of_offset(s), Some(1));
+    }
+
+    #[test]
+    fn refresh_appended_file() {
+        let dir = std::env::temp_dir().join(format!("kazakiri-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("grow.log");
+        std::fs::write(&path, "a\nb\n").unwrap();
+        let doc = Document::open(&path).unwrap();
+        ready(&doc);
+        assert!(matches!(doc.refresh().unwrap(), Refresh::Unchanged));
+        {
+            use std::io::Write;
+            let mut f = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+            f.write_all(b"c\nd").unwrap();
+        }
+        let Refresh::Appended(doc2) = doc.refresh().unwrap() else { panic!("not appended") };
+        ready(&doc2);
+        assert_eq!(doc2.line_count(), (4, true));
+        assert_eq!(doc2.lines(2, 5).into_iter().map(|l| l.text).collect::<Vec<_>>(), ["c", "d"]);
+        drop(doc);
+        drop(doc2);
+        std::fs::write(&path, "x\n").unwrap();
+        let doc3 = Document::open(&path).unwrap();
+        ready(&doc3);
+        // ログのローテーション相当：別ファイルを作って置き換える
+        let rotated = dir.join("grow.log.new");
+        std::fs::write(&rotated, "y\nzzzz\n").unwrap();
+        std::fs::rename(&rotated, &path).unwrap();
+        assert!(matches!(doc3.refresh().unwrap(), Refresh::Replaced));
+        drop(doc3);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
