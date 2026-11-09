@@ -8,7 +8,7 @@ use std::io::{BufWriter, Write};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use kazakiri_core::Document;
+use kazakiri_core::{Direction, Document, Query, SearchControl, SearchOptions, SearchOutcome};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -105,20 +105,37 @@ fn open(path: &Path, needle: Option<&str>) {
     println!("jump+60l  : {:?} / screen", t.elapsed() / jumps as u32);
 
     if let Some(needle) = needle {
-        let t = Instant::now();
-        let mut count = 0u64;
-        let mut pos = 0u64;
-        let searcher = doc.searcher(needle);
-        while let Some((s, e)) = searcher.find(pos) {
-            count += 1;
-            pos = e.max(s + 1);
+        let gbps = |el: Duration| doc.len() as f64 / (1u64 << 30) as f64 / el.as_secs_f64();
+        let modes = [
+            ("literal", SearchOptions { case_sensitive: true, regex: false }),
+            ("ignore-case", SearchOptions { case_sensitive: false, regex: false }),
+            ("regex", SearchOptions { case_sensitive: true, regex: true }),
+        ];
+        for (name, opts) in modes {
+            let q = match Query::new(&doc, needle, opts) {
+                Ok(q) => q,
+                Err(e) => {
+                    println!("{name:<12}: {e}");
+                    continue;
+                }
+            };
+            let ctl = SearchControl::default();
+            // 全件を前から順に（一致が多いと 1 件ごとの呼び出しコストが効く）
+            let t = Instant::now();
+            let (mut count, mut pos, mut last) = (0u64, 0u64, None);
+            while let SearchOutcome::Found(s, e) = q.find(&doc, pos, Direction::Forward, &ctl) {
+                count += 1;
+                last = Some(s);
+                pos = e.max(s + 1);
+            }
+            let el = t.elapsed();
+            println!("{name:<12}: {count} hits, all in {el:?} ({:.2} GB/s)", gbps(el));
+            // 末尾から最後の一致を 1 件（後方検索）
+            let t = Instant::now();
+            let back = q.find(&doc, doc.len(), Direction::Backward, &ctl);
+            let ok = matches!(back, SearchOutcome::Found(s, _) if Some(s) == last) || (last.is_none() && back == SearchOutcome::NotFound);
+            println!("{:<12}  backward last hit in {:?} (matches forward: {ok})", "", t.elapsed());
         }
-        let el = t.elapsed();
-        println!(
-            "find all  : {count} hits in {:?} ({:.2} GB/s)",
-            el,
-            doc.len() as f64 / (1u64 << 30) as f64 / el.as_secs_f64()
-        );
     }
     println!("peak RSS  : {}", peak_rss());
 }

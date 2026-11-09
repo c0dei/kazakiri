@@ -54,6 +54,15 @@ pub fn detect(bytes: &[u8]) -> Detected {
     Detected { encoding, bom_len: 0 }
 }
 
+/// 文字コードを指定されたとき。BOM はその文字コードのものだけ読み飛ばす
+pub fn forced(enc: &'static Encoding, bytes: &[u8]) -> Detected {
+    let bom_len = match Encoding::for_bom(bytes) {
+        Some((e, len)) if e == enc => len,
+        _ => 0,
+    };
+    Detected { encoding: enc, bom_len }
+}
+
 fn is_utf8(sample: &[u8], truncated: bool) -> bool {
     match std::str::from_utf8(sample) {
         Ok(_) => true,

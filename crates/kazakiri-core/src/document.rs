@@ -4,7 +4,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use encoding_rs::{UTF_16BE, UTF_16LE};
+use encoding_rs::{Encoding, UTF_16BE, UTF_16LE};
 
 use crate::encoding::{self, Detected};
 use crate::line_index::{next_line_start, LineIndex, Newline, Progress};
@@ -18,6 +18,7 @@ pub struct Document {
     source: Arc<Source>,
     detected: Detected,
     index: LineIndex,
+    forced: Option<&'static Encoding>,
 }
 
 #[derive(Debug, Clone)]
@@ -33,22 +34,54 @@ pub struct Line {
 
 impl Document {
     pub fn open(path: &Path) -> io::Result<Document> {
+        Self::open_with(path, None)
+    }
+
+    /// 文字コードを指定して開く（`None` なら自動判定）
+    pub fn open_with(path: &Path, forced: Option<&'static Encoding>) -> io::Result<Document> {
         let source = Source::open(path)?;
-        let mut doc = Self::from_source(source);
+        let mut doc = Self::from_source(source, forced);
         doc.path = Some(path.to_path_buf());
         Ok(doc)
     }
 
     pub fn from_bytes(bytes: Vec<u8>) -> Document {
-        Self::from_source(Source::from_vec(bytes))
+        Self::from_source(Source::from_vec(bytes), None)
     }
 
-    fn from_source(source: Source) -> Document {
+    pub fn from_bytes_with(bytes: Vec<u8>, forced: Option<&'static Encoding>) -> Document {
+        Self::from_source(Source::from_vec(bytes), forced)
+    }
+
+    fn from_source(source: Source, forced: Option<&'static Encoding>) -> Document {
         let source = Arc::new(source);
-        let detected = encoding::detect(source.bytes());
+        let detected = match forced {
+            None => encoding::detect(source.bytes()),
+            Some(enc) => encoding::forced(enc, source.bytes()),
+        };
         let kind = newline_kind(&detected, source.bytes());
         let index = LineIndex::build(source.clone(), kind, detected.bom_len as u64);
-        Document { path: None, source, detected, index }
+        Document { path: None, source, detected, index, forced }
+    }
+
+    /// 文字コードを指定して開いたか（`None` なら自動判定）
+    pub fn forced_encoding(&self) -> Option<&'static Encoding> {
+        self.forced
+    }
+
+    /// ファイル全体のバイト列
+    pub fn data(&self) -> &[u8] {
+        self.source.bytes()
+    }
+
+    /// 本文の開始位置（BOM の直後）
+    pub fn text_start(&self) -> usize {
+        self.detected.bom_len.min(self.source.bytes().len())
+    }
+
+    /// バイト列をこのファイルの文字コードで文字列にする
+    pub fn decode<'a>(&self, bytes: &'a [u8]) -> std::borrow::Cow<'a, str> {
+        encoding::decode(&self.detected, bytes)
     }
 
     pub fn path(&self) -> Option<&Path> {
@@ -167,15 +200,15 @@ impl Document {
         out
     }
 
-    /// 文字列を前方検索し、見つかったバイト範囲を返す（大文字小文字は区別）
+    /// 文字列を前方検索し、見つかったバイト範囲を返す（大文字小文字は区別）。
+    /// 繰り返し検索するときは `search::Query` を使う
     pub fn find(&self, pattern: &str, from: u64) -> Option<(u64, u64)> {
-        self.searcher(pattern).find(from)
-    }
-
-    /// 同じ語を繰り返し検索するときはこちら（検索器を使い回す）
-    pub fn searcher(&self, pattern: &str) -> Searcher<'_> {
-        let needle = self.encode(pattern);
-        Searcher { doc: self, finder: memchr::memmem::Finder::new(&needle).into_owned() }
+        use crate::search::{Direction, Query, SearchControl, SearchOptions, SearchOutcome};
+        let q = Query::new(self, pattern, SearchOptions { case_sensitive: true, regex: false }).ok()?;
+        match q.find(self, from, Direction::Forward, &SearchControl::default()) {
+            SearchOutcome::Found(s, e) => Some((s, e)),
+            _ => None,
+        }
     }
 
     /// 文字列をこのファイルの文字コードのバイト列にする
@@ -252,29 +285,17 @@ mod tests {
         let (s, _) = doc.find("えお", 0).unwrap();
         assert_eq!(doc.line_of_offset(s), Some(1));
     }
-}
 
-pub struct Searcher<'a> {
-    doc: &'a Document,
-    finder: memchr::memmem::Finder<'static>,
-}
-
-impl Searcher<'_> {
-    pub fn find(&self, from: u64) -> Option<(u64, u64)> {
-        let n = self.finder.needle().len();
-        if n == 0 {
-            return None;
-        }
-        let data = self.doc.source.bytes();
-        let utf16 = self.doc.detected.is_utf16();
-        let mut pos = (from as usize).max(self.doc.detected.bom_len);
-        while pos <= data.len() {
-            let p = pos + self.finder.find(&data[pos..])?;
-            if !utf16 || p.is_multiple_of(2) {
-                return Some((p as u64, (p + n) as u64));
-            }
-            pos = p + 1;
-        }
-        None
+    #[test]
+    fn forced_encoding() {
+        let (bytes, _, _) = encoding_rs::SHIFT_JIS.encode("テスト\r\n");
+        let doc = Document::from_bytes_with(bytes.into_owned(), Some(encoding_rs::UTF_8));
+        ready(&doc);
+        assert_eq!(doc.encoding().encoding, encoding_rs::UTF_8);
+        assert_eq!(doc.forced_encoding(), Some(encoding_rs::UTF_8));
+        let doc = Document::from_bytes_with(b"\xEF\xBB\xBFabc".to_vec(), Some(encoding_rs::UTF_8));
+        assert_eq!(doc.encoding().bom_len, 3);
+        let doc = Document::from_bytes_with(b"\xEF\xBB\xBFabc".to_vec(), Some(encoding_rs::SHIFT_JIS));
+        assert_eq!(doc.encoding().bom_len, 0);
     }
 }
