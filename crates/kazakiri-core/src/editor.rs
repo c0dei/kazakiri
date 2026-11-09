@@ -7,7 +7,8 @@
 use std::sync::Arc;
 
 use crate::document::{Document, EditError};
-use crate::pieces::{Piece, Pieces};
+use crate::pieces::{Piece, Pieces, Repls};
+
 
 /// 履歴の最大数
 const MAX_UNDO: usize = 100_000;
@@ -35,7 +36,8 @@ struct Entry {
 }
 
 pub struct Editor {
-    doc: Arc<Document>,
+    /// 編集中だけ一時的に None になる（持ち主を自分だけにして、その場で書き換えるため）
+    doc: Option<Arc<Document>>,
     undo: Vec<Entry>,
     redo: Vec<Entry>,
     version: u64,
@@ -49,11 +51,19 @@ pub struct Editor {
 
 impl Editor {
     pub fn new(doc: Arc<Document>) -> Editor {
-        Editor { doc, undo: Vec::new(), redo: Vec::new(), version: 0, next_version: 1, saved_version: 0, last: None, cur_sel: (0, 0) }
+        Editor { doc: Some(doc), undo: Vec::new(), redo: Vec::new(), version: 0, next_version: 1, saved_version: 0, last: None, cur_sel: (0, 0) }
     }
 
     pub fn doc(&self) -> &Arc<Document> {
-        &self.doc
+        self.doc.as_ref().expect("document")
+    }
+
+    /// 編集を適用する（確認済みであること）
+    fn edit<R>(&mut self, f: impl FnOnce(&mut Pieces, &crate::pieces::Ctx) -> R) -> R {
+        let doc = self.doc.take().expect("document");
+        let (new_doc, r) = Document::edit_owned(doc, f);
+        self.doc = Some(Arc::new(new_doc));
+        r
     }
 
     /// 編集を伴わない Document の差し替え（追記の読み込み、保存後の開き直しなど）。履歴は消す
@@ -80,8 +90,9 @@ impl Editor {
 
     /// [a, b) を文字列 `s` で置き換える。戻り値は置き換えた後の [a, a + 新しい長さ)
     pub fn replace(&mut self, a: u64, b: u64, s: &str, kind: EditKind, sel_before: (u64, u64)) -> Result<(u64, u64), EditError> {
-        let bytes = self.doc.encode(s);
-        let (new_doc, removed) = self.doc.replace_tracked(a, b, &bytes)?;
+        let bytes = self.doc().encode(s);
+        self.doc().check_edit(&[(a, b)])?;
+        let removed = self.edit(|t, ctx| t.replace(ctx, a, b, &bytes));
         let n = bytes.len() as u64;
         let end = a + n;
 
@@ -117,12 +128,41 @@ impl Editor {
             }
         }
         self.redo.clear();
-        self.doc = Arc::new(new_doc);
         self.version = self.next_version;
         self.next_version += 1;
         self.last = Some((kind, if kind == EditKind::Typing { end } else { a }));
         self.cur_sel = (end, end);
         Ok((a, end))
+    }
+
+    /// すべて置換。`repls` は一致ごとの置換後のバイト列（1 つだけなら全件同じ）。
+    /// 1 回の「元に戻す」で全部戻る。置換した件数を返す
+    pub fn replace_all(&mut self, ranges: &[(u64, u64)], repls: &[Vec<u8>], sel_before: (u64, u64)) -> Result<usize, EditError> {
+        if ranges.is_empty() {
+            return Ok(0);
+        }
+        let refs = if repls.len() == ranges.len() && ranges.len() > 1 {
+            Repls::Each(repls)
+        } else {
+            Repls::One(repls.first().map_or(&[], |r| r.as_slice()))
+        };
+        self.doc().check_edit(ranges)?;
+        let removed = self.edit(|t, ctx| t.replace_many(ctx, ranges, refs));
+        let a = ranges[0].0;
+        let old_span = ranges.last().unwrap().1 - a;
+        let removed_bytes: u64 = ranges.iter().map(|(s, e)| e - s).sum();
+        let added: u64 = match refs {
+            Repls::One(b) => b.len() as u64 * ranges.len() as u64,
+            Repls::Each(list) => list.iter().map(|r| r.len() as u64).sum(),
+        };
+        let new_span = old_span - removed_bytes + added;
+        self.undo.push(Entry { a, len: new_span, restore: removed, version: self.version, sel: sel_before });
+        self.redo.clear();
+        self.version = self.next_version;
+        self.next_version += 1;
+        self.last = None;
+        self.cur_sel = (a, a);
+        Ok(ranges.len())
     }
 
     /// 元に戻す。戻した後の選択範囲を返す
@@ -144,9 +184,9 @@ impl Editor {
     /// 記録を適用し、逆向きの記録を返す
     fn apply(&mut self, e: Entry) -> Option<Entry> {
         let restored_len = Pieces::total_len(&e.restore);
-        let (doc, removed) = self.doc.splice(e.a, e.a + e.len, e.restore).ok()?;
+        self.doc().check_edit(&[(e.a, e.a + e.len)]).ok()?;
+        let removed = self.edit(|t, ctx| t.splice(ctx, e.a, e.a + e.len, e.restore));
         let back = Entry { a: e.a, len: restored_len, restore: removed, version: self.version, sel: self.cur_sel };
-        self.doc = Arc::new(doc);
         self.version = e.version;
         self.cur_sel = e.sel;
         self.last = None;
@@ -205,6 +245,27 @@ mod tests {
         assert!(e.undo().is_some());
         assert!(!e.is_modified());
         assert!(e.undo().is_none());
+    }
+
+    #[test]
+    fn replace_all_and_undo_once() {
+        let mut e = Editor::new(ready(b"a-b-c\nd-e\n"));
+        let ranges = [(1, 2), (3, 4), (7, 8)];
+        let n = e.replace_all(&ranges, &[b"==".to_vec()], (0, 0)).unwrap();
+        assert_eq!(n, 3);
+        assert_eq!(text(&e), "a==b==c\nd==e\n");
+        assert_eq!(e.doc().line_count(), (3, true));
+        // 改行を含む置換、一致ごとに違う置換
+        e.undo();
+        assert_eq!(text(&e), "a-b-c\nd-e\n");
+        e.replace_all(&ranges, &[b"\n".to_vec(), b"".to_vec(), b"X\nY".to_vec()], (0, 0)).unwrap();
+        assert_eq!(text(&e), "a\nbc\ndX\nYe\n");
+        assert_eq!(e.doc().line_count(), (5, true));
+        assert_eq!(e.doc().lines(3, 1)[0].text, "Ye");
+        e.undo();
+        assert_eq!(text(&e), "a-b-c\nd-e\n");
+        e.redo();
+        assert_eq!(text(&e), "a\nbc\ndX\nYe\n");
     }
 
     #[test]

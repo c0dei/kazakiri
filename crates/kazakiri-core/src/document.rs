@@ -14,7 +14,7 @@ use encoding_rs::{Encoding, UTF_16BE, UTF_16LE};
 
 use crate::encoding::{self, Detected};
 use crate::line_index::{line_start_at_or_after, line_start_at_or_before, next_line_start, LineIndex, Newline, Progress};
-use crate::pieces::{Ctx, Piece, Pieces};
+use crate::pieces::{Ctx, Pieces};
 use crate::source::Source;
 
 /// 編集できなかった理由
@@ -83,6 +83,15 @@ impl Document {
         let mut doc = Self::from_source(source, forced);
         doc.path = Some(path.to_path_buf());
         Ok(doc)
+    }
+
+    /// 行インデックスを作らずに開く（GREP 用。行番号は使えない）
+    pub fn open_scan(path: &Path) -> io::Result<Document> {
+        let source = Arc::new(Source::open(path)?);
+        let detected = encoding::detect(source.bytes());
+        let kind = newline_kind(&detected, source.bytes());
+        let index = Arc::new(LineIndex::none(source.clone(), kind, detected.bom_len as u64));
+        Ok(Document { path: Some(path.to_path_buf()), source, detected, index, forced: None, text: None })
     }
 
     pub fn from_bytes(bytes: Vec<u8>) -> Document {
@@ -503,12 +512,34 @@ impl Document {
         }
     }
 
-    fn editable_pieces(&self) -> Result<Pieces, EditError> {
-        match &self.text {
-            Some(t) => Ok((**t).clone()),
-            None if self.index.is_done() => Ok(Pieces::new(&self.ctx())),
-            None => Err(EditError::NotReady),
+    /// 編集の前の確認：編集できる状態か、範囲が正しいか
+    pub(crate) fn check_edit(&self, ranges: &[(u64, u64)]) -> Result<(), EditError> {
+        if !self.can_edit() {
+            return Err(EditError::NotReady);
         }
+        for w in ranges.windows(2) {
+            if w[0].1 > w[1].0 {
+                return Err(EditError::OutOfRange);
+            }
+        }
+        for &(a, b) in ranges {
+            self.check_range(a, b)?;
+        }
+        Ok(())
+    }
+
+    /// 編集する。持ち主が自分だけなら、ピース列を複製せずにその場で書き換える
+    /// （数百万ピースあるときの「すべて置換」の取り消しなどで、メモリと時間を大きく節約できる）。
+    /// 事前に `check_edit` で確かめておくこと
+    pub(crate) fn edit_owned<R>(this: Arc<Document>, f: impl FnOnce(&mut Pieces, &Ctx) -> R) -> (Document, R) {
+        let mut doc = Arc::try_unwrap(this).unwrap_or_else(|a| (*a).clone());
+        let mut t = match doc.text.take() {
+            Some(arc) => Arc::try_unwrap(arc).unwrap_or_else(|a| (*a).clone()),
+            None => Pieces::new(&doc.ctx()),
+        };
+        let r = f(&mut t, &doc.ctx());
+        doc.text = Some(Arc::new(t));
+        (doc, r)
     }
 
     fn check_range(&self, a: u64, b: u64) -> Result<(), EditError> {
@@ -519,27 +550,9 @@ impl Document {
 
     /// [a, b) を `bytes`（このファイルの文字コードのバイト列）で置き換えた新しい Document
     pub fn replace(&self, a: u64, b: u64, bytes: &[u8]) -> Result<Document, EditError> {
-        self.replace_tracked(a, b, bytes).map(|(d, _)| d)
-    }
-
-    /// `replace` と同じだが、取り除いたピース列も返す（Undo 用）
-    pub(crate) fn replace_tracked(&self, a: u64, b: u64, bytes: &[u8]) -> Result<(Document, Vec<Piece>), EditError> {
-        self.check_range(a, b)?;
-        let mut t = self.editable_pieces()?;
-        let removed = t.replace(&self.ctx(), a, b, bytes);
-        let mut doc = self.clone();
-        doc.text = Some(Arc::new(t));
-        Ok((doc, removed))
-    }
-
-    /// [a, b) をピース列で置き換える（Undo / Redo 用）
-    pub(crate) fn splice(&self, a: u64, b: u64, pieces: Vec<Piece>) -> Result<(Document, Vec<Piece>), EditError> {
-        self.check_range(a, b)?;
-        let mut t = self.editable_pieces()?;
-        let removed = t.splice(&self.ctx(), a, b, pieces);
-        let mut doc = self.clone();
-        doc.text = Some(Arc::new(t));
-        Ok((doc, removed))
+        self.check_edit(&[(a, b)])?;
+        let (doc, _) = Document::edit_owned(Arc::new(self.clone()), |t, ctx| t.replace(ctx, a, b, bytes));
+        Ok(doc)
     }
 
     pub fn insert(&self, pos: u64, bytes: &[u8]) -> Result<Document, EditError> {

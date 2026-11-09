@@ -173,6 +173,19 @@ impl LineIndex {
         LineIndex { shared }
     }
 
+    /// 索引を作らない（GREP のように行番号を自分で数える用途）。行の位置は分からない
+    pub fn none(source: Arc<Source>, kind: Newline, text_start: u64) -> LineIndex {
+        let shared = Arc::new(Shared {
+            source,
+            kind,
+            text_start,
+            state: RwLock::new(State::default()),
+            cancel: AtomicBool::new(true),
+            scanned: AtomicU64::new(0),
+        });
+        LineIndex { shared }
+    }
+
     /// 末尾に追記されたファイル用。`prev` の索引を引き継ぎ、増えた部分だけを走査する。
     /// `prev` の索引作成が終わっていないとき、または小さくなったときは `None`
     pub fn extend(prev: &LineIndex, source: Arc<Source>) -> Option<LineIndex> {

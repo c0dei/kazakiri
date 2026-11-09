@@ -168,6 +168,23 @@ fn open(path: &Path, needle: Option<&str>) {
         let t = Instant::now();
         while ed.undo().is_some() {}
         println!("undo all  : {:?}, modified={}", t.elapsed(), ed.is_modified());
+
+        // すべて置換：[INFO] → [info]（一致が多いとき）
+        let t = Instant::now();
+        let q = Query::new(ed.doc(), "[INFO]", SearchOptions { case_sensitive: true, regex: false }).unwrap();
+        let found = q.find_all(ed.doc(), Some("[info]"), 50_000_000, &SearchControl::default());
+        let t_find = t.elapsed();
+        let n = ed.replace_all(&found.ranges, &found.replacements, (0, 0)).unwrap();
+        drop(found);
+        println!("after replace RSS: {}", peak_rss());
+        println!("replace all: {n} hits, find {t_find:?} + apply {:?} ({} pieces)", t.elapsed() - t_find, ed.doc().piece_count());
+        let t = Instant::now();
+        std::hint::black_box(ed.doc().lines(lines / 2, 60));
+        println!("after replace jump+60l: {:?}", t.elapsed());
+        let t = Instant::now();
+        ed.undo();
+        println!("undo replace: {:?}", t.elapsed());
+        println!("peak RSS (replace): {}", peak_rss());
     }
     println!("peak RSS  : {}", peak_rss());
 }
