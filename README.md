@@ -1,11 +1,23 @@
 # kazakiri（風切）
 
-数GBのログ・CSV・TSV・テキストを一瞬で開ける、Windows 向けの軽量テキストエディタ（開発中）。
+数GBのログ・CSV・TSV・テキストを一瞬で開いて編集できる、Windows 向けの軽量テキストエディタ（開発中）。
 EmEditor の「大きいファイルが速い」体験を、買い切り不要のオープンソースで目指す。
 
 ![Wine 上での動作画面（1GB の Shift_JIS CSV、1,500万行目付近で検索）](docs/screenshot-wine.png)
 
-## いまできること（v0.2：閲覧専用ビューア）
+## いまできること（v0.3）
+
+### 編集
+- 数GBのファイルでもそのまま編集（ピーステーブル：元ファイルはコピーせず、変更部分だけを持つ）
+- カーソル移動（矢印、Ctrl+矢印で単語、Home/End、PgUp/PgDn、Ctrl+Home/End）、Shift で範囲選択
+- 入力、改行（ファイルの改行コードに合わせる）、Backspace / Delete、Tab
+- 切り取り・コピー・貼り付け、元に戻す・やり直し（連続入力はまとめて戻る）
+- 日本語入力（IME の変換位置をカーソルに合わせる。確定文字列はまとめて挿入）
+- ファイルの文字コード（Shift_JIS など）のまま保存。表せない文字（Shift_JIS での絵文字など）は入力時に止める
+- 上書き保存・名前を付けて保存（別スレッドで書き出すので大きなファイルでも止まらない）
+- 新規作成、閉じる・開くときに未保存の変更を確認
+
+### 閲覧
 
 - 数GBのファイルを即座に表示（メモリマップ + バックグラウンド行インデックス）
 - 文字コード自動判定：UTF-8 / UTF-8 BOM / UTF-16LE・BE（BOM 有無）/ Shift_JIS(CP932) / EUC-JP
@@ -72,18 +84,26 @@ cargo run --release -p kazakiri-cli -- open big.log "ERROR"     # 開く・索�
 
 | キー | 動作 |
 |---|---|
-| Ctrl+O | ファイルを開く |
+| Ctrl+N / Ctrl+O | 新規作成 / ファイルを開く |
+| Ctrl+S / Ctrl+Shift+S | 上書き保存 / 名前を付けて保存 |
+| Ctrl+Z / Ctrl+Y | 元に戻す / やり直し（Ctrl+Shift+Z でもやり直し） |
+| Ctrl+X / Ctrl+C / Ctrl+V | 切り取り / コピー / 貼り付け |
+| Ctrl+A | すべて選択 |
+| ← → ↑ ↓ / Ctrl+← → | カーソル移動 / 単語単位（Shift で選択） |
+| Home / End | 行頭（インデントの後ろと交互）/ 行末 |
+| Ctrl+Home / Ctrl+End | ファイルの先頭 / 末尾 |
+| PgUp / PgDn | 1 画面ぶん移動 |
+| Ctrl+↑ / Ctrl+↓ | カーソルを動かさずにスクロール |
 | F5 | 再読み込み（追記だけなら増えた分だけ読み込む） |
 | Ctrl+T | 末尾の追従（tail -f 相当）のオン・オフ |
 | Ctrl+F | 検索語の入力（Enter: 次、Shift+Enter: 前、Ctrl+V: 貼り付け、Esc: 取り消し） |
 | F3 / Shift+F3 | 次を検索 / 前を検索 |
 | Alt+C / Alt+R | 大文字小文字の区別 / 正規表現 の切り替え |
-| Esc | 検索の中止、選択の解除 |
-| Ctrl+C / Ctrl+A | コピー / すべて選択（コピーは 256MB まで） |
+| Esc | 検索・保存の中止、選択の解除 |
 | Ctrl+G | 行番号へ移動 |
-| ↑↓ PgUp PgDn | スクロール |
-| Ctrl+Home / Ctrl+End | 先頭 / 末尾 |
-| ← → Home | 横スクロール |
+
+コピー・切り取りは 256MB まで。編集は行インデックスの作成が終わってから（数GBでも 1 秒前後）。
+編集中は再読み込み・末尾の追従はできない。
 
 正規表現は Rust の [regex](https://docs.rs/regex/) の書き方。`^` `$` は行頭・行末にマッチし、一致は 1 行の中に限る。
 
@@ -97,9 +117,13 @@ crates/
     source.rs      メモリマップでファイルを開く
     encoding.rs    文字コード判定・デコード
     line_index.rs  並列・疎な行インデックス
-    document.rs    行の取り出し
+    document.rs    行の取り出し、編集（新しい Document を返す）、保存
+    pieces.rs      ピーステーブル
+    editor.rs      元に戻す・やり直す、変更の有無
     search.rs      並列検索（文字列・大文字小文字無視・正規表現、前方・後方）
   kazakiri-win/    Windows UI（Win32 + Direct2D/DirectWrite）
+    app.rs         ウィンドウ、描画、検索、選択
+    app/edit.rs    カーソル移動、入力、IME、保存
   kazakiri-cli/    ベンチマーク・テストデータ生成
 docs/PLAN.md     調査結果と開発ロードマップ
 ```

@@ -384,6 +384,100 @@ impl Document {
         out
     }
 
+    // ---- カーソル移動 ----
+
+    /// `bytes` の先頭の文字が何バイトか（文字コードごとの規則で求める）
+    fn char_len(&self, bytes: &[u8]) -> usize {
+        let Some(&b) = bytes.first() else { return 0 };
+        let enc = self.detected.encoding;
+        let n = if enc == encoding_rs::UTF_8 {
+            match b {
+                0xF0..=0xF7 => 4,
+                0xE0..=0xEF => 3,
+                0xC0..=0xDF => 2,
+                _ => 1,
+            }
+        } else if self.detected.is_utf16() {
+            let unit = if enc == UTF_16LE {
+                u16::from_le_bytes([b, *bytes.get(1).unwrap_or(&0)])
+            } else {
+                u16::from_be_bytes([b, *bytes.get(1).unwrap_or(&0)])
+            };
+            if (0xD800..0xDC00).contains(&unit) { 4 } else { 2 }
+        } else if enc == encoding_rs::SHIFT_JIS {
+            if matches!(b, 0x81..=0x9F | 0xE0..=0xFC) { 2 } else { 1 }
+        } else if enc == encoding_rs::EUC_JP {
+            match b {
+                0x8F => 3,
+                0x8E | 0xA1..=0xFE => 2,
+                _ => 1,
+            }
+        } else {
+            1
+        };
+        n.min(bytes.len()).max(1)
+    }
+
+    /// 次の文字の位置。行末なら次の行の先頭（CRLF はひとまとまり）
+    pub fn next_char(&self, pos: u64) -> u64 {
+        let len = self.len();
+        if pos >= len {
+            return len;
+        }
+        let Some(line) = self.line_of_offset(pos) else { return pos };
+        let Some((_, end)) = self.line_range(line) else { return pos };
+        if pos >= end {
+            return self.line_start(line + 1).unwrap_or(len);
+        }
+        let head = self.read(pos, (pos + 4).min(end));
+        pos + self.char_len(&head) as u64
+    }
+
+    /// 前の文字の位置。行頭なら前の行の行末
+    pub fn prev_char(&self, pos: u64) -> u64 {
+        let floor = self.text_start() as u64;
+        if pos <= floor {
+            return floor;
+        }
+        let Some(line) = self.line_of_offset(pos) else { return pos };
+        let Some((start, end)) = self.line_range(line) else { return pos };
+        if pos <= start {
+            return self.line_range(line - 1).map_or(floor, |(_, e)| e);
+        }
+        let pos = pos.min(end);
+        // UTF-8 / UTF-16 は少し前から、それ以外は行頭から数える
+        let from = if self.detected.encoding == encoding_rs::UTF_8 || self.detected.is_utf16() {
+            pos.saturating_sub(8).max(start)
+        } else {
+            start
+        };
+        let from = if self.detected.is_utf16() { from + (from - start) % 2 } else { from };
+        let buf = self.read(from, pos);
+        let mut i = 0usize;
+        let mut last = 0usize;
+        // UTF-8 は途中から始めても、続きのバイト（10xxxxxx）を飛ばせば文字の頭が分かる
+        if self.detected.encoding == encoding_rs::UTF_8 {
+            while i < buf.len() && buf[i] & 0xC0 == 0x80 {
+                i += 1;
+            }
+            last = i;
+        }
+        while i < buf.len() {
+            last = i;
+            i += self.char_len(&buf[i..]);
+        }
+        from + last as u64
+    }
+
+    /// 文字列をこのファイルの文字コードで表せるか
+    pub fn can_encode(&self, s: &str) -> bool {
+        let enc = self.detected.encoding;
+        if enc == encoding_rs::UTF_8 || self.detected.is_utf16() {
+            return true;
+        }
+        !enc.encode(s).2
+    }
+
     // ---- 編集 ----
 
     /// 編集しているか（保存していない変更があるかどうかは `Editor` が管理する）
@@ -621,6 +715,47 @@ mod tests {
         assert!(matches!(doc3.refresh().unwrap(), Refresh::Replaced));
         drop(doc3);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn caret_moves_by_character() {
+        let cases: Vec<(Vec<u8>, Option<&'static Encoding>)> = vec![
+            ("aあ😀b\r\nc".as_bytes().to_vec(), None),
+            (encoding_rs::SHIFT_JIS.encode("aあｱb\r\nc").0.into_owned(), Some(encoding_rs::SHIFT_JIS)),
+            (encoding_rs::EUC_JP.encode("aあｱb\r\nc").0.into_owned(), Some(encoding_rs::EUC_JP)),
+            ("aあ😀b\r\nc".encode_utf16().flat_map(|u| u.to_le_bytes()).collect(), Some(encoding_rs::UTF_16LE)),
+        ];
+        for (bytes, enc) in cases {
+            let doc = Document::from_bytes_with(bytes.clone(), enc);
+            ready(&doc);
+            // 先頭から右へ
+            let mut stops = vec![0];
+            let mut p = 0;
+            while p < doc.len() {
+                p = doc.next_char(p);
+                stops.push(p);
+            }
+            // 文字数：a, あ, 😀/ｱ, b, 改行, c → 6 回で末尾
+            assert_eq!(stops.len(), 7, "{enc:?} {stops:?}");
+            // 左へ戻ると同じ位置を通る
+            let mut back = vec![doc.len()];
+            let mut p = doc.len();
+            while p > 0 {
+                p = doc.prev_char(p);
+                back.push(p);
+            }
+            back.reverse();
+            assert_eq!(back, stops, "{enc:?}");
+        }
+    }
+
+    #[test]
+    fn encodability() {
+        let doc = Document::from_bytes_with(b"abc".to_vec(), Some(encoding_rs::SHIFT_JIS));
+        assert!(doc.can_encode("日本語ｱ"));
+        assert!(!doc.can_encode("😀"));
+        let doc = Document::from_bytes(b"abc".to_vec());
+        assert!(doc.can_encode("😀"));
     }
 
     #[test]

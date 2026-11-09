@@ -10,8 +10,15 @@ pub const ID_OPEN: u32 = 100;
 pub const ID_RELOAD: u32 = 101;
 pub const ID_EXIT: u32 = 102;
 pub const ID_FOLLOW: u32 = 103;
+pub const ID_NEW: u32 = 104;
+pub const ID_SAVE: u32 = 105;
+pub const ID_SAVE_AS: u32 = 106;
 pub const ID_COPY: u32 = 200;
 pub const ID_SELECT_ALL: u32 = 201;
+pub const ID_UNDO: u32 = 202;
+pub const ID_REDO: u32 = 203;
+pub const ID_CUT: u32 = 204;
+pub const ID_PASTE: u32 = 205;
 pub const ID_FIND: u32 = 300;
 pub const ID_FIND_NEXT: u32 = 301;
 pub const ID_FIND_PREV: u32 = 302;
@@ -66,7 +73,11 @@ pub unsafe fn build() -> Result<Menus> {
 
         let file = CreatePopupMenu()?;
         let recent = CreatePopupMenu()?;
+        item(file, ID_NEW, "新規作成(&N)\tCtrl+N")?;
         item(file, ID_OPEN, "開く(&O)...\tCtrl+O")?;
+        item(file, ID_SAVE, "上書き保存(&S)\tCtrl+S")?;
+        item(file, ID_SAVE_AS, "名前を付けて保存(&A)...\tCtrl+Shift+S")?;
+        sep(file)?;
         item(file, ID_RELOAD, "再読み込み(&R)\tF5")?;
         item(file, ID_FOLLOW, "末尾を追従(&T)\tCtrl+T")?;
         sep(file)?;
@@ -76,7 +87,12 @@ pub unsafe fn build() -> Result<Menus> {
         popup(bar, file, "ファイル(&F)")?;
 
         let edit = CreatePopupMenu()?;
+        item(edit, ID_UNDO, "元に戻す(&U)\tCtrl+Z")?;
+        item(edit, ID_REDO, "やり直し(&R)\tCtrl+Y")?;
+        sep(edit)?;
+        item(edit, ID_CUT, "切り取り(&T)\tCtrl+X")?;
         item(edit, ID_COPY, "コピー(&C)\tCtrl+C")?;
+        item(edit, ID_PASTE, "貼り付け(&P)\tCtrl+V")?;
         item(edit, ID_SELECT_ALL, "すべて選択(&A)\tCtrl+A")?;
         popup(bar, edit, "編集(&E)")?;
 
