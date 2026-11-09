@@ -38,6 +38,8 @@ pub(super) enum Pending {
     OpenDialog,
     OpenPath(PathBuf),
     Reopen(Option<&'static Encoding>),
+    /// ファイルを開いて、その中の位置へ（GREP の結果から）。行, 開始, 終了
+    OpenAt(PathBuf, u64, u64, u64),
     New,
     Close,
 }
@@ -55,6 +57,8 @@ impl App {
     }
 
     fn set_caret(&mut self, pos: u64, extend: bool) {
+        // 次の検索はカーソル位置から
+        self.hit = None;
         self.sel = match (extend, self.sel) {
             (true, Some((a, _))) => Some((a, pos)),
             _ => Some((pos, pos)),
@@ -68,7 +72,7 @@ impl App {
     }
 
     /// 編集できる状態か。できなければ理由を表示して false
-    fn check_editable(&mut self) -> bool {
+    pub(super) fn check_editable(&mut self) -> bool {
         let Some(doc) = &self.doc else { return false };
         let msg = if self.saving.is_some() {
             Some("保存中は編集できません".to_string())
@@ -89,10 +93,23 @@ impl App {
     }
 
     /// 編集後の共通処理
-    fn after_edit(&mut self) {
+    /// エディタを操作する。表示用の Document の参照をいったん手放すので、
+    /// 編集はピース列を複製せずにその場で行える
+    pub(super) fn with_editor<R>(&mut self, f: impl FnOnce(&mut Editor) -> R) -> Option<R> {
+        self.doc = None;
+        let r = self.editor.as_mut().map(f);
+        self.doc = self.editor.as_ref().map(|e| e.doc().clone());
+        r
+    }
+
+    pub(super) fn after_edit(&mut self) {
         let Some(ed) = &self.editor else { return };
         self.doc = Some(ed.doc().clone());
         self.hit = None;
+        // ファイル内の検索結果は位置がずれるので閉じる（GREP の結果は残す）
+        if matches!(self.results.as_ref().map(|r| &r.kind), Some(super::results::ResultKind::InDoc { .. })) {
+            self.results = None;
+        }
         self.layout_cache.borrow_mut().clear();
         self.update_title();
         self.update_scrollbars();
@@ -115,7 +132,7 @@ impl App {
     }
 
     /// 改行として挿入する文字列（ファイルの改行コードに合わせる。新規・改行なしは CRLF）
-    fn newline_str(&self) -> &'static str {
+    pub(super) fn newline_str(&self) -> &'static str {
         match self.doc.as_ref().map(|d| (d.newline(), d.newline_name(), d.line_count().0)) {
             Some((kazakiri_core::Newline::Cr, _, _)) => "\r",
             Some((_, "LF", n)) if n > 1 => "\n",
@@ -139,8 +156,8 @@ impl App {
         let sel = self.sel.unwrap_or((0, 0));
         let (a, b) = (sel.0.min(sel.1), sel.0.max(sel.1));
         let kind = if a != b && kind == EditKind::Typing { EditKind::Other } else { kind };
-        let ed = self.editor.as_mut().unwrap();
-        match ed.replace(a, b, s, kind, sel) {
+        drop(doc);
+        match self.with_editor(|ed| ed.replace(a, b, s, kind, sel)).unwrap() {
             Ok((_, end)) => {
                 self.sel = Some((end, end));
                 self.goal_x = None;
@@ -176,8 +193,8 @@ impl App {
             return;
         }
         let kind = if sel.0 != sel.1 { EditKind::Other } else { EditKind::Deleting };
-        let ed = self.editor.as_mut().unwrap();
-        match ed.replace(a, b, "", kind, sel) {
+        drop(doc);
+        match self.with_editor(|ed| ed.replace(a, b, "", kind, sel)).unwrap() {
             Ok(_) => {
                 self.sel = Some((a, a));
                 self.goal_x = None;
@@ -200,11 +217,9 @@ impl App {
         if b - a > COPY_LIMIT {
             return; // コピーできなかった大きさは切り取らない
         }
-        if let Some(ed) = self.editor.as_mut() {
-            if ed.replace(a, b, "", EditKind::Other, sel).is_ok() {
-                self.sel = Some((a, a));
-                self.after_edit();
-            }
+        if let Some(Ok(_)) = self.with_editor(|ed| ed.replace(a, b, "", EditKind::Other, sel)) {
+            self.sel = Some((a, a));
+            self.after_edit();
         }
     }
 
@@ -221,8 +236,7 @@ impl App {
         if self.saving.is_some() {
             return;
         }
-        let Some(ed) = self.editor.as_mut() else { return };
-        let r = if redo { ed.redo() } else { ed.undo() };
+        let r = self.with_editor(|ed| if redo { ed.redo() } else { ed.undo() }).flatten();
         match r {
             Some(sel) => {
                 self.sel = Some(sel);

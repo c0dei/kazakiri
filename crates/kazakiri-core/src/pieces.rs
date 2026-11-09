@@ -61,6 +61,61 @@ fn count_nl(bytes: &[u8], kind: Newline) -> u64 {
     n
 }
 
+/// すべて置換の置換後のバイト列
+#[derive(Clone, Copy)]
+pub(crate) enum Repls<'a> {
+    /// 全件同じ
+    One(&'a [u8]),
+    /// 一致ごと
+    Each(&'a [Vec<u8>]),
+}
+
+/// ピース列の中の読み出し位置
+struct Cursor {
+    i: usize,
+    off: u64,
+}
+
+impl Cursor {
+    fn skip(&mut self, list: &[Piece], mut n: u64) {
+        while n > 0 && self.i < list.len() {
+            let rest = list[self.i].len - self.off;
+            if n < rest {
+                self.off += n;
+                return;
+            }
+            n -= rest;
+            self.i += 1;
+            self.off = 0;
+        }
+    }
+}
+
+/// ピースの一部 [start, start + len) の改行数
+fn sub_nl(ctx: &Ctx, p: &Piece, start: u64, len: u64) -> u64 {
+    if start == p.start && len == p.len {
+        return p.nl;
+    }
+    match &p.src {
+        // 短ければ直接数え、長ければ行インデックスを使う
+        Src::Orig if len > 64 * 1024 => ctx.orig_nl(start, start + len),
+        Src::Orig => count_nl(&ctx.data[start as usize..(start + len) as usize], ctx.kind),
+        Src::Add(chunk) => count_nl(&chunk[start as usize..(start + len) as usize], ctx.kind),
+    }
+}
+
+/// `list` の `cur` から `n` バイトぶんを切り出して `out` に足す
+fn cut(ctx: &Ctx, list: &[Piece], cur: &mut Cursor, mut n: u64, out: &mut Vec<Piece>) {
+    while n > 0 && cur.i < list.len() {
+        let p = &list[cur.i];
+        let take = n.min(p.len - cur.off);
+        let start = p.start + cur.off;
+        out.push(Piece { src: p.src.clone(), start, len: take, nl: sub_nl(ctx, p, start, take) });
+        n -= take;
+        cur.skip(list, take);
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct Pieces {
     pieces: Vec<Piece>,
@@ -95,8 +150,17 @@ impl Pieces {
     }
 
     fn rebuild(&mut self) {
+        // 大きく縮んだら（すべて置換の取り消しなど）確保していた領域を返す
+        if self.pieces.capacity() > 1024 && self.pieces.capacity() > self.pieces.len() * 4 {
+            self.pieces.shrink_to_fit();
+            self.starts = Vec::new();
+            self.nls = Vec::new();
+        }
         self.starts.clear();
         self.nls.clear();
+        // 倍々に伸ばすと一時的に大きくなるので、必要な分だけ確保する
+        self.starts.reserve_exact(self.pieces.len());
+        self.nls.reserve_exact(self.pieces.len());
         let (mut pos, mut nl) = (0, 0);
         for p in &self.pieces {
             self.starts.push(pos);
@@ -180,6 +244,63 @@ impl Pieces {
         let ja = self.split(ctx, a);
         let jb = if b > a { self.split(ctx, b) } else { ja };
         let removed: Vec<Piece> = self.pieces.splice(ja..jb, new).collect();
+        self.rebuild();
+        removed
+    }
+
+    /// 複数の範囲をまとめて置き換える（すべて置換用）。
+    /// `ranges` は重ならず位置の順。置換後のバイト列はひとつの追加文字列にまとめる。
+    /// 取り除いたピース列（`ranges` の最初の開始〜最後の終了の範囲ぶん）を返す
+    pub fn replace_many(&mut self, ctx: &Ctx, ranges: &[(u64, u64)], repls: Repls) -> Vec<Piece> {
+        let Some(&(first, _)) = ranges.first() else { return Vec::new() };
+        let last = ranges.last().unwrap().1.min(self.len);
+        let removed = self.splice(ctx, first, last, Vec::new());
+
+        // 全件共通なら 1 つの追加文字列をすべてのピースで共有する
+        let (chunk, one_nl): (Arc<[u8]>, u64) = match repls {
+            Repls::One(b) => (b.into(), count_nl(b, ctx.kind)),
+            Repls::Each(list) => {
+                let total: usize = list.iter().map(|r| r.len()).sum();
+                let mut all = Vec::with_capacity(total);
+                for r in list {
+                    all.extend_from_slice(r);
+                }
+                (all.into(), 0)
+            }
+        };
+
+        // 新しいピースは本体の配列に直接積む（大きな一時配列を作らない）
+        let at = self.split(ctx, first);
+        let tail = self.pieces.split_off(at);
+        self.pieces.reserve(ranges.len() * 2 + 1 + tail.len());
+        let new = &mut self.pieces;
+
+        // 取り除いたピース列から、一致と一致のあいだを切り出す（前から順に進むだけ）
+        let mut cur = Cursor { i: 0, off: 0 };
+        let mut pos = first; // いまの位置（取り除く前の座標）
+        let mut roff = 0u64; // 追加文字列の中の位置
+        for (k, &(a, b)) in ranges.iter().enumerate() {
+            if a > pos {
+                cut(ctx, &removed, &mut cur, a - pos, new);
+            }
+            cur.skip(&removed, b - a.max(pos));
+            pos = b;
+            match repls {
+                Repls::One(b) if !b.is_empty() => {
+                    new.push(Piece { src: Src::Add(chunk.clone()), start: 0, len: b.len() as u64, nl: one_nl });
+                }
+                Repls::Each(list) => {
+                    let n = list.get(k).map_or(0, |r| r.len() as u64);
+                    if n > 0 {
+                        let nl = count_nl(&chunk[roff as usize..(roff + n) as usize], ctx.kind);
+                        new.push(Piece { src: Src::Add(chunk.clone()), start: roff, len: n, nl });
+                        roff += n;
+                    }
+                }
+                _ => {}
+            }
+        }
+        self.pieces.extend(tail);
         self.rebuild();
         removed
     }

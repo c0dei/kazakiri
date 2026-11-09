@@ -32,7 +32,9 @@ use crate::menu::{self, Menus};
 use crate::{clipboard, recent};
 
 mod edit;
+mod results;
 use edit::{Pending, SaveJob, WM_RUN_PENDING, WM_SAVE_DONE};
+use results::{JobDone, Results, ResultsJob, WM_REPLACE_FOUND, WM_RESULTS_DONE};
 
 const APP_NAME: &str = "kazakiri";
 const FONT_CANDIDATES: [&str; 4] = ["BIZ UDGothic", "BIZ UDゴシック", "MS Gothic", "Consolas"];
@@ -70,6 +72,13 @@ thread_local! {
 enum Prompt {
     Find,
     GotoLine,
+    /// 置換：検索する文字列
+    ReplaceFind,
+    /// 置換：置換後の文字列（入力中は Enter で 1 件ずつ置換）
+    ReplaceWith,
+    GrepQuery,
+    GrepFolder,
+    GrepFiles,
 }
 
 /// 借用中に実行できない処理（モーダルダイアログはメッセージを再入させる）
@@ -135,6 +144,15 @@ struct App {
     saving: Option<SaveJob>,
     /// 保存が終わったら行う操作
     pending: Option<Pending>,
+    /// 検索結果の一覧
+    results: Option<Results>,
+    /// 実行中の全件検索・GREP・すべて置換
+    rjob: Option<ResultsJob>,
+    last_replace: String,
+    grep_folder: String,
+    grep_files: String,
+    /// 索引ができたら移動する位置（行, 開始, 終了）
+    pending_goto: Option<(u64, u64, u64)>,
     top: u64,
     x_off: f32,
     prompt: Option<Prompt>,
@@ -223,6 +241,12 @@ unsafe fn run_inner() -> std::result::Result<(), (&'static str, windows::core::E
             high_surrogate: None,
             saving: None,
             pending: None,
+            results: None,
+            rjob: None,
+            last_replace: String::new(),
+            grep_folder: String::new(),
+            grep_files: results::GREP_DEFAULT_FILES.into(),
+            pending_goto: None,
             top: 0,
             x_off: 0.0,
             prompt: None,
@@ -379,6 +403,13 @@ unsafe fn run_deferred(hwnd: HWND, d: Deferred) {
             Pending::OpenPath(p) => {
                 with_app(|app| app.open(p, None));
             }
+            Pending::OpenAt(p, line, s, e) => {
+                with_app(|app| {
+                    app.open(p, None);
+                    app.pending_goto = Some((line, s, e));
+                    app.apply_pending_goto();
+                });
+            }
             Pending::Reopen(enc) => {
                 with_app(|app| {
                     app.reopen(enc);
@@ -465,6 +496,9 @@ impl App {
                             }
                         }
                     }
+                    if done {
+                        self.apply_pending_goto();
+                    }
                     if self.stick_bottom {
                         self.top = self.max_top();
                         if done {
@@ -484,7 +518,7 @@ impl App {
                     (DONE, None)
                 }
                 WM_TIMER if wparam.0 == TIMER_SEARCH => {
-                    if self.search.is_none() && self.saving.is_none() {
+                    if self.search.is_none() && self.saving.is_none() && self.rjob.is_none() {
                         let _ = KillTimer(Some(self.hwnd), TIMER_SEARCH);
                     }
                     self.invalidate();
@@ -501,6 +535,11 @@ impl App {
                     (DONE, None)
                 }
                 WM_RUN_PENDING => (DONE, self.pending.take().map(Deferred::Perform)),
+                WM_RESULTS_DONE | WM_REPLACE_FOUND => {
+                    let done = Box::from_raw(lparam.0 as *mut JobDone);
+                    self.on_job_done(*done);
+                    (DONE, None)
+                }
                 WM_CLOSE => {
                     if self.saving.is_some() {
                         self.message = "保存が終わるまでお待ちください".into();
@@ -560,7 +599,13 @@ impl App {
                 }
                 WM_MOUSEWHEEL => {
                     let delta = hiword(wparam.0) as i16 as i64;
-                    if GetKeyState(VK_SHIFT.0 as i32) < 0 {
+                    // ホイールの座標は画面座標
+                    let mut pt = POINT { x: loword(lparam.0 as usize) as i16 as i32, y: hiword(lparam.0 as usize) as i16 as i32 };
+                    let _ = ScreenToClient(self.hwnd, &mut pt);
+                    let scale = GetDpiForWindow(self.hwnd) as f32 / 96.0;
+                    if self.in_panel(pt.y as f32 / scale) {
+                        self.panel_scroll(-delta * 3 / 120);
+                    } else if GetKeyState(VK_SHIFT.0 as i32) < 0 {
                         self.hscroll_by(-(delta as f32) / 120.0 * self.char_w * 8.0);
                     } else {
                         self.scroll_by(-delta * 3 / 120);
@@ -574,11 +619,17 @@ impl App {
                 }
                 WM_LBUTTONDOWN => {
                     let (x, y) = self.mouse_pos(lparam);
+                    if self.in_panel(y) {
+                        return (DONE, self.panel_click(y));
+                    }
                     self.on_mouse_down(x, y, GetKeyState(VK_SHIFT.0 as i32) < 0);
                     (DONE, None)
                 }
                 WM_LBUTTONDBLCLK => {
                     let (x, y) = self.mouse_pos(lparam);
+                    if self.in_panel(y) {
+                        return (DONE, self.panel_click(y));
+                    }
                     self.select_word_at(x, y);
                     (DONE, None)
                 }
@@ -595,6 +646,20 @@ impl App {
                 WM_KEYDOWN => (DONE, self.on_key(VIRTUAL_KEY(wparam.0 as u16))),
                 // Alt+C / Alt+R：検索オプションの切り替え。
                 // DefWindowProc にも渡す（渡さないと Alt を離したときにメニューが開いてしまう）
+                // 検索欄で Alt+Enter：すべて検索して一覧に。置換欄で Alt+A：すべて置換
+                WM_SYSKEYDOWN if VIRTUAL_KEY(wparam.0 as u16) == VK_RETURN && self.prompt == Some(Prompt::Find) => {
+                    self.prompt = None;
+                    self.last_find = std::mem::take(&mut self.input);
+                    self.find_all();
+                    (DONE, None)
+                }
+                WM_SYSKEYDOWN if VIRTUAL_KEY(wparam.0 as u16) == VK_A && self.prompt == Some(Prompt::ReplaceWith) => {
+                    self.last_replace = self.input.clone();
+                    self.replace_all();
+                    (None, None)
+                }
+                WM_SYSCHAR if self.prompt == Some(Prompt::ReplaceWith) && matches!(char::from_u32(wparam.0 as u32), Some('a' | 'A')) => (DONE, None),
+                WM_SYSCHAR if wparam.0 == 0x0D => (DONE, None),
                 WM_SYSKEYDOWN if matches!(VIRTUAL_KEY(wparam.0 as u16), VK_C | VK_R) => {
                     let id = if VIRTUAL_KEY(wparam.0 as u16) == VK_C { menu::ID_CASE } else { menu::ID_REGEX };
                     (None, self.command(id))
@@ -787,6 +852,12 @@ impl App {
                 self.invalidate();
             }
             menu::ID_GOTO => self.start_prompt(Prompt::GotoLine),
+            menu::ID_REPLACE => self.start_prompt(Prompt::ReplaceFind),
+            menu::ID_FIND_ALL => self.find_all(),
+            menu::ID_GREP => self.start_prompt(Prompt::GrepQuery),
+            menu::ID_NEXT_RESULT => return self.next_result(true),
+            menu::ID_PREV_RESULT => return self.next_result(false),
+            menu::ID_CLOSE_RESULTS => self.close_results(),
             id if (menu::ID_ENC_BASE..menu::ID_ENC_BASE + menu::ENCODINGS.len() as u32).contains(&id) => {
                 let (_, enc) = menu::ENCODINGS[(id - menu::ID_ENC_BASE) as usize];
                 return self.guarded(Pending::Reopen(enc));
@@ -812,7 +883,9 @@ impl App {
                     self.prompt = None;
                     self.invalidate();
                 }
-                VK_RETURN => self.submit_prompt(shift),
+                VK_RETURN => return self.submit_prompt(shift, ctrl),
+                // 置換中も F3 / Shift+F3 で移動できる
+                VK_F3 if self.prompt == Some(Prompt::ReplaceWith) => self.find(if shift { Direction::Backward } else { Direction::Forward }),
                 VK_BACK => {
                     self.input.pop();
                     self.invalidate();
@@ -832,6 +905,12 @@ impl App {
                 if self.search.is_some() {
                     self.cancel_search();
                     self.message = "検索を中止しました".into();
+                } else if let Some(job) = self.rjob.take() {
+                    job.cancel();
+                    self.message = "中止しました".into();
+                    self.update_scrollbars();
+                } else if self.selection().is_none() && self.results.is_some() {
+                    self.close_results();
                 } else if let Some(job) = &self.saving {
                     job.cancel.store(true, Ordering::Relaxed);
                 } else {
@@ -864,10 +943,13 @@ impl App {
             VK_TAB if !ctrl => self.type_text("\t", EditKind::Typing),
             VK_INSERT if ctrl => self.copy(),
             VK_INSERT if shift => self.paste(),
+            VK_F8 => return self.next_result(!shift),
             VK_F3 if shift => return unsafe { self.command(menu::ID_FIND_PREV) },
             VK_F3 => return unsafe { self.command(menu::ID_FIND_NEXT) },
             VK_F5 => return unsafe { self.command(menu::ID_RELOAD) },
             _ if ctrl && shift && vk == VK_S => return Some(Deferred::SaveAs),
+            _ if ctrl && shift && vk == VK_F => self.start_prompt(Prompt::GrepQuery),
+            _ if ctrl && vk == VK_H => self.start_prompt(Prompt::ReplaceFind),
             _ if ctrl && shift && vk == VK_Z => self.undo(true),
             _ if ctrl && vk == VK_N => return unsafe { self.command(menu::ID_NEW) },
             _ if ctrl && vk == VK_O => return unsafe { self.command(menu::ID_OPEN) },
@@ -914,16 +996,64 @@ impl App {
 
     fn start_prompt(&mut self, p: Prompt) {
         self.prompt = Some(p);
+        // 選択中の短い文字列があれば検索語の初期値にする
+        let selected = || self.selected_text(1024).filter(|s| !s.contains('\n'));
         self.input = match p {
-            // 選択中の短い文字列があれば検索語の初期値にする
-            Prompt::Find => self.selected_text(1024).filter(|s| !s.contains('\n')).unwrap_or_else(|| self.last_find.clone()),
+            Prompt::Find | Prompt::ReplaceFind | Prompt::GrepQuery => selected().unwrap_or_else(|| self.last_find.clone()),
             Prompt::GotoLine => String::new(),
+            Prompt::ReplaceWith => self.last_replace.clone(),
+            Prompt::GrepFolder => self.default_grep_folder(),
+            Prompt::GrepFiles => self.grep_files.clone(),
         };
         self.invalidate();
     }
 
-    fn submit_prompt(&mut self, shift: bool) {
+    /// 索引ができて行の位置が分かれば、保留していた移動をする
+    fn apply_pending_goto(&mut self) {
+        let Some((line, s, e)) = self.pending_goto else { return };
+        if self.doc.as_ref().is_some_and(|d| d.line_range(line).is_some()) {
+            self.pending_goto = None;
+            self.goto_range_or_line(line, s, e);
+        }
+    }
+
+    fn submit_prompt(&mut self, shift: bool, ctrl: bool) -> Option<Deferred> {
         match self.prompt.take() {
+            Some(Prompt::ReplaceFind) => {
+                self.last_find = std::mem::take(&mut self.input);
+                self.start_prompt(Prompt::ReplaceWith);
+                // 最初の一致を探しておく
+                self.hit = None;
+                self.find(Direction::Forward);
+                return None;
+            }
+            Some(Prompt::ReplaceWith) => {
+                // 入力欄は開いたまま：Enter で置換して次、Shift+Enter で置換せずに次、Ctrl+Enter ですべて置換
+                self.prompt = Some(Prompt::ReplaceWith);
+                self.last_replace = self.input.clone();
+                if ctrl {
+                    self.prompt = None;
+                    self.replace_all();
+                } else {
+                    self.replace_next(!shift);
+                }
+                return None;
+            }
+            Some(Prompt::GrepQuery) => {
+                self.last_find = std::mem::take(&mut self.input);
+                self.start_prompt(Prompt::GrepFolder);
+                return None;
+            }
+            Some(Prompt::GrepFolder) => {
+                self.grep_folder = std::mem::take(&mut self.input);
+                self.start_prompt(Prompt::GrepFiles);
+                return None;
+            }
+            Some(Prompt::GrepFiles) => {
+                self.grep_files = std::mem::take(&mut self.input);
+                self.start_grep();
+                return None;
+            }
             Some(Prompt::Find) => {
                 self.last_find = std::mem::take(&mut self.input);
                 self.hit = None;
@@ -949,6 +1079,7 @@ impl App {
             None => {}
         }
         self.invalidate();
+        None
     }
 
     // ---- 検索 ----
@@ -967,13 +1098,16 @@ impl App {
                 return;
             }
         };
-        // 起点：直前の一致 → 選択 → 画面先頭
-        let anchor = self.hit.or(self.sel.map(|(a, b)| (a.min(b), a.max(b))));
-        let view_start = doc.line_range(self.top).map_or(0, |(s, _)| s);
-        let from = match (dir, anchor) {
-            (Direction::Forward, Some((s, e))) => if e > s { e } else { s + 1 },
-            (Direction::Backward, Some((s, _))) => s,
-            (_, None) => view_start,
+        // 起点：直前の一致の次 → 選択の端 → カーソル位置 → 画面先頭
+        let from = match (self.hit, self.selection(), self.sel) {
+            // 空の一致（正規表現の ^ など）は 1 つ進めないと同じ所で止まり続ける
+            (Some((s, e)), _, _) => match dir {
+                Direction::Forward => if e > s { e } else { s + 1 },
+                Direction::Backward => s,
+            },
+            (None, Some((a, b)), _) => if dir == Direction::Forward { b } else { a },
+            (None, None, Some((_, c))) => c,
+            (None, None, None) => doc.line_range(self.top).map_or(0, |(s, _)| s),
         };
         self.start_search(doc, query, dir, from, false, from);
     }
@@ -1116,6 +1250,7 @@ impl App {
         };
         self.dragging = true;
         self.goal_x = None;
+        self.hit = None;
         if let Some(e) = &mut self.editor {
             e.break_group();
         }
@@ -1270,7 +1405,7 @@ impl App {
     }
 
     fn text_height(&self) -> f32 {
-        self.client_size().1 - self.status_h()
+        self.client_size().1 - self.status_h() - self.panel_h()
     }
 
     fn gutter_width(&self) -> f32 {
@@ -1386,7 +1521,7 @@ impl App {
             rt.BeginDraw();
             rt.Clear(Some(&COL_BG));
 
-            let text_h = h - self.status_h();
+            let text_h = self.text_height();
             let digits = group(self.total_lines()).len().max(4);
             let gutter = self.gutter_width();
 
@@ -1431,6 +1566,7 @@ impl App {
                 self.draw_str(&rt, brush, "索引作成中…", gutter + 8.0, 0.0, w)?;
             }
 
+            self.draw_panel(&rt, brush, w, text_h)?;
             self.draw_status(&rt, brush, w, h)?;
             rt.EndDraw(None, None)
         }
@@ -1554,8 +1690,17 @@ impl App {
             if self.opts.regex { "[.*]" } else { "" }
         );
         match self.prompt {
-            Some(Prompt::Find) => format!("検索{flags}: {}|  Enter:次 Shift+Enter:前 Alt+C:大小区別 Alt+R:正規表現 Esc:取消", self.input),
+            Some(Prompt::Find) => format!("検索{flags}: {}|  Enter:次 Shift+Enter:前 Alt+Enter:すべて一覧 Alt+C:大小区別 Alt+R:正規表現 Esc:取消", self.input),
             Some(Prompt::GotoLine) => format!("行番号へ移動: {}|", self.input),
+            Some(Prompt::ReplaceFind) => format!("置換{flags} 検索する文字列: {}|  Enter:次へ Alt+C:大小区別 Alt+R:正規表現 Esc:取消", self.input),
+            Some(Prompt::ReplaceWith) => {
+                let esc = if self.opts.regex { " ($1 や \\n が使えます)" } else { "" };
+                format!("「{}」を置換{flags}: {}|{esc}  Enter:置換して次 Shift+Enter:次へ Ctrl+Enter:すべて置換 Esc:終了", self.last_find, self.input)
+            }
+            Some(Prompt::GrepQuery) => format!("GREP{flags} 検索する文字列: {}|  Enter:次へ Alt+C:大小区別 Alt+R:正規表現 Esc:取消", self.input),
+            Some(Prompt::GrepFolder) => format!("GREP 検索するフォルダ（サブフォルダも含む）: {}|", self.input),
+            Some(Prompt::GrepFiles) => format!("GREP 対象のファイル（; で区切る、*.* ですべて）: {}|  Enter:検索開始", self.input),
+            None if self.rjob.is_some() => self.job_status(self.rjob.as_ref().unwrap()),
             None if self.saving.is_some() => {
                 let job = self.saving.as_ref().unwrap();
                 let pct = job.written.load(Ordering::Relaxed) as f64 * 100.0 / job.total.max(1) as f64;
@@ -1620,7 +1765,10 @@ impl App {
             layout.GetMetrics(&mut m)?;
             let rw = m.widthIncludingTrailingWhitespace.min(w * 0.75);
             rt.DrawTextLayout(Vector2 { X: w - rw - 8.0, Y: top + 3.0 }, &layout, brush, D2D1_DRAW_TEXT_OPTIONS_CLIP);
+            // 右側と重ならないように切り取る（文字の切り取り指定が効かない環境もあるので領域で切る）
+            rt.PushAxisAlignedClip(&rect(0.0, top, (w - rw - 24.0).max(0.0), h), D2D1_ANTIALIAS_MODE_ALIASED);
             self.draw_str(rt, brush, &left, 8.0, top + 3.0, w - rw - 24.0)?;
+            rt.PopAxisAlignedClip();
         }
         Ok(())
     }

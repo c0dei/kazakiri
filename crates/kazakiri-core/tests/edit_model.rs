@@ -151,6 +151,21 @@ fn run(c: Case, seed: u64, steps: usize) {
                 future.push(history.pop().unwrap());
                 model = history.last().unwrap().clone();
             }
+            // すべて置換（モデルは str::replace と同じ結果になるはず）
+            8 => {
+                let from = ["ab", "あい", "c"][rng.below(3)];
+                let to = c.pieces[rng.below(c.pieces.len())];
+                let q = Query::new(ed.doc(), from, SearchOptions { case_sensitive: true, regex: false }).unwrap();
+                let r = q.find_all(ed.doc(), Some(to), usize::MAX, &SearchControl::default());
+                let n = ed.replace_all(&r.ranges, &r.replacements, (0, 0)).unwrap();
+                assert_eq!(n, model.matches(from).count(), "replace count");
+                model = model.replace(from, to);
+                // 一致がなければ履歴は増えない
+                if n > 0 {
+                    history.push(model.clone());
+                    future.clear();
+                }
+            }
             9 if !future.is_empty() => {
                 ed.redo().unwrap();
                 model = future.pop().unwrap();

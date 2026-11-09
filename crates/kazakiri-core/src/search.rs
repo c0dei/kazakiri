@@ -53,6 +53,21 @@ enum Matcher {
 
 pub struct Query {
     matcher: Matcher,
+    /// 正規表現モードか（置換後の文字列で $1 などを展開するか）
+    regex_mode: bool,
+}
+
+/// 全件検索の結果
+#[derive(Debug, Default)]
+pub struct FindAll {
+    /// 一致の [開始, 終了)。位置の順
+    pub ranges: Vec<(u64, u64)>,
+    /// 置換後のバイト列（置換するときだけ）。
+    /// 正規表現の展開があれば一致ごと（`ranges` と同じ数）、なければ全件共通の 1 つだけ
+    pub replacements: Vec<Vec<u8>>,
+    /// 上限に達して打ち切ったか
+    pub truncated: bool,
+    pub cancelled: bool,
 }
 
 /// 検索の進み具合とキャンセル
@@ -89,7 +104,148 @@ impl Query {
             };
             build(&src)?
         };
-        Ok(Query { matcher })
+        Ok(Query { matcher, regex_mode: opts.regex })
+    }
+
+    /// 置換後の文字列を、一致ごとのバイト列にする準備。
+    /// 正規表現モードでは `$1` `${name}` `$$` を展開する。それ以外はそのまま
+    fn template(&self, doc: &Document, replacement: &str) -> Template {
+        if self.regex_mode && replacement.contains('$') {
+            Template::Expand(replacement.to_string())
+        } else {
+            Template::Fixed(doc.encode(replacement))
+        }
+    }
+
+    /// すべての一致を探す（`replacement` を渡すと置換後のバイト列も作る）。
+    /// 一致が `limit` 件を超えたら打ち切る
+    pub fn find_all(&self, doc: &Document, replacement: Option<&str>, limit: usize, ctl: &SearchControl) -> FindAll {
+        let tmpl = replacement.map(|r| self.template(doc, r));
+        let floor = doc.text_start();
+        let len = doc.len() as usize;
+        let ranges = split(doc, floor, len, self.sub_chunk());
+        let total = std::sync::atomic::AtomicUsize::new(0);
+        let threads = threads();
+        let mut out = FindAll::default();
+        if let Some(Template::Fixed(b)) = &tmpl {
+            out.replacements.push(b.clone());
+        }
+        for window in ranges.chunks(threads) {
+            if ctl.cancel.load(Ordering::Relaxed) {
+                out.cancelled = true;
+                break;
+            }
+            let parts = run_parallel(window, |&(a, b)| {
+                if ctl.cancel.load(Ordering::Relaxed) || total.load(Ordering::Relaxed) > limit {
+                    return None;
+                }
+                let r = self.chunk_all(doc, a, b, tmpl.as_ref());
+                total.fetch_add(r.len(), Ordering::Relaxed);
+                ctl.scanned.fetch_add((b - a) as u64, Ordering::Relaxed);
+                Some(r)
+            });
+            for part in parts.into_iter().flatten() {
+                for (s, e, rep) in part {
+                    out.ranges.push((s as u64, e as u64));
+                    if let Some(rep) = rep {
+                        out.replacements.push(rep);
+                    }
+                }
+            }
+            if out.ranges.len() > limit {
+                out.ranges.truncate(limit);
+                if out.replacements.len() > 1 {
+                    out.replacements.truncate(limit);
+                }
+                out.truncated = true;
+                break;
+            }
+        }
+        if ctl.cancel.load(Ordering::Relaxed) {
+            out.cancelled = true;
+        }
+        out
+    }
+
+    /// [s, e) がいまも一致しているなら、その置換後のバイト列（1 件ずつ置換するとき用）
+    pub fn replacement_at(&self, doc: &Document, s: u64, e: u64, replacement: &str) -> Option<Vec<u8>> {
+        let tmpl = self.template(doc, replacement);
+        let ls = doc.line_start_at_or_before(s) as usize;
+        let le = (doc.line_start_at_or_after(e.max(s + 1)) as usize).max(e as usize);
+        let (_, _, r) = self.chunk_all(doc, ls, le, Some(&tmpl)).into_iter().find(|&(ms, me, _)| ms as u64 == s && me as u64 == e)?;
+        match (r, tmpl) {
+            (Some(r), _) => Some(r),
+            (None, Template::Fixed(b)) => Some(b),
+            (None, Template::Expand(_)) => None,
+        }
+    }
+
+    /// [cs, ce) の中のすべての一致（と置換後のバイト列）
+    fn chunk_all(&self, doc: &Document, cs: usize, ce: usize, tmpl: Option<&Template>) -> Vec<(usize, usize, Option<Vec<u8>>)> {
+        let buf = doc.read(cs as u64, ce as u64);
+        let utf16 = doc.encoding().is_utf16();
+        let mut out = Vec::new();
+        // 全件共通の置換は一致ごとに複製しない（呼び出し側が 1 つだけ持つ）
+        let fixed = |_: Option<&Template>| None;
+        match &self.matcher {
+            Matcher::Bytes { fwd, .. } => {
+                let n = fwd.needle().len();
+                let mut pos = 0;
+                while let Some(i) = fwd.find(&buf[pos..]) {
+                    let p = pos + i;
+                    if utf16 && (cs + p) % 2 == 1 {
+                        pos = p + 1;
+                        continue;
+                    }
+                    out.push((cs + p, cs + p + n, fixed(tmpl)));
+                    pos = p + n.max(1);
+                }
+            }
+            Matcher::BytesRegex(re) => match tmpl {
+                Some(Template::Expand(t)) => {
+                    for caps in re.captures_iter(&buf) {
+                        let m = caps.get(0).unwrap();
+                        let mut dst = Vec::new();
+                        caps.expand(t.as_bytes(), &mut dst);
+                        out.push((cs + m.start(), cs + m.end(), Some(dst)));
+                    }
+                }
+                _ => {
+                    for m in re.find_iter(&buf) {
+                        out.push((cs + m.start(), cs + m.end(), fixed(tmpl)));
+                    }
+                }
+            },
+            Matcher::TextRegex(re) => {
+                let text = doc.decode(&buf);
+                // 位置を元のバイト位置に戻す。前の一致からの差分だけエンコードするので全体で O(n)
+                let (mut dec, mut raw) = (0usize, cs);
+                let mut advance = |to: usize| {
+                    raw += doc.encode(&text[dec..to]).len();
+                    dec = to;
+                    raw
+                };
+                let expand = matches!(tmpl, Some(Template::Expand(_)));
+                if expand {
+                    let Some(Template::Expand(t)) = tmpl else { unreachable!() };
+                    for caps in re.captures_iter(&text) {
+                        let m = caps.get(0).unwrap();
+                        let s = advance(m.start());
+                        let e = advance(m.end());
+                        let mut dst = String::new();
+                        caps.expand(t, &mut dst);
+                        out.push((s, e, Some(doc.encode(&dst))));
+                    }
+                } else {
+                    for m in re.find_iter(&text) {
+                        let s = advance(m.start());
+                        let e = advance(m.end());
+                        out.push((s, e, fixed(tmpl)));
+                    }
+                }
+            }
+        }
+        out
     }
 
     fn sub_chunk(&self) -> usize {
@@ -267,6 +423,14 @@ impl Query {
     }
 }
 
+/// 置換後の文字列
+enum Template {
+    /// すべての一致で同じバイト列
+    Fixed(Vec<u8>),
+    /// 正規表現のキャプチャを展開する
+    Expand(String),
+}
+
 /// デコード後の位置を、元ファイルのバイト位置に戻す（再エンコードした長さで求める）
 fn map_back(doc: &Document, cs: usize, text: &str, s: usize, e: usize) -> (usize, usize) {
     let start = cs + doc.encode(&text[..s]).len();
@@ -402,6 +566,44 @@ mod tests {
         let d = doc(v);
         assert_eq!(all(&d, "aa", CS, Direction::Forward).len(), 60);
         assert_eq!(all(&d, "あa", CI, Direction::Backward).len(), 30);
+    }
+
+    #[test]
+    fn find_all_and_replacements() {
+        let text: String = (0..30000).map(|i| format!("id={i} name=user{} ok\n", i % 7)).collect();
+        let d = doc(text.clone().into_bytes());
+        // 文字列
+        let q = Query::new(&d, "user3", CS).unwrap();
+        let r = q.find_all(&d, Some("U3"), usize::MAX, &SearchControl::default());
+        let want: Vec<_> = naive(&text, "user3").into_iter().map(|i| (i as u64, i as u64 + 5)).collect();
+        assert_eq!(r.ranges, want);
+        assert_eq!(r.replacements, [b"U3".to_vec()]);
+        // 正規表現のキャプチャ
+        let q = Query::new(&d, r"id=(\d+) name=(\w+)", RE).unwrap();
+        let r = q.find_all(&d, Some("$2:$1"), usize::MAX, &SearchControl::default());
+        assert_eq!(r.ranges.len(), 30000);
+        assert_eq!(r.replacements[12], b"user5:12");
+        // 上限で打ち切り
+        let r = q.find_all(&d, None, 100, &SearchControl::default());
+        assert!(r.truncated && r.ranges.len() == 100);
+        // 1 件ずつの置換
+        let (s, e) = (r.ranges[3].0, r.ranges[3].1);
+        assert_eq!(q.replacement_at(&d, s, e, "[$1]").unwrap(), b"[3]");
+        assert!(q.replacement_at(&d, s + 1, e, "x").is_none());
+    }
+
+    #[test]
+    fn find_all_sjis_regex_positions() {
+        let text = "名前=太郎 年齢=20\r\n名前=花子 年齢=31\r\n".repeat(200);
+        let (bytes, _, _) = encoding_rs::SHIFT_JIS.encode(&text);
+        let bytes = bytes.into_owned();
+        let d = doc(bytes.clone());
+        let q = Query::new(&d, "名前=(\\S+) 年齢=(\\d+)", RE).unwrap();
+        let r = q.find_all(&d, Some("$2歳の$1"), usize::MAX, &SearchControl::default());
+        assert_eq!(r.ranges.len(), 400);
+        let (s, e) = r.ranges[1];
+        assert_eq!(&bytes[s as usize..e as usize], &*encoding_rs::SHIFT_JIS.encode("名前=花子 年齢=31").0);
+        assert_eq!(r.replacements[1], &*encoding_rs::SHIFT_JIS.encode("31歳の花子").0);
     }
 
     #[test]

@@ -2,6 +2,7 @@
 
 pub mod document;
 pub mod encoding;
+pub mod grep;
 pub mod editor;
 pub mod line_index;
 mod pieces;
@@ -10,5 +11,5 @@ pub mod source;
 
 pub use document::{commit_save, Document, EditError, Line, Refresh};
 pub use editor::{EditKind, Editor};
-pub use search::{Direction, Query, SearchControl, SearchOptions, SearchOutcome};
+pub use search::{Direction, FindAll, Query, SearchControl, SearchOptions, SearchOutcome};
 pub use line_index::{Newline, Progress};
