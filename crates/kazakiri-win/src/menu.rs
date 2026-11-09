@@ -35,6 +35,12 @@ pub const ID_CSV: u32 = 600;
 pub const ID_CSV_HEADER: u32 = 601;
 pub const ID_SORT_ASC: u32 = 602;
 pub const ID_SORT_DESC: u32 = 603;
+pub const ID_WHITESPACE: u32 = 620;
+pub const ID_LOG_COLORS: u32 = 621;
+pub const ID_DARK: u32 = 622;
+pub const ID_ZOOM_IN: u32 = 623;
+pub const ID_ZOOM_OUT: u32 = 624;
+pub const ID_ZOOM_RESET: u32 = 625;
 /// 区切り文字の選択肢（DELIMS の並びと対応）
 pub const ID_DELIM_BASE: u32 = 610;
 pub const DELIMS: [(&str, char); 4] = [("カンマ ( , )", ','), ("タブ", '\t'), ("セミコロン ( ; )", ';'), ("縦棒 ( | )", '|')];
@@ -139,6 +145,14 @@ pub unsafe fn build() -> Result<Menus> {
         sep(view)?;
         item(view, ID_SORT_ASC, "カーソルの列で昇順に並べ替え(&A)")?;
         item(view, ID_SORT_DESC, "カーソルの列で降順に並べ替え(&D)")?;
+        sep(view)?;
+        item(view, ID_WHITESPACE, "空白・タブ・改行を表示(&W)\tCtrl+Shift+W")?;
+        item(view, ID_LOG_COLORS, "ログレベルの色分け(&L)")?;
+        item(view, ID_DARK, "ダークテーマ(&K)")?;
+        sep(view)?;
+        item(view, ID_ZOOM_IN, "拡大(&I)\tCtrl++")?;
+        item(view, ID_ZOOM_OUT, "縮小(&O)\tCtrl+-")?;
+        item(view, ID_ZOOM_RESET, "標準の大きさ(&0)\tCtrl+0")?;
         popup(bar, view, "表示(&V)")?;
 
         let encoding = CreatePopupMenu()?;
@@ -156,9 +170,12 @@ pub unsafe fn build() -> Result<Menus> {
 
 impl Menus {
     /// 表示メニューのチェック状態（`csv` は CSV モードのときの (区切り, 見出しあり)）
-    pub unsafe fn refresh_view(&self, csv: Option<(char, bool)>) {
+    pub unsafe fn refresh_view(&self, csv: Option<(char, bool)>, s: &crate::settings::Settings) {
         unsafe {
             let check = |on: bool| if on { MF_CHECKED.0 } else { MF_UNCHECKED.0 };
+            CheckMenuItem(self.view, ID_WHITESPACE, check(s.whitespace));
+            CheckMenuItem(self.view, ID_LOG_COLORS, check(s.log_colors));
+            CheckMenuItem(self.view, ID_DARK, check(s.dark));
             CheckMenuItem(self.view, ID_CSV, check(csv.is_some()));
             for (i, (_, d)) in DELIMS.iter().enumerate() {
                 let id = ID_DELIM_BASE + i as u32;

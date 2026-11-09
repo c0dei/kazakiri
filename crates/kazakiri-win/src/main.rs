@@ -8,6 +8,8 @@ mod clipboard;
 mod menu;
 #[cfg(windows)]
 mod recent;
+#[cfg_attr(not(windows), allow(dead_code))]
+mod settings;
 
 #[cfg(windows)]
 fn main() {

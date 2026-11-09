@@ -422,7 +422,7 @@ impl App {
             };
             let _ = ImmSetCandidateWindow(himc, &cand);
             // 変換中の文字を本文と同じ大きさにする
-            let mut lf = LOGFONTW { lfHeight: -((FONT_SIZE * scale) as i32), lfCharSet: windows::Win32::Graphics::Gdi::SHIFTJIS_CHARSET, ..Default::default() };
+            let mut lf = LOGFONTW { lfHeight: -((self.settings.font_size * scale) as i32), lfCharSet: windows::Win32::Graphics::Gdi::SHIFTJIS_CHARSET, ..Default::default() };
             let face: Vec<u16> = "BIZ UDゴシック".encode_utf16().collect();
             lf.lfFaceName[..face.len()].copy_from_slice(&face);
             let _ = ImmSetCompositionFontW(himc, &lf);
