@@ -8,12 +8,9 @@ use std::time::{Duration, Instant};
 use encoding_rs::Encoding;
 use kazakiri_core::{commit_save, Document, EditKind, Editor};
 use windows::core::PCWSTR;
-use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::LOGFONTW;
-use windows::Win32::UI::Controls::Dialogs::*;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::Ime::*;
-use windows::Win32::UI::WindowsAndMessaging::*;
 
 use super::*;
 
