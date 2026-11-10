@@ -26,7 +26,7 @@ use windows::Win32::UI::HiDpi::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::Shell::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows_numerics::Vector2;
+use windows_numerics::{Matrix3x2, Vector2};
 
 use crate::menu::{self, Menus};
 use crate::{clipboard, recent};
@@ -36,6 +36,7 @@ mod theme;
 mod view;
 mod edit;
 mod results;
+mod tabs;
 use csv_view::{CsvView, Disp, Effect, SortDone, WM_SORT_DONE};
 use crate::settings::{self, Settings};
 use theme::Theme;
@@ -155,6 +156,13 @@ struct App {
     csv: Option<CsvView>,
     theme: &'static Theme,
     settings: Settings,
+    /// 表示していないタブの状態（`tabs[active]` は空の置き場所）
+    tabs: Vec<tabs::Tab>,
+    active: usize,
+    /// タブバーの横スクロール
+    tab_scroll: f32,
+    /// 終了の確認で、表示中のタブは「保存しない」を選んだ
+    discard: bool,
     top: u64,
     x_off: f32,
     prompt: Option<Prompt>,
@@ -254,6 +262,10 @@ unsafe fn run_inner() -> std::result::Result<(), (&'static str, windows::core::E
             csv: None,
             theme: if settings.dark { &theme::DARK } else { &theme::LIGHT },
             settings,
+            tabs: vec![tabs::Tab::default()],
+            active: 0,
+            tab_scroll: 0.0,
+            discard: false,
             top: 0,
             x_off: 0.0,
             prompt: None,
@@ -272,9 +284,10 @@ unsafe fn run_inner() -> std::result::Result<(), (&'static str, windows::core::E
             stick_bottom: false,
             layout_cache: RefCell::new(HashMap::new()),
         };
-        match std::env::args_os().nth(1) {
-            Some(arg) => app.open(PathBuf::from(arg), None),
-            None => app.new_doc(),
+        // 引数のファイルをそれぞれタブで開く
+        app.new_doc();
+        for arg in std::env::args_os().skip(1) {
+            app.open(PathBuf::from(arg), None);
         }
         app.apply_title_theme();
         APP.with(|a| *a.borrow_mut() = Some(app));
@@ -384,7 +397,10 @@ unsafe fn run_deferred(hwnd: HWND, d: Deferred) {
                 }
                 // 名前を付けずにやめたら、保留していた操作も取りやめる
                 None => {
-                    with_app(|app| app.pending = None);
+                    with_app(|app| {
+                        app.pending = None;
+                        app.clear_discard();
+                    });
                 }
             }
         }
@@ -402,6 +418,9 @@ unsafe fn run_deferred(hwnd: HWND, d: Deferred) {
                 }
             } else if r == IDNO {
                 unsafe { run_deferred(hwnd, Deferred::Perform(action)) };
+            } else {
+                // キャンセル：終了の手続きも取りやめる
+                with_app(|app| app.clear_discard());
             }
         }
         Deferred::Perform(action) => match action {
@@ -427,11 +446,15 @@ unsafe fn run_deferred(hwnd: HWND, d: Deferred) {
                     app.message = format!("{name} で開き直しました");
                 });
             }
-            Pending::New => {
-                with_app(|app| app.new_doc());
+            Pending::CloseTab => {
+                with_app(|app| app.close_active_tab());
             }
-            Pending::Close => unsafe {
-                let _ = DestroyWindow(hwnd);
+            // 未保存のタブが残っていれば、そのタブを表示して確認する。なければ終了
+            Pending::Close => match with_app(|app| app.continue_close()) {
+                Some(Some(next)) => unsafe { run_deferred(hwnd, next) },
+                _ => unsafe {
+                    let _ = DestroyWindow(hwnd);
+                },
             },
         },
     }
@@ -561,6 +584,7 @@ impl App {
                         self.invalidate();
                         return (DONE, None);
                     }
+                    self.clear_discard();
                     (DONE, self.guarded(Pending::Close))
                 }
                 WM_IME_STARTCOMPOSITION => {
@@ -622,7 +646,7 @@ impl App {
                     if GetKeyState(VK_CONTROL.0 as i32) < 0 {
                         // Ctrl+ホイールで文字の大きさ
                         self.zoom(if delta > 0 { 1.0 } else { -1.0 });
-                    } else if self.in_panel(pt.y as f32 / scale) {
+                    } else if self.in_panel(pt.y as f32 / scale - self.tab_h()) {
                         self.panel_scroll(-delta * 3 / 120);
                     } else if GetKeyState(VK_SHIFT.0 as i32) < 0 {
                         self.hscroll_by(-(delta as f32) / 120.0 * self.char_w * 8.0);
@@ -638,14 +662,26 @@ impl App {
                 }
                 WM_LBUTTONDOWN => {
                     let (x, y) = self.mouse_pos(lparam);
+                    if y < 0.0 {
+                        return (DONE, self.tab_click(x, false));
+                    }
                     if self.in_panel(y) {
                         return (DONE, self.panel_click(y));
                     }
                     self.on_mouse_down(x, y, GetKeyState(VK_SHIFT.0 as i32) < 0);
                     (DONE, None)
                 }
+                WM_MBUTTONDOWN => {
+                    let (x, y) = self.mouse_pos(lparam);
+                    // タブを中ボタンでクリックしたら閉じる
+                    (DONE, if y < 0.0 { self.tab_click(x, true) } else { None })
+                }
                 WM_LBUTTONDBLCLK => {
                     let (x, y) = self.mouse_pos(lparam);
+                    if y < 0.0 {
+                        self.tab_double_click(x);
+                        return (DONE, None);
+                    }
                     if self.in_panel(y) {
                         return (DONE, self.panel_click(y));
                     }
@@ -690,11 +726,19 @@ impl App {
                 }
                 WM_DROPFILES => {
                     let drop = HDROP(wparam.0 as _);
+                    // 複数のファイルを落としたら、それぞれタブで開く
                     let mut buf = vec![0u16; 32768];
-                    let n = DragQueryFileW(drop, 0, Some(&mut buf)) as usize;
+                    let count = DragQueryFileW(drop, u32::MAX, None);
+                    let mut paths = Vec::new();
+                    for i in 0..count {
+                        let n = DragQueryFileW(drop, i, Some(&mut buf)) as usize;
+                        if n > 0 {
+                            paths.push(PathBuf::from(String::from_utf16_lossy(&buf[..n])));
+                        }
+                    }
                     DragFinish(drop);
-                    if n > 0 {
-                        return (DONE, self.guarded(Pending::OpenPath(PathBuf::from(String::from_utf16_lossy(&buf[..n])))));
+                    for p in paths {
+                        self.open(p, None);
                     }
                     (DONE, None)
                 }
@@ -710,10 +754,7 @@ impl App {
 
     // ---- ファイル ----
 
-    fn open(&mut self, path: PathBuf, forced: Option<&'static Encoding>) {
-        self.open_keep(path, forced, false);
-    }
-
+    /// 表示中のタブにファイルを読み込む（新しいタブで開くのは `open`）。
     /// `keep_view` なら表示位置と選択を保つ（再読み込み・開き直し）
     fn open_keep(&mut self, path: PathBuf, forced: Option<&'static Encoding>, keep_view: bool) {
         self.cancel_search();
@@ -826,7 +867,10 @@ impl App {
 
     unsafe fn command(&mut self, id: u32) -> Option<Deferred> {
         match id {
-            menu::ID_NEW => return self.guarded(Pending::New),
+            menu::ID_NEW => self.new_tab(),
+            menu::ID_CLOSE_TAB => return self.guarded(Pending::CloseTab),
+            menu::ID_NEXT_TAB => self.cycle_tab(true),
+            menu::ID_PREV_TAB => self.cycle_tab(false),
             menu::ID_OPEN => return self.guarded(Pending::OpenDialog),
             menu::ID_SAVE => return self.save(None),
             menu::ID_SAVE_AS => return Some(Deferred::SaveAs),
@@ -846,7 +890,10 @@ impl App {
                     self.set_follow(!self.follow)
                 }
             }
-            menu::ID_EXIT => return self.guarded(Pending::Close),
+            menu::ID_EXIT => {
+                self.clear_discard();
+                return self.guarded(Pending::Close);
+            }
             menu::ID_UNDO => self.undo(false),
             menu::ID_REDO => self.undo(true),
             menu::ID_CUT => self.cut(),
@@ -910,6 +957,11 @@ impl App {
     unsafe fn on_key(&mut self, vk: VIRTUAL_KEY) -> Option<Deferred> {
         let ctrl = unsafe { GetKeyState(VK_CONTROL.0 as i32) } < 0;
         let shift = unsafe { GetKeyState(VK_SHIFT.0 as i32) } < 0;
+        // Ctrl+Tab / Ctrl+Shift+Tab：タブの切り替え（入力欄が開いていても効く）
+        if ctrl && vk == VK_TAB {
+            self.cycle_tab(!shift);
+            return None;
+        }
         if self.prompt.is_some() {
             match vk {
                 VK_ESCAPE => {
@@ -984,6 +1036,7 @@ impl App {
             _ if ctrl && shift && vk == VK_F => self.start_prompt(Prompt::GrepQuery),
             _ if ctrl && shift && vk == VK_C => self.toggle_csv(),
             _ if ctrl && shift && vk == VK_W => self.toggle_whitespace(),
+            _ if ctrl && vk == VK_W => return self.guarded(Pending::CloseTab),
             _ if ctrl && matches!(vk, VK_OEM_PLUS | VK_ADD) => self.zoom(1.0),
             _ if ctrl && matches!(vk, VK_OEM_MINUS | VK_SUBTRACT) => self.zoom(-1.0),
             _ if ctrl && matches!(vk, VK_0 | VK_NUMPAD0) => self.zoom(0.0),
@@ -1262,7 +1315,8 @@ impl App {
     fn mouse_pos(&self, lparam: LPARAM) -> (f32, f32) {
         let scale = unsafe { GetDpiForWindow(self.hwnd) } as f32 / 96.0;
         let x = loword(lparam.0 as usize) as i16 as f32 / scale;
-        let y = hiword(lparam.0 as usize) as i16 as f32 / scale;
+        // 本文の座標（タブバーの下を 0 とする）。タブバーの上なら負になる
+        let y = hiword(lparam.0 as usize) as i16 as f32 / scale - self.tab_h();
         (x, y)
     }
 
@@ -1432,7 +1486,8 @@ impl App {
         unsafe {
             let _ = GetClientRect(self.hwnd, &mut rc);
             let scale = GetDpiForWindow(self.hwnd) as f32 / 96.0;
-            ((rc.right - rc.left) as f32 / scale, (rc.bottom - rc.top) as f32 / scale)
+            // タブバーを除いた大きさ（本文・結果一覧・ステータスバーの領域）
+            ((rc.right - rc.left) as f32 / scale, ((rc.bottom - rc.top) as f32 / scale - self.tab_h()).max(0.0))
         }
     }
 
@@ -1562,6 +1617,10 @@ impl App {
             rt.BeginDraw();
             rt.Clear(Some(&self.theme.bg));
 
+            // タブバーを描き、それより下は丸ごと下へずらして描く
+            self.draw_tabs(&rt, brush, w)?;
+            rt.SetTransform(&Matrix3x2::translation(0.0, self.tab_h()));
+
             let text_h = self.text_height();
             let digits = group(self.total_lines()).len().max(4);
             let gutter = self.gutter_width();
@@ -1626,6 +1685,7 @@ impl App {
 
             self.draw_panel(&rt, brush, w, text_h)?;
             self.draw_status(&rt, brush, w, h)?;
+            rt.SetTransform(&Matrix3x2::identity());
             rt.EndDraw(None, None)
         }
     }

@@ -13,6 +13,9 @@ pub const ID_FOLLOW: u32 = 103;
 pub const ID_NEW: u32 = 104;
 pub const ID_SAVE: u32 = 105;
 pub const ID_SAVE_AS: u32 = 106;
+pub const ID_CLOSE_TAB: u32 = 107;
+pub const ID_NEXT_TAB: u32 = 108;
+pub const ID_PREV_TAB: u32 = 109;
 pub const ID_COPY: u32 = 200;
 pub const ID_SELECT_ALL: u32 = 201;
 pub const ID_UNDO: u32 = 202;
@@ -94,7 +97,7 @@ pub unsafe fn build() -> Result<Menus> {
 
         let file = CreatePopupMenu()?;
         let recent = CreatePopupMenu()?;
-        item(file, ID_NEW, "新規作成(&N)\tCtrl+N")?;
+        item(file, ID_NEW, "新しいタブ(&N)\tCtrl+N")?;
         item(file, ID_OPEN, "開く(&O)...\tCtrl+O")?;
         item(file, ID_SAVE, "上書き保存(&S)\tCtrl+S")?;
         item(file, ID_SAVE_AS, "名前を付けて保存(&A)...\tCtrl+Shift+S")?;
@@ -104,6 +107,7 @@ pub unsafe fn build() -> Result<Menus> {
         sep(file)?;
         popup(file, recent, "最近使ったファイル(&F)")?;
         sep(file)?;
+        item(file, ID_CLOSE_TAB, "タブを閉じる(&C)\tCtrl+W")?;
         item(file, ID_EXIT, "終了(&X)")?;
         popup(bar, file, "ファイル(&F)")?;
 
@@ -153,6 +157,9 @@ pub unsafe fn build() -> Result<Menus> {
         item(view, ID_ZOOM_IN, "拡大(&I)\tCtrl++")?;
         item(view, ID_ZOOM_OUT, "縮小(&O)\tCtrl+-")?;
         item(view, ID_ZOOM_RESET, "標準の大きさ(&0)\tCtrl+0")?;
+        sep(view)?;
+        item(view, ID_NEXT_TAB, "次のタブ(&N)\tCtrl+Tab")?;
+        item(view, ID_PREV_TAB, "前のタブ(&P)\tCtrl+Shift+Tab")?;
         popup(bar, view, "表示(&V)")?;
 
         let encoding = CreatePopupMenu()?;

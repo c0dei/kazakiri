@@ -40,7 +40,9 @@ pub(super) enum Pending {
     Reopen(Option<&'static Encoding>),
     /// ファイルを開いて、その中の位置へ（GREP の結果から）。行, 開始, 終了
     OpenAt(PathBuf, u64, u64, u64),
-    New,
+    /// 表示中のタブを閉じる
+    CloseTab,
+    /// アプリを終了する（未保存のタブを順に確認する）
     Close,
 }
 
@@ -405,7 +407,7 @@ impl App {
         }
         let scale = unsafe { GetDpiForWindow(self.hwnd) } as f32 / 96.0;
         let x = (self.text_left() + self.x_of_offset(&doc, c)) * scale;
-        let y = ((line - self.top) as f32 * self.line_h) * scale;
+        let y = (self.tab_h() + (line - self.top) as f32 * self.line_h) * scale;
         let pt = POINT { x: x as i32, y: y as i32 };
         unsafe {
             let himc = ImmGetContext(self.hwnd);
@@ -562,7 +564,9 @@ impl App {
 
     /// 未保存の変更があれば確認してから行う
     pub(super) fn guarded(&mut self, action: Pending) -> Option<Deferred> {
-        if self.is_modified() {
+        // 表示中の内容を捨てる操作だけ確認する（開く・新規は別のタブになるので確認しない）
+        let discards = matches!(action, Pending::Reopen(_) | Pending::CloseTab | Pending::Close);
+        if discards && self.is_modified() {
             Some(Deferred::Confirm(action))
         } else {
             Some(Deferred::Perform(action))
