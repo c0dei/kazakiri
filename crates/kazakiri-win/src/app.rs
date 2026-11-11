@@ -99,6 +99,8 @@ enum Deferred {
     Join,
     /// 外部ソートの保存先を選ぶ（降順か）
     ExternalSort(bool),
+    /// 結果の一覧の保存先を選ぶ
+    SaveResults,
 }
 
 impl Gfx {
@@ -347,7 +349,7 @@ unsafe fn run_inner() -> std::result::Result<(), (&'static str, windows::core::E
             comp: None,
             want_dialog: None,
             want_sort: None,
-            opts: SearchOptions { case_sensitive: false, regex: false },
+            opts: SearchOptions { case_sensitive: false, regex: false, whole_word: false },
             search: None,
             next_job: 1,
             hit: None,
@@ -513,6 +515,12 @@ unsafe fn run_deferred(hwnd: HWND, d: Deferred) {
             }
         }
         Deferred::ShowFind(tab) => unsafe { find_dialog::show(hwnd, tab) },
+        Deferred::SaveResults => {
+            let suggested = with_app(|app| app.doc.as_ref().and_then(|d| d.path().map(|p| p.with_extension("results.txt")))).flatten();
+            if let Some(out) = unsafe { edit::save_dialog(hwnd, suggested.or_else(|| Some(PathBuf::from("results.txt")))) } {
+                with_app(|app| app.save_results(out));
+            }
+        }
         Deferred::ExternalSort(desc) => {
             let current = with_app(|app| app.doc.as_ref().and_then(|d| d.path().map(|p| p.to_path_buf()))).flatten();
             let suggested = current.map(|p| {
@@ -1205,6 +1213,14 @@ impl App {
             menu::ID_FIND_ALL => self.find_all(),
             menu::ID_GREP_REPLACE => self.start_grep_replace(),
             menu::ID_RESULTS_TAB => self.results_to_tab(),
+            menu::ID_RESULTS_SAVE => {
+                if self.results.is_none() {
+                    self.message = "結果の一覧がありません".into();
+                    self.invalidate();
+                } else {
+                    return Some(Deferred::SaveResults);
+                }
+            }
             menu::ID_GREP_BACKUP => {
                 self.settings.grep_backup = !self.settings.grep_backup;
                 self.settings.save();

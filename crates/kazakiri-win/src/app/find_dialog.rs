@@ -40,6 +40,7 @@ const ID_REGEX: i32 = 111;
 const ID_SUBDIR: i32 = 112;
 const ID_BACKUP: i32 = 113;
 const ID_SELONLY: i32 = 114;
+const ID_WORD: i32 = 115;
 const ID_NEXT: i32 = 120;
 const ID_PREV: i32 = 121;
 const ID_ALL: i32 = 122;
@@ -89,6 +90,7 @@ struct Form {
     subdir: bool,
     backup: bool,
     selonly: bool,
+    word: bool,
 }
 
 impl Ctrls {
@@ -132,6 +134,7 @@ impl Ctrls {
             subdir: self.checked(ID_SUBDIR),
             backup: self.checked(ID_BACKUP),
             selonly: self.checked(ID_SELONLY),
+            word: self.checked(ID_WORD),
         }
     }
 
@@ -191,9 +194,18 @@ impl Ctrls {
         self.place(ID_CASE, 20, cy, 150, 22, true);
         self.place(ID_REGEX, 176, cy, 150, 22, true);
         cy += 26;
-        self.place(ID_SELONLY, 20, cy, 306, 22, replace);
+        self.place(ID_SELONLY, 20, cy, 150, 22, replace);
         self.place(ID_SUBDIR, 20, cy, 150, 22, grep);
         self.place(ID_BACKUP, 176, cy, 160, 22, grep);
+        // 単語単位：検索タブでは 2 行目の左、置換タブでは 2 行目の右、GREP タブでは 3 行目
+        match tab {
+            TAB_FIND => self.place(ID_WORD, 20, cy, 150, 22, true),
+            TAB_REPLACE => self.place(ID_WORD, 176, cy, 150, 22, true),
+            _ => {
+                cy += 26;
+                self.place(ID_WORD, 20, cy, 150, 22, true);
+            }
+        }
         let content_bottom = cy + 30;
         let btn_bottom = 44 + 32 * buttons.len() as i32 + 8;
         let height = content_bottom.max(btn_bottom) + 8;
@@ -304,6 +316,7 @@ pub(super) unsafe fn show(owner: HWND, tab: usize) {
                 ct.set_checked(ID_REGEX, init.regex);
                 ct.set_checked(ID_SUBDIR, true);
                 ct.set_checked(ID_BACKUP, init.backup);
+                ct.set_checked(ID_WORD, init.word);
                 ct.set_checked(ID_SELONLY, init.scope);
                 let _ = EnableWindow(ct.ctl(ID_SELONLY), init.scope);
                 ct.layout(tab);
@@ -389,6 +402,7 @@ pub(super) struct DialogInit {
     case: bool,
     regex: bool,
     backup: bool,
+    word: bool,
     /// 複数行を選んでいるか（「選択範囲内のみ」を使えるか）
     scope: bool,
     dark: bool,
@@ -406,6 +420,7 @@ impl Default for DialogInit {
             case: false,
             regex: false,
             backup: true,
+            word: false,
             scope: false,
             dark: false,
             find_history: Vec::new(),
@@ -493,6 +508,7 @@ unsafe fn create(owner: HWND) {
             (ID_SUBDIR, "サブフォルダも検索(&U)"),
             (ID_BACKUP, "置換前にバックアップ(.bak)"),
             (ID_SELONLY, "選択範囲の中だけ(&S)"),
+            (ID_WORD, "単語単位(&W)"),
         ] {
             all.push((id, make_child(dlg, w!("BUTTON"), text, check, 0, id, font)));
         }
@@ -587,7 +603,7 @@ unsafe extern "system" fn dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                     switch_tab((id - ID_TAB0) as usize);
                     return LRESULT(0);
                 }
-                let is_check = matches!(id, ID_CASE | ID_REGEX | ID_SUBDIR | ID_BACKUP | ID_SELONLY);
+                let is_check = matches!(id, ID_CASE | ID_REGEX | ID_SUBDIR | ID_BACKUP | ID_SELONLY | ID_WORD);
                 if (code == BN_CLICKED || id == IDOK.0 || id == IDCANCEL.0) && !is_check {
                     on_command(hwnd, id);
                 }
@@ -641,6 +657,7 @@ impl App {
             case: self.opts.case_sensitive,
             regex: self.opts.regex,
             backup: self.settings.grep_backup,
+            word: self.opts.whole_word,
             scope: self.dlg_scope.is_some(),
             dark: self.settings.dark,
             find_history: self.history.list(crate::history::Kind::Find).to_vec(),
@@ -652,7 +669,7 @@ impl App {
     fn dialog_action(&mut self, id: i32, f: &Form) -> Option<Deferred> {
         self.last_find = f.find.clone();
         self.last_replace = f.repl.clone();
-        self.opts = SearchOptions { case_sensitive: f.case, regex: f.regex };
+        self.opts = SearchOptions { case_sensitive: f.case, regex: f.regex, whole_word: f.word };
         self.history.push(crate::history::Kind::Find, &f.find);
         if f.tab != TAB_FIND {
             self.history.push(crate::history::Kind::Replace, &f.repl);

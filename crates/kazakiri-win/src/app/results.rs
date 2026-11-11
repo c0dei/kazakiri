@@ -190,15 +190,13 @@ impl App {
     }
 
     /// 結果の一覧を、新しいタブ（無題）に文字列として出す。保存や加工がしやすい
-    pub(super) fn results_to_tab(&mut self) {
-        let Some(r) = &self.results else {
-            self.message = "結果の一覧がありません".into();
-            return self.invalidate();
-        };
+    /// 結果の一覧を文字列にする（全件検索は「行番号: 本文」、GREP は「パス(行): 本文」）
+    fn results_text(&self) -> Option<String> {
+        let r = self.results.as_ref()?;
         let mut out = String::new();
         match &r.kind {
             ResultKind::InDoc { ranges } => {
-                let Some(doc) = self.doc.clone() else { return };
+                let doc = self.doc.clone()?;
                 for &(s, _) in ranges {
                     if let Some(l) = doc.line_of_offset(s) {
                         let text = doc.lines(l, 1).into_iter().next().map(|x| x.text).unwrap_or_default();
@@ -214,6 +212,27 @@ impl App {
                 }
             }
         }
+        Some(out)
+    }
+
+    /// 結果の一覧を、ファイルに保存する（保存先は、呼び出し側のダイアログで選ぶ）
+    pub(super) fn save_results(&mut self, path: PathBuf) {
+        let Some(text) = self.results_text() else { return };
+        let count = text.lines().count();
+        // UTF-8、改行は CRLF（Windows のメモ帳などで開きやすいように）
+        let body = text.replace('\n', "\r\n");
+        self.message = match std::fs::write(&path, body) {
+            Ok(()) => format!("結果 {} 件を保存しました → {}", group(count as u64), path.display()),
+            Err(e) => format!("結果を保存できませんでした: {e}"),
+        };
+        self.invalidate();
+    }
+
+    pub(super) fn results_to_tab(&mut self) {
+        let Some(out) = self.results_text() else {
+            self.message = "結果の一覧がありません".into();
+            return self.invalidate();
+        };
         let count = out.lines().count();
         self.new_tab();
         let nl = self.newline_str();
