@@ -10,6 +10,7 @@ pub mod line_index;
 mod pieces;
 pub mod search;
 pub mod source;
+pub mod split;
 
 pub use convert::Convert;
 pub use document::{commit_save, Document, EditError, Line, Refresh};
