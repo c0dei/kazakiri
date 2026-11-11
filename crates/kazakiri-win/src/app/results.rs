@@ -607,7 +607,7 @@ impl App {
         let opts = GrepOptions {
             search: self.opts,
             include: grep::parse_include(&self.grep_files),
-            recursive: true,
+            recursive: self.grep_recursive,
             max_hits: GREP_LIMIT,
         };
         self.cancel_jobs();

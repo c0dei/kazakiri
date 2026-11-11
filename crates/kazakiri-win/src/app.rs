@@ -40,6 +40,7 @@ mod tabs;
 mod rect;
 mod dark;
 mod menubar;
+mod find_dialog;
 mod wrap;
 mod multi;
 use csv_view::{CsvView, Disp, Effect, SortDone, WM_SORT_DONE};
@@ -77,9 +78,6 @@ enum Prompt {
     ReplaceFind,
     /// 置換：置換後の文字列（入力中は Enter で 1 件ずつ置換）
     ReplaceWith,
-    GrepQuery,
-    GrepFolder,
-    GrepFiles,
     /// CSV の列フィルタ（「3 = ERROR」の形）
     ColumnFilter,
     /// GREP の結果の置換：置換後の文字列
@@ -98,6 +96,8 @@ enum Deferred {
     ConfirmGrepReplace(String),
     /// 自前のメニューバーの項目のポップアップを出す
     ShowMenu(usize),
+    /// 検索・置換・GREP のダイアログを開く（タブの番号）
+    ShowFind(usize),
 }
 
 struct Gfx {
@@ -195,6 +195,10 @@ struct App {
     input_fresh: bool,
     /// 置換の対象を絞る範囲（複数行を選んで Ctrl+H したとき）
     replace_scope: Option<(u64, u64)>,
+    /// ダイアログを開いたときの、複数行の選択範囲
+    dlg_scope: Option<(u64, u64)>,
+    /// GREP でサブフォルダも探す
+    grep_recursive: bool,
     opts: SearchOptions,
     search: Option<SearchJob>,
     next_job: u64,
@@ -321,6 +325,8 @@ unsafe fn run_inner() -> std::result::Result<(), (&'static str, windows::core::E
             hist_draft: String::new(),
             input_fresh: false,
             replace_scope: None,
+            dlg_scope: None,
+            grep_recursive: true,
             opts: SearchOptions { case_sensitive: false, regex: false },
             search: None,
             next_job: 1,
@@ -361,6 +367,14 @@ unsafe fn run_inner() -> std::result::Result<(), (&'static str, windows::core::E
 
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
+            // 検索ダイアログ：Tab での移動・Enter・Esc を任せる
+            let dlg = find_dialog::FIND_DLG.load(Ordering::Relaxed);
+            if dlg != 0 && find_dialog::accelerator(hwnd, &msg) {
+                continue;
+            }
+            if dlg != 0 && IsDialogMessageW(HWND(dlg as *mut _), &msg).as_bool() {
+                continue;
+            }
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
@@ -470,6 +484,7 @@ unsafe fn run_deferred(hwnd: HWND, d: Deferred) {
                 }
             }
         }
+        Deferred::ShowFind(tab) => unsafe { find_dialog::show(hwnd, tab) },
         Deferred::ShowMenu(i) => {
             if let Some(Some((menu, x, y))) = with_app(|app| app.bar_popup(i)) {
                 unsafe {
@@ -1061,7 +1076,7 @@ impl App {
                     self.invalidate();
                 }
             }
-            menu::ID_FIND => self.start_prompt(Prompt::Find),
+            menu::ID_FIND => return Some(Deferred::ShowFind(0)),
             menu::ID_FIND_NEXT => self.find(Direction::Forward),
             menu::ID_FIND_PREV => self.find(Direction::Backward),
             menu::ID_CASE => {
@@ -1098,7 +1113,7 @@ impl App {
             id if (menu::ID_DELIM_BASE..menu::ID_DELIM_BASE + menu::DELIMS.len() as u32).contains(&id) => {
                 self.set_delim(menu::DELIMS[(id - menu::ID_DELIM_BASE) as usize].1)
             }
-            menu::ID_REPLACE => self.start_prompt(Prompt::ReplaceFind),
+            menu::ID_REPLACE => return Some(Deferred::ShowFind(1)),
             menu::ID_FIND_ALL => self.find_all(),
             menu::ID_GREP_REPLACE => self.start_grep_replace(),
             menu::ID_GREP_BACKUP => {
@@ -1107,7 +1122,7 @@ impl App {
                 self.message = format!("GREP 置換の前にバックアップ (.bak) を作る: {}", on_off(self.settings.grep_backup));
                 self.invalidate();
             }
-            menu::ID_GREP => self.start_prompt(Prompt::GrepQuery),
+            menu::ID_GREP => return Some(Deferred::ShowFind(2)),
             menu::ID_NEXT_RESULT => return self.next_result(true),
             menu::ID_PREV_RESULT => return self.next_result(false),
             menu::ID_CLOSE_RESULTS => self.close_results(),
@@ -1261,7 +1276,7 @@ impl App {
     fn history_kind(&self) -> Option<crate::history::Kind> {
         use crate::history::Kind;
         match self.prompt {
-            Some(Prompt::Find | Prompt::ReplaceFind | Prompt::GrepQuery) => Some(Kind::Find),
+            Some(Prompt::Find | Prompt::ReplaceFind) => Some(Kind::Find),
             Some(Prompt::ReplaceWith | Prompt::GrepReplaceWith) => Some(Kind::Replace),
             _ => None,
         }
@@ -1306,17 +1321,15 @@ impl App {
         // 選択中の短い文字列があれば検索語の初期値にする
         let selected = || self.selected_text(1024).filter(|s| !s.contains('\n'));
         self.input = match p {
-            Prompt::Find | Prompt::ReplaceFind | Prompt::GrepQuery => selected().unwrap_or_else(|| self.last_find.clone()),
+            Prompt::Find | Prompt::ReplaceFind => selected().unwrap_or_else(|| self.last_find.clone()),
             Prompt::GotoLine => String::new(),
             Prompt::ColumnFilter => self.last_filter.clone(),
             Prompt::GrepReplaceWith => self.last_replace.clone(),
             Prompt::ReplaceWith => self.last_replace.clone(),
-            Prompt::GrepFolder => self.default_grep_folder(),
-            Prompt::GrepFiles => self.grep_files.clone(),
         };
         // 検索語などは、最初に打った文字が前回の語を置き換える（フォルダ名などは、そのまま続きを編集）
         self.input_fresh = !self.input.is_empty()
-            && matches!(p, Prompt::Find | Prompt::ReplaceFind | Prompt::GrepQuery | Prompt::ReplaceWith | Prompt::GrepReplaceWith | Prompt::ColumnFilter);
+            && matches!(p, Prompt::Find | Prompt::ReplaceFind | Prompt::ReplaceWith | Prompt::GrepReplaceWith | Prompt::ColumnFilter);
         self.invalidate();
     }
 
@@ -1361,21 +1374,6 @@ impl App {
                 } else {
                     self.replace_next(!shift);
                 }
-                return None;
-            }
-            Some(Prompt::GrepQuery) => {
-                self.last_find = std::mem::take(&mut self.input);
-                self.start_prompt(Prompt::GrepFolder);
-                return None;
-            }
-            Some(Prompt::GrepFolder) => {
-                self.grep_folder = std::mem::take(&mut self.input);
-                self.start_prompt(Prompt::GrepFiles);
-                return None;
-            }
-            Some(Prompt::GrepFiles) => {
-                self.grep_files = std::mem::take(&mut self.input);
-                self.start_grep();
                 return None;
             }
             Some(Prompt::ColumnFilter) => {
@@ -2217,9 +2215,6 @@ impl App {
                     format!("「{}」を置換{flags}: {}|{esc}  Enter:置換して次 Shift+Enter:次へ Ctrl+Enter:すべて置換 Esc:終了", self.last_find, self.input)
                 }
             }
-            Some(Prompt::GrepQuery) => format!("GREP{flags} 検索する文字列: {}|  Enter:次へ Alt+C:大小区別 Alt+R:正規表現 Esc:取消", self.input),
-            Some(Prompt::GrepFolder) => format!("GREP 検索するフォルダ（サブフォルダも含む）: {}|", self.input),
-            Some(Prompt::GrepFiles) => format!("GREP 対象のファイル（; で区切る、*.* ですべて）: {}|  Enter:検索開始", self.input),
             None if self.rjob.is_some() => self.job_status(self.rjob.as_ref().unwrap()),
             None if self.saving.is_some() => {
                 let job = self.saving.as_ref().unwrap();
