@@ -449,6 +449,7 @@ impl App {
     // ---- 描画 ----
 
     /// 行の文字列の中の、UTF-16 の範囲 [a, b) に背景を付ける（一致の強調）
+    #[allow(clippy::too_many_arguments)]
     unsafe fn highlight_units(&self, rt: &ID2D1RenderTarget, brush: &ID2D1SolidColorBrush, text: &str, a: usize, b: usize, x0: f32, y: f32, right: f32) -> Result<()> {
         let units: Vec<u16> = text.encode_utf16().collect();
         let (a, b) = (a.min(units.len()), b.min(units.len()));
