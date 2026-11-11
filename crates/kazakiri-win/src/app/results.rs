@@ -155,10 +155,10 @@ impl App {
                 return self.invalidate();
             }
         };
-        self.start_find_all(doc, query, None);
+        self.start_find_all(doc, query, None, None);
     }
 
-    fn start_find_all(&mut self, doc: Arc<Document>, query: Query, replacement: Option<String>) {
+    fn start_find_all(&mut self, doc: Arc<Document>, query: Query, replacement: Option<String>, within: Option<(u64, u64)>) {
         self.cancel_jobs();
         let id = self.next_job;
         self.next_job += 1;
@@ -170,7 +170,7 @@ impl App {
         std::thread::spawn(move || {
             let t = Instant::now();
             let limit = if replace { REPLACE_ALL_LIMIT } else { FIND_ALL_LIMIT };
-            let found = query.find_all(&doc, replacement.as_deref(), limit, &ctl);
+            let found = query.find_all_in(&doc, replacement.as_deref(), limit, &ctl, within);
             drop(doc);
             if replace {
                 post(hwnd, WM_REPLACE_FOUND, JobDone::Replace { id, found, elapsed: t.elapsed() });
@@ -562,7 +562,8 @@ impl App {
                 return self.invalidate();
             }
         };
-        self.start_find_all(doc, query, Some(repl));
+        let scope = self.replace_scope.take();
+        self.start_find_all(doc, query, Some(repl), scope);
     }
 
     fn apply_replace_all(&mut self, found: FindAll, elapsed: Duration) {

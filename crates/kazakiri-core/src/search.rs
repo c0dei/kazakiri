@@ -120,9 +120,17 @@ impl Query {
     /// すべての一致を探す（`replacement` を渡すと置換後のバイト列も作る）。
     /// 一致が `limit` 件を超えたら打ち切る
     pub fn find_all(&self, doc: &Document, replacement: Option<&str>, limit: usize, ctl: &SearchControl) -> FindAll {
+        self.find_all_in(doc, replacement, limit, ctl, None)
+    }
+
+    /// `find_all` を、バイト範囲 `within`（なければ全体）の中だけに限る。
+    /// 範囲をまたぐ一致は含めない。範囲の端は、行頭・行末とは限らない
+    pub fn find_all_in(&self, doc: &Document, replacement: Option<&str>, limit: usize, ctl: &SearchControl, within: Option<(u64, u64)>) -> FindAll {
         let tmpl = replacement.map(|r| self.template(doc, r));
-        let floor = doc.text_start();
-        let len = doc.len() as usize;
+        let (floor, len) = match within {
+            Some((a, b)) => ((a as usize).max(doc.text_start()), (b as usize).min(doc.len() as usize)),
+            None => (doc.text_start(), doc.len() as usize),
+        };
         let ranges = split(doc, floor, len, self.sub_chunk());
         let total = std::sync::atomic::AtomicUsize::new(0);
         let threads = threads();
@@ -590,6 +598,32 @@ mod tests {
         let (s, e) = (r.ranges[3].0, r.ranges[3].1);
         assert_eq!(q.replacement_at(&d, s, e, "[$1]").unwrap(), b"[3]");
         assert!(q.replacement_at(&d, s + 1, e, "x").is_none());
+    }
+
+    #[test]
+    fn find_all_within_a_range() {
+        let text = "foo 1\nfoo 2\nfoo 3\nfoo 4\nfoo 5\n";
+        let d = doc(text.as_bytes().to_vec());
+        let q = Query::new(&d, "foo", CS).unwrap();
+        // 2 行目の頭から 4 行目の頭まで（= 2・3 行目）
+        let r = q.find_all_in(&d, Some("BAR"), usize::MAX, &SearchControl::default(), Some((6, 18)));
+        assert_eq!(r.ranges, vec![(6, 9), (12, 15)]);
+        // 範囲の途中で切れる一致は含めない
+        let r = q.find_all_in(&d, None, usize::MAX, &SearchControl::default(), Some((7, 14)));
+        assert!(r.ranges.is_empty(), "{:?}", r.ranges);
+        // 範囲が全体なら find_all と同じ
+        let all = q.find_all(&d, None, usize::MAX, &SearchControl::default());
+        let same = q.find_all_in(&d, None, usize::MAX, &SearchControl::default(), Some((0, d.len())));
+        assert_eq!(all.ranges, same.ranges);
+        // 正規表現（文字コードを戻す経路）でも位置が正しい
+        let (sj, _, _) = encoding_rs::SHIFT_JIS.encode("あ foo\nい foo\nう foo\n");
+        let d = doc(sj.into_owned());
+        let q = Query::new(&d, "f(o+)", RE).unwrap();
+        let (s, e) = (d.line_range(1).unwrap().0, d.line_range(2).unwrap().0);
+        let r = q.find_all_in(&d, Some("[$1]"), usize::MAX, &SearchControl::default(), Some((s, e)));
+        assert_eq!(r.ranges.len(), 1);
+        assert_eq!(r.replacements[0], b"[oo]");
+        assert!(r.ranges[0].0 >= s && r.ranges[0].1 <= e);
     }
 
     #[test]

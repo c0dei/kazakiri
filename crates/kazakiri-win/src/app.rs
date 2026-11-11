@@ -182,6 +182,8 @@ struct App {
     input: String,
     last_find: String,
     last_filter: String,
+    /// 置換の対象を絞る範囲（複数行を選んで Ctrl+H したとき）
+    replace_scope: Option<(u64, u64)>,
     opts: SearchOptions,
     search: Option<SearchJob>,
     next_job: u64,
@@ -297,6 +299,7 @@ unsafe fn run_inner() -> std::result::Result<(), (&'static str, windows::core::E
             input: String::new(),
             last_find: String::new(),
             last_filter: String::new(),
+            replace_scope: None,
             opts: SearchOptions { case_sensitive: false, regex: false },
             search: None,
             next_job: 1,
@@ -1200,6 +1203,14 @@ impl App {
 
     fn start_prompt(&mut self, p: Prompt) {
         self.prompt = Some(p);
+        // 複数行を選んで置換を始めたら、その範囲の中だけを置換する（1 行の選択は検索語になる）
+        if p == Prompt::ReplaceFind {
+            self.replace_scope = self.selection().filter(|&(a, b)| {
+                self.doc.as_ref().is_some_and(|d| d.line_of_offset(a) != d.line_of_offset(b.saturating_sub(1)))
+            });
+        } else if p != Prompt::ReplaceWith {
+            self.replace_scope = None;
+        }
         // 選択中の短い文字列があれば検索語の初期値にする
         let selected = || self.selected_text(1024).filter(|s| !s.contains('\n'));
         self.input = match p {
@@ -1228,16 +1239,24 @@ impl App {
             Some(Prompt::ReplaceFind) => {
                 self.last_find = std::mem::take(&mut self.input);
                 self.start_prompt(Prompt::ReplaceWith);
-                // 最初の一致を探しておく
-                self.hit = None;
-                self.find(Direction::Forward);
+                // 最初の一致を探しておく（範囲を絞っているときは、まとめて置換するだけ）
+                if self.replace_scope.is_none() {
+                    self.hit = None;
+                    self.find(Direction::Forward);
+                }
                 return None;
             }
             Some(Prompt::ReplaceWith) => {
                 // 入力欄は開いたまま：Enter で置換して次、Shift+Enter で置換せずに次、Ctrl+Enter ですべて置換
                 self.prompt = Some(Prompt::ReplaceWith);
                 self.last_replace = self.input.clone();
-                if ctrl {
+                if self.replace_scope.is_some() {
+                    // 範囲を絞っているときは、Enter でその範囲をまとめて置換
+                    if !shift {
+                        self.prompt = None;
+                        self.replace_all();
+                    }
+                } else if ctrl {
                     self.prompt = None;
                     self.replace_all();
                 } else {
@@ -2069,10 +2088,17 @@ impl App {
                 format!("GREP の結果「{}」を置換{flags}: {}|{esc}  Enter:確認へ Esc:取消", self.last_find, self.input)
             }
             Some(Prompt::ColumnFilter) => format!("列フィルタ: {}|  例: 3 = ERROR / 2 : 語を含む / 4 >= 100 / 1 ~ 正規表現 / 5 empty", self.input),
-            Some(Prompt::ReplaceFind) => format!("置換{flags} 検索する文字列: {}|  Enter:次へ Alt+C:大小区別 Alt+R:正規表現 Esc:取消", self.input),
+            Some(Prompt::ReplaceFind) => {
+                let scope = if self.replace_scope.is_some() { " [選択範囲内]" } else { "" };
+                format!("置換{flags}{scope} 検索する文字列: {}|  Enter:次へ Alt+C:大小区別 Alt+R:正規表現 Esc:取消", self.input)
+            }
             Some(Prompt::ReplaceWith) => {
                 let esc = if self.opts.regex { " ($1 や \\n が使えます)" } else { "" };
-                format!("「{}」を置換{flags}: {}|{esc}  Enter:置換して次 Shift+Enter:次へ Ctrl+Enter:すべて置換 Esc:終了", self.last_find, self.input)
+                if self.replace_scope.is_some() {
+                    format!("「{}」を選択範囲内で置換{flags}: {}|{esc}  Enter:範囲内をすべて置換 Esc:取消", self.last_find, self.input)
+                } else {
+                    format!("「{}」を置換{flags}: {}|{esc}  Enter:置換して次 Shift+Enter:次へ Ctrl+Enter:すべて置換 Esc:終了", self.last_find, self.input)
+                }
             }
             Some(Prompt::GrepQuery) => format!("GREP{flags} 検索する文字列: {}|  Enter:次へ Alt+C:大小区別 Alt+R:正規表現 Esc:取消", self.input),
             Some(Prompt::GrepFolder) => format!("GREP 検索するフォルダ（サブフォルダも含む）: {}|", self.input),
