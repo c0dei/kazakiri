@@ -217,6 +217,8 @@ struct App {
     grep_recursive: bool,
     /// IME で変換中の文字
     comp: Option<edit::Comp>,
+    /// CSV の、前の行から続く行の一覧
+    csv_cont: Option<csv_view::CsvCont>,
     /// 操作の途中で、検索ダイアログ（のタブ）を開きたいとき
     want_dialog: Option<usize>,
     /// 外部ソートの保存先を選びたいとき（降順か）
@@ -347,6 +349,7 @@ unsafe fn run_inner() -> std::result::Result<(), (&'static str, windows::core::E
             dlg_scope: None,
             grep_recursive: true,
             comp: None,
+            csv_cont: None,
             want_dialog: None,
             want_sort: None,
             opts: SearchOptions { case_sensitive: false, regex: false, whole_word: false },
@@ -749,6 +752,11 @@ impl App {
                     (DONE, None)
                 }
                 WM_RUN_PENDING => (DONE, self.pending.take().map(Deferred::Perform)),
+                csv_view::WM_CONT_DONE => {
+                    self.layout_cache.borrow_mut().clear();
+                    self.invalidate();
+                    (DONE, None)
+                }
                 WM_SORT_DONE => {
                     let done = Box::from_raw(lparam.0 as *mut SortDone);
                     self.on_sort_done(*done);
@@ -1924,6 +1932,7 @@ impl App {
     unsafe fn paint(&mut self) -> Result<()> {
         unsafe {
             self.ensure_gfx()?;
+            self.ensure_continuation();
             self.clamp_top();
             let (w, h) = self.client_size();
             let g = self.gfx.as_ref().unwrap();

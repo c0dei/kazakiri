@@ -69,6 +69,25 @@ pub fn ends_in_quote(line: &str, delim: char, start_quoted: bool) -> bool {
     quoted
 }
 
+/// 前の行から続くレコード（引用符の中の改行の、2 行目以降）の行番号を、小さい順に返す。
+/// ファイルを先頭から順に 1 回読むので、数GB なら時間がかかる（別スレッドで呼ぶ）。中止されたら、そこまでの分を返す
+pub fn continuation_lines(doc: &Document, delim: char, ctl: &SearchControl) -> Vec<u64> {
+    let (count, _) = doc.line_count();
+    let mut out = Vec::new();
+    let mut quoted = false;
+    for i in 0..count {
+        if i % 65536 == 0 && ctl.cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            break;
+        }
+        if quoted {
+            out.push(i);
+        }
+        let Some((s, e)) = doc.line_range(i) else { break };
+        quoted = ends_in_quote(&doc.decode(&doc.read(s, e)), delim, quoted);
+    }
+    out
+}
+
 /// 引用符の中に改行を含むレコードがあれば、その最初の続きの行（0 から数える）。
 /// 行を単位に並べ替えたり絞り込んだりすると、そのレコードが壊れる
 pub fn first_continuation_line(doc: &Document, delim: char, ctl: &SearchControl) -> Option<u64> {
@@ -269,12 +288,20 @@ impl Filter {
 /// 列フィルタに合う行を探す。戻り値の範囲は各行の [開始, 終了)（改行を含まない）。
 /// `header` なら 1 行目は対象にしない
 pub fn filter_lines(doc: &Document, delim: char, header: bool, f: &Filter, limit: usize, ctl: &SearchControl) -> Result<crate::search::FindAll, String> {
+    filter_records(doc, delim, header, f, &[], limit, ctl)
+}
+
+/// `filter_lines` の、複数行にわたるレコードに対応した版。`cont` は `continuation_lines` の結果
+/// （前の行から続く行は、前のレコードの一部として、まとめて 1 つのレコードとして調べる）。
+/// 一致したレコードは、先頭行の頭から最後の行の末尾までの範囲で返す
+pub fn filter_records(doc: &Document, delim: char, header: bool, f: &Filter, cont: &[u64], limit: usize, ctl: &SearchControl) -> Result<crate::search::FindAll, String> {
     use std::sync::atomic::Ordering as AO;
     let (count, exact) = doc.line_count();
     if !exact {
         return Err("索引の作成中は列フィルタを使えません".into());
     }
     const CHUNK: u64 = 20_000;
+    let is_cont = |n: u64| cont.binary_search(&n).is_ok();
     let chunks: Vec<(usize, usize)> = (0..count.div_ceil(CHUNK)).map(|i| ((i * CHUNK) as usize, ((i + 1) * CHUNK).min(count) as usize)).collect();
     let mut out = crate::search::FindAll::default();
     let total = std::sync::atomic::AtomicUsize::new(0);
@@ -289,11 +316,23 @@ pub fn filter_lines(doc: &Document, delim: char, header: bool, f: &Filter, limit
             }
             let mut hits = Vec::new();
             for line in doc.lines(a as u64, b - a) {
-                if header && line.number == 0 {
-                    continue;
+                if (header && line.number == 0) || is_cont(line.number) {
+                    continue; // 見出し、または前のレコードの続き
                 }
-                if f.matches_line(&line.text, delim) {
-                    hits.push((line.start, line.end));
+                // このレコードの続きの行（チャンクの終わりをまたぐこともある）を足す
+                let mut end = line.end;
+                let mut n = line.number + 1;
+                let mut text = std::borrow::Cow::Borrowed(line.text.as_str());
+                while is_cont(n) {
+                    let Some(next) = doc.lines(n, 1).into_iter().next() else { break };
+                    let t = text.to_mut();
+                    t.push('\n');
+                    t.push_str(&next.text);
+                    end = next.end;
+                    n += 1;
+                }
+                if f.matches_line(&text, delim) {
+                    hits.push((line.start, end));
                 }
             }
             total.fetch_add(hits.len(), AO::Relaxed);
@@ -654,6 +693,32 @@ mod tests {
         // 引用の中の "" は " そのもの。閉じていなければ次の行に続く
         assert!(!ends_in_quote("\"\"\"quoted\"\"\"", ',', false));
         assert!(ends_in_quote("\"\"\"quoted\"\" start", ',', false));
+    }
+
+    #[test]
+    fn continuation_lines_and_record_filter() {
+        // 行 2・3 が行 1 のレコードの続き、行 6 が行 5 のレコードの続き（0 から数える）
+        let d = ready(b"id,note,n\r\n1,\"line one\r\nline two\r\nline three\",5\r\n2,plain,9\r\n3,\"x\r\nwanted\",7\r\n");
+        let cont = continuation_lines(&d, ',', &SearchControl::default());
+        assert_eq!(cont, vec![2, 3, 6]);
+        // 2 列目（note）に wanted を含むレコード：複数行にわたるレコードを、まとめて 1 件として
+        let f = Filter::parse("2 : wanted", true).unwrap();
+        let r = filter_records(&d, ',', true, &f, &cont, usize::MAX, &SearchControl::default()).unwrap();
+        assert_eq!(r.ranges.len(), 1);
+        let (s, e) = r.ranges[0];
+        let text = std::str::from_utf8(&d.read(s, e)).unwrap().to_string();
+        assert!(text.starts_with("3,\"x") && text.ends_with("wanted\",7"), "{text:?}");
+        // 3 列目が 5 のレコードは、3 行にわたる（最後の行に 5 がある）
+        let f = Filter::parse("3 = 5", true).unwrap();
+        let r = filter_records(&d, ',', true, &f, &cont, usize::MAX, &SearchControl::default()).unwrap();
+        assert_eq!(r.ranges.len(), 1);
+        let (s, e) = r.ranges[0];
+        assert!(std::str::from_utf8(&d.read(s, e)).unwrap().contains("line three\",5"));
+        // 続きの行がなければ、従来の filter_lines と同じ
+        let d = ready(b"a,b\n1,x\n2,y\n");
+        let f = Filter::parse("2 = y", false).unwrap();
+        assert_eq!(filter_lines(&d, ',', true, &f, 10, &SearchControl::default()).unwrap().ranges.len(), 1);
+        assert!(continuation_lines(&d, ',', &SearchControl::default()).is_empty());
     }
 
     #[test]
