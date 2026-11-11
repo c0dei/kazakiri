@@ -144,6 +144,8 @@ struct App {
     /// サロゲートペアの前半
     high_surrogate: Option<u16>,
     saving: Option<SaveJob>,
+    /// 次の保存で文字コード・改行コードを変える
+    convert: Option<kazakiri_core::Convert>,
     /// 保存が終わったら行う操作
     pending: Option<Pending>,
     /// 検索結果の一覧
@@ -263,6 +265,7 @@ unsafe fn run_inner() -> std::result::Result<(), (&'static str, windows::core::E
             goal_x: None,
             high_surrogate: None,
             saving: None,
+            convert: None,
             pending: None,
             results: None,
             rjob: None,
@@ -419,6 +422,7 @@ unsafe fn run_deferred(hwnd: HWND, d: Deferred) {
                 // 名前を付けずにやめたら、保留していた操作も取りやめる
                 None => {
                     with_app(|app| {
+                        app.convert = None;
                         app.pending = None;
                         app.clear_discard();
                     });
@@ -446,9 +450,12 @@ unsafe fn run_deferred(hwnd: HWND, d: Deferred) {
         }
         Deferred::Perform(action) => match action {
             Pending::OpenDialog => {
-                if let Some(path) = unsafe { open_dialog(hwnd) } {
-                    with_app(|app| app.open(path, None));
-                }
+                let paths = unsafe { open_dialog(hwnd) };
+                with_app(|app| {
+                    for p in paths {
+                        app.open(p, None);
+                    }
+                });
             }
             Pending::OpenPath(p) => {
                 with_app(|app| app.open(p, None));
@@ -484,8 +491,9 @@ unsafe fn run_deferred(hwnd: HWND, d: Deferred) {
     }
 }
 
-unsafe fn open_dialog(hwnd: HWND) -> Option<PathBuf> {
-    let mut buf = vec![0u16; 32768];
+/// 「開く」ダイアログ。複数のファイルを選べる
+unsafe fn open_dialog(hwnd: HWND) -> Vec<PathBuf> {
+    let mut buf = vec![0u16; 65536];
     let filter = wide("テキストファイル\0*.txt;*.log;*.csv;*.tsv\0すべてのファイル\0*.*\0\0");
     let mut ofn = OPENFILENAMEW {
         lStructSize: std::mem::size_of::<OPENFILENAMEW>() as u32,
@@ -494,14 +502,24 @@ unsafe fn open_dialog(hwnd: HWND) -> Option<PathBuf> {
         nFilterIndex: 2,
         lpstrFile: windows::core::PWSTR(buf.as_mut_ptr()),
         nMaxFile: buf.len() as u32,
-        Flags: OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER,
+        Flags: OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER | OFN_ALLOWMULTISELECT,
         ..Default::default()
     };
-    if unsafe { GetOpenFileNameW(&mut ofn) }.as_bool() {
-        let n = buf.iter().position(|&c| c == 0).unwrap_or(0);
-        Some(PathBuf::from(String::from_utf16_lossy(&buf[..n])))
+    if !unsafe { GetOpenFileNameW(&mut ofn) }.as_bool() {
+        return Vec::new();
+    }
+    parse_multi_select(&buf)
+}
+
+/// 複数選択の結果を読む。1 つだけなら「フルパス\0\0」、複数なら「フォルダ\0名前1\0名前2\0\0」
+fn parse_multi_select(buf: &[u16]) -> Vec<PathBuf> {
+    let mut parts = buf.split(|&c| c == 0).take_while(|p| !p.is_empty()).map(String::from_utf16_lossy);
+    let Some(first) = parts.next() else { return Vec::new() };
+    let rest: Vec<String> = parts.collect();
+    if rest.is_empty() {
+        vec![PathBuf::from(first)]
     } else {
-        None
+        rest.into_iter().map(|name| PathBuf::from(&first).join(name)).collect()
     }
 }
 
@@ -935,6 +953,11 @@ impl App {
     unsafe fn command(&mut self, id: u32) -> Option<Deferred> {
         match id {
             menu::ID_KEYS => self.edit_keys(),
+            id if (menu::ID_CONV_ENC_BASE..menu::ID_CONV_ENC_BASE + menu::CONV_ENCODINGS.len() as u32).contains(&id)
+                || (menu::ID_CONV_NL_BASE..menu::ID_CONV_NL_BASE + menu::CONV_NEWLINES.len() as u32).contains(&id) =>
+            {
+                return self.start_convert_save(id);
+            }
             menu::ID_NEW => self.new_tab(),
             menu::ID_CLOSE_TAB => return self.guarded(Pending::CloseTab),
             menu::ID_NEXT_TAB => self.cycle_tab(true),
@@ -2050,4 +2073,31 @@ fn human_size(n: u64) -> String {
         i += 1;
     }
     if i == 0 { format!("{n} B") } else { format!("{v:.2} {}", U[i]) }
+}
+
+#[cfg(test)]
+mod multi_select_tests {
+    use super::parse_multi_select;
+    use std::path::PathBuf;
+
+    fn w(parts: &[&str]) -> Vec<u16> {
+        let mut v = Vec::new();
+        for p in parts {
+            v.extend(p.encode_utf16());
+            v.push(0);
+        }
+        v.push(0);
+        v.resize(v.len() + 8, 0);
+        v
+    }
+
+    #[test]
+    fn single_and_multiple() {
+        assert_eq!(parse_multi_select(&w(&["C:\\a\\x.log"])), vec![PathBuf::from("C:\\a\\x.log")]);
+        assert_eq!(
+            parse_multi_select(&w(&["C:\\a", "x.log", "日本語.csv"])),
+            vec![PathBuf::from("C:\\a").join("x.log"), PathBuf::from("C:\\a").join("日本語.csv")]
+        );
+        assert!(parse_multi_select(&w(&[])).is_empty());
+    }
 }

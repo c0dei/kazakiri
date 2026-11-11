@@ -53,6 +53,21 @@ pub const DELIMS: [(&str, char); 4] = [("カンマ ( , )", ','), ("タブ", '\t'
 
 /// エンコードの選択肢（ENCODINGS の並びと対応）
 pub const ID_ENC_BASE: u32 = 400;
+/// 「文字コードを変えて保存」の選択肢（CONV_ENCODINGS の並びと対応）
+pub const ID_CONV_ENC_BASE: u32 = 700;
+/// 「改行コードを変えて保存」の選択肢（CONV_NEWLINES の並びと対応）
+pub const ID_CONV_NL_BASE: u32 = 720;
+/// (表示名, 文字コード, BOM を付ける)
+pub const CONV_ENCODINGS: [(&str, &Encoding, bool); 6] = [
+    ("UTF-8", encoding_rs::UTF_8, false),
+    ("UTF-8 (BOM 付き)", encoding_rs::UTF_8, true),
+    ("Shift_JIS (CP932)", encoding_rs::SHIFT_JIS, false),
+    ("EUC-JP", encoding_rs::EUC_JP, false),
+    ("UTF-16LE (BOM 付き)", encoding_rs::UTF_16LE, true),
+    ("UTF-16BE (BOM 付き)", encoding_rs::UTF_16BE, true),
+];
+pub const CONV_NEWLINES: [(&str, &str); 3] = [("CRLF (Windows)", "\r\n"), ("LF (Unix)", "\n"), ("CR (旧 Mac)", "\r")];
+
 /// 最近使ったファイル
 pub const ID_RECENT_BASE: u32 = 500;
 pub const RECENT_MAX: usize = 10;
@@ -110,6 +125,15 @@ pub unsafe fn build(km: &Keymap) -> Result<Menus> {
         item(km, file, ID_OPEN, "開く(&O)...\tCtrl+O")?;
         item(km, file, ID_SAVE, "上書き保存(&S)\tCtrl+S")?;
         item(km, file, ID_SAVE_AS, "名前を付けて保存(&A)...\tCtrl+Shift+S")?;
+        let conv = CreatePopupMenu()?;
+        for (i, (name, _, _)) in CONV_ENCODINGS.iter().enumerate() {
+            item(km, conv, ID_CONV_ENC_BASE + i as u32, &format!("文字コードを {name} にして保存..."))?;
+        }
+        sep(conv)?;
+        for (i, (name, _)) in CONV_NEWLINES.iter().enumerate() {
+            item(km, conv, ID_CONV_NL_BASE + i as u32, &format!("改行コードを {name} にして保存..."))?;
+        }
+        popup(file, conv, "文字コード・改行コードを変えて保存(&V)")?;
         sep(file)?;
         item(km, file, ID_RELOAD, "再読み込み(&R)\tF5")?;
         item(km, file, ID_FOLLOW, "末尾を追従(&T)\tCtrl+T")?;

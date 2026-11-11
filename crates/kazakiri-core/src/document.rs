@@ -586,16 +586,38 @@ impl Document {
         Ok(())
     }
 
+    /// 内容のバイト列を、いくつかの断片に分けて順に渡す（編集中なら編集後の内容）
+    pub(crate) fn for_each_segment(&self, f: &mut dyn FnMut(&[u8]) -> io::Result<()>) -> io::Result<()> {
+        let ctx = self.ctx();
+        match &self.text {
+            Some(t) => {
+                for seg in t.segments(&ctx) {
+                    f(seg)?;
+                }
+                Ok(())
+            }
+            None => f(self.source.bytes()),
+        }
+    }
+
     /// `target` と同じフォルダに一時ファイルとして書き出し、そのパスを返す。
     /// 書き出しが終わったら、この Document（と複製）をすべて閉じてから
     /// `commit_save` で置き換える（Windows ではマップ中のファイルは置き換えられないため）
     pub fn write_temp(&self, target: &Path, written: &AtomicU64, cancel: &AtomicBool) -> io::Result<PathBuf> {
+        self.write_temp_with(target, written, cancel, None)
+    }
+
+    /// `write_temp` の、文字コード・改行コードを変えて書き出せる版
+    pub fn write_temp_with(&self, target: &Path, written: &AtomicU64, cancel: &AtomicBool, conv: Option<&crate::convert::Convert>) -> io::Result<PathBuf> {
         let name = target.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "file".into());
         let temp = target.with_file_name(format!(".{name}.kazakiri-save"));
         let result = (|| {
             let file = std::fs::File::create(&temp)?;
             let mut w = io::BufWriter::with_capacity(1 << 20, file);
-            self.write_to(&mut w, written, cancel)?;
+            match conv {
+                Some(c) => self.write_converted(&mut w, written, cancel, c)?,
+                None => self.write_to(&mut w, written, cancel)?,
+            }
             let file = w.into_inner().map_err(|e| e.into_error())?;
             file.sync_all()?;
             Ok(())
