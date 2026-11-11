@@ -317,6 +317,8 @@ impl App {
         let Some(doc) = self.doc.clone() else { return };
         let Some(view) = &self.csv else { return };
         let (delim, header) = (view.delim, view.header);
+        // 前の行から続く行（求めてあれば使う。なければ、検索のスレッドで求める）
+        let cont = self.continuation_list().cloned();
         let text = self.last_filter.clone();
         let filter = match kazakiri_core::csv::Filter::parse(&text, !self.opts.case_sensitive) {
             Ok(f) => f,
@@ -333,7 +335,8 @@ impl App {
         let hwnd = self.hwnd.0 as isize;
         std::thread::spawn(move || {
             let t = Instant::now();
-            match kazakiri_core::csv::filter_lines(&doc, delim, header, &filter, FIND_ALL_LIMIT, &ctl) {
+            let cont = cont.unwrap_or_else(|| kazakiri_core::csv::continuation_lines(&doc, delim, &ctl));
+            match kazakiri_core::csv::filter_records(&doc, delim, header, &filter, &cont, FIND_ALL_LIMIT, &ctl) {
                 Ok(found) => post(hwnd, WM_RESULTS_DONE, JobDone::FindAll { id, query: text, found, elapsed: t.elapsed() }),
                 Err(e) => post(hwnd, WM_RESULTS_DONE, JobDone::FilterFailed { id, message: e }),
             }

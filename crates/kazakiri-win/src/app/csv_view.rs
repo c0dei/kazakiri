@@ -18,6 +18,15 @@ use super::*;
 const MAX_COL_WIDTH: usize = 48;
 /// 並べ替えの完了通知
 pub(super) const WM_SORT_DONE: u32 = WM_APP + 6;
+/// 引用符の中の改行（前の行から続く行）の一覧ができた
+pub(super) const WM_CONT_DONE: u32 = WM_APP + 20;
+
+/// 前の行から続くレコードの行番号の一覧（別スレッドで求める）
+pub(super) struct CsvCont {
+    /// 求めた対象（文書の識別と区切り文字）
+    pub key: (usize, char),
+    pub cell: Arc<std::sync::OnceLock<Vec<u64>>>,
+}
 
 pub(super) struct CsvView {
     pub delim: char,
@@ -295,6 +304,14 @@ impl App {
     /// 表示用の 1 行（CSV モードなら列をそろえる）
     pub(super) fn display(&self, line: &Line) -> Disp {
         let d = match &self.csv {
+            // 前の行から続くレコードの行は、列に分けず、薄い文字でそのまま見せる
+            Some(_) if self.is_continuation(line.number) => {
+                let mut d = Disp::plain(line);
+                if d.shown > 0 {
+                    d.effects.push((0, d.shown as u32, Effect::Mark));
+                }
+                d
+            }
             Some(v) => Disp::csv(line, v),
             None if self.settings.whitespace => Disp::whitespace(line, self.settings.tab_width, self.eol_mark(line)),
             None => Disp::plain(line),
@@ -443,12 +460,57 @@ impl App {
         Ok(())
     }
 
+    /// 求めた「前の行から続く行」の一覧（まだ求めていなければ None）
+    pub(super) fn continuation_list(&self) -> Option<&Vec<u64>> {
+        let c = self.csv_cont.as_ref()?;
+        let v = self.csv.as_ref()?;
+        let doc = self.doc.as_ref()?;
+        (c.key == (Arc::as_ptr(doc) as *const () as usize, v.delim)).then(|| c.cell.get()).flatten()
+    }
+
+    pub(super) fn is_continuation(&self, line: u64) -> bool {
+        self.continuation_list().is_some_and(|l| l.binary_search(&line).is_ok())
+    }
+
+    /// 前の行から続く行の一覧を、別スレッドで求める（編集していないファイルだけ。編集すると行番号がずれるため）
+    pub(super) fn ensure_continuation(&mut self) {
+        let (Some(v), Some(doc)) = (&self.csv, &self.doc) else {
+            self.csv_cont = None;
+            return;
+        };
+        if self.is_modified() || !doc.progress().done {
+            return;
+        }
+        let key = (Arc::as_ptr(doc) as *const () as usize, v.delim);
+        if self.csv_cont.as_ref().is_some_and(|c| c.key == key) {
+            return;
+        }
+        let cell = Arc::new(std::sync::OnceLock::new());
+        self.csv_cont = Some(CsvCont { key, cell: cell.clone() });
+        let (doc, delim, hwnd) = (doc.clone(), v.delim, self.hwnd.0 as isize);
+        std::thread::spawn(move || {
+            let list = csv::continuation_lines(&doc, delim, &SearchControl::default());
+            drop(doc);
+            let found = !list.is_empty();
+            let _ = cell.set(list);
+            // 続きの行がなければ、表示は変わらないので描き直さない
+            if found {
+                unsafe {
+                    let _ = PostMessageW(Some(HWND(hwnd as *mut _)), WM_CONT_DONE, WPARAM(0), LPARAM(0));
+                }
+            }
+        });
+    }
+
     /// 描く前に、見える行で列の幅を決める
     pub(super) fn csv_measure(&self, lines: &[Line]) {
         if let Some(v) = &self.csv {
             let mut changed = false;
             for l in lines {
-                changed |= v.measure(&l.text);
+                // 続きの行（列に分けない行）は、列の幅に数えない
+                if !self.is_continuation(l.number) {
+                    changed |= v.measure(&l.text);
+                }
             }
             if changed {
                 self.layout_cache.borrow_mut().clear();
