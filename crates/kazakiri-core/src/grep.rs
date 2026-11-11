@@ -288,6 +288,20 @@ pub fn grep(root: &Path, pattern: &str, opts: &GrepOptions, prog: &GrepProgress)
     })
 }
 
+/// バックアップの保存先：`名前.拡張子.bak`。すでにあれば `.bak2`、`.bak3` … と、上書きしない名前にする
+pub fn backup_path(path: &Path) -> PathBuf {
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "file".into());
+    let mut n = 1u32;
+    loop {
+        let suffix = if n == 1 { ".bak".to_string() } else { format!(".bak{n}") };
+        let candidate = path.with_file_name(format!("{name}{suffix}"));
+        if !candidate.exists() {
+            return candidate;
+        }
+        n += 1;
+    }
+}
+
 /// GREP 置換の結果
 #[derive(Debug, Default)]
 pub struct ReplaceReport {
@@ -295,6 +309,8 @@ pub struct ReplaceReport {
     pub files_changed: usize,
     /// 置換した件数
     pub replaced: usize,
+    /// 作ったバックアップの数
+    pub backups: usize,
     /// 書き換えられなかったファイルと理由
     pub failed: Vec<(PathBuf, String)>,
     pub cancelled: bool,
@@ -304,9 +320,10 @@ pub struct ReplaceReport {
 /// 一致の位置は GREP の結果ではなく、書き換える直前にファイルを探し直して求める
 /// （ファイルが変わっていても正しい箇所だけが変わる）。文字コードと改行コードは各ファイルのまま。
 /// `replacement` は正規表現のときは `$1` などを含められる（`\n` などの展開は呼び出し側で済ませる）
-pub fn grep_replace(files: &[PathBuf], pattern: &str, search: SearchOptions, replacement: &str, prog: &GrepProgress) -> ReplaceReport {
+pub fn grep_replace(files: &[PathBuf], pattern: &str, search: SearchOptions, replacement: &str, backup: bool, prog: &GrepProgress) -> ReplaceReport {
     use crate::editor::Editor;
     let mut report = ReplaceReport::default();
+    let backups = AtomicUsize::new(0);
     prog.files_total.store(files.len(), Ordering::Relaxed);
     for path in files {
         if prog.ctl.cancel.load(Ordering::Relaxed) {
@@ -340,6 +357,15 @@ pub fn grep_replace(files: &[PathBuf], pattern: &str, search: SearchOptions, rep
             // マップを閉じてから置き換える（Windows ではマップ中のファイルは置き換えられない）
             drop(edited);
             drop(ed);
+            // 置き換える前に、元のファイルを残す（残せなければ、そのファイルは書き換えない）
+            if backup {
+                let bak = backup_path(path);
+                if let Err(e) = std::fs::copy(path, &bak) {
+                    let _ = std::fs::remove_file(&temp);
+                    return Err(format!("バックアップを作れません（{}）: {e}", bak.display()));
+                }
+                backups.fetch_add(1, Ordering::Relaxed);
+            }
             if let Err(e) = crate::document::commit_save(&temp, path) {
                 let _ = std::fs::remove_file(&temp);
                 return Err(e.to_string());
@@ -360,6 +386,7 @@ pub fn grep_replace(files: &[PathBuf], pattern: &str, search: SearchOptions, rep
         }
         prog.files_done.fetch_add(1, Ordering::Relaxed);
     }
+    report.backups = backups.load(Ordering::Relaxed);
     report
 }
 
@@ -440,7 +467,7 @@ mod tests {
         std::fs::write(&c, "nothing here\n").unwrap();
         let prog = GrepProgress::default();
         let opts = SearchOptions { case_sensitive: true, regex: false };
-        let r = grep_replace(&[a.clone(), b.clone(), c.clone()], "foo", opts, "花子", &prog);
+        let r = grep_replace(&[a.clone(), b.clone(), c.clone()], "foo", opts, "花子", true, &prog);
         assert_eq!((r.files_changed, r.replaced), (2, 4), "{r:?}");
         assert!(r.failed.is_empty() && !r.cancelled);
         assert_eq!(std::fs::read_to_string(&a).unwrap(), "花子=1\nbar 花子\n");
@@ -449,15 +476,25 @@ mod tests {
         let (s, _, _) = encoding_rs::SHIFT_JIS.decode(&bytes);
         assert_eq!(s, "名前=花子\r\n花子 太郎\r\n");
         assert_eq!(std::fs::read_to_string(&c).unwrap(), "nothing here\n");
+        // バックアップ：置換した 2 つだけ、元の内容のまま残る。一致のなかった c にはない
+        assert_eq!(r.backups, 2);
+        assert_eq!(std::fs::read_to_string(dir.join("a.log.bak")).unwrap(), "foo=1\nbar foo\n");
+        assert_eq!(encoding_rs::SHIFT_JIS.decode(&std::fs::read(dir.join("b.log.bak")).unwrap()).0, "名前=foo\r\nfoo 太郎\r\n");
+        assert!(!dir.join("c.log.bak").exists());
         // 正規表現のキャプチャ
         let opts = SearchOptions { case_sensitive: true, regex: true };
-        let r = grep_replace(std::slice::from_ref(&a), r"(\S+)=(\d)", opts, "$2:$1", &prog);
-        assert_eq!(r.replaced, 1);
+        let r = grep_replace(std::slice::from_ref(&a), r"(\S+)=(\d)", opts, "$2:$1", false, &prog);
+        assert_eq!((r.replaced, r.backups), (1, 0));
         assert_eq!(std::fs::read_to_string(&a).unwrap(), "1:花子\nbar 花子\n");
+        // バックアップは上書きせず、番号を増やす（.bak は最初の内容のまま）
+        let r = grep_replace(std::slice::from_ref(&a), "花子", opts, "太郎", true, &prog);
+        assert_eq!(r.backups, 1);
+        assert_eq!(std::fs::read_to_string(dir.join("a.log.bak")).unwrap(), "foo=1\nbar foo\n");
+        assert_eq!(std::fs::read_to_string(dir.join("a.log.bak2")).unwrap(), "1:花子\nbar 花子\n");
         // 壊れた正規表現は書き換えずに失敗として報告
-        let r = grep_replace(std::slice::from_ref(&a), "(", opts, "x", &prog);
+        let r = grep_replace(std::slice::from_ref(&a), "(", opts, "x", true, &prog);
         assert_eq!(r.failed.len(), 1);
-        assert_eq!(std::fs::read_to_string(&a).unwrap(), "1:花子\nbar 花子\n");
+        assert_eq!(std::fs::read_to_string(&a).unwrap(), "1:太郎\nbar 太郎\n");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -1067,6 +1067,12 @@ impl App {
             menu::ID_REPLACE => self.start_prompt(Prompt::ReplaceFind),
             menu::ID_FIND_ALL => self.find_all(),
             menu::ID_GREP_REPLACE => self.start_grep_replace(),
+            menu::ID_GREP_BACKUP => {
+                self.settings.grep_backup = !self.settings.grep_backup;
+                self.settings.save();
+                self.message = format!("GREP 置換の前にバックアップ (.bak) を作る: {}", on_off(self.settings.grep_backup));
+                self.invalidate();
+            }
             menu::ID_GREP => self.start_prompt(Prompt::GrepQuery),
             menu::ID_NEXT_RESULT => return self.next_result(true),
             menu::ID_PREV_RESULT => return self.next_result(false),

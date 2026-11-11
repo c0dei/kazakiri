@@ -261,8 +261,9 @@ impl App {
                     notes.push(format!("失敗 {} 件（{}: {}）", report.failed.len(), first.0.display(), first.1));
                 }
                 let notes = if notes.is_empty() { String::new() } else { format!("（{}）", notes.join("、")) };
+                let bak = if report.backups > 0 { format!("、バックアップ {} 件（.bak）", group(report.backups as u64)) } else { String::new() };
                 self.message = format!(
-                    "GREP 置換: {} ファイル・{} 件を置換しました{notes}  {:.2} 秒",
+                    "GREP 置換: {} ファイル・{} 件を置換しました{bak}{notes}  {:.2} 秒",
                     group(report.files_changed as u64),
                     group(report.replaced as u64),
                     elapsed.as_secs_f64()
@@ -646,11 +647,16 @@ impl App {
     pub(super) fn grep_replace_question(&self) -> Option<String> {
         let Some(ResultKind::Grep { res, .. }) = self.results.as_ref().map(|r| &r.kind) else { return None };
         Some(format!(
-            "「{}」を「{}」に置き換えます。\n\n対象: {} ファイル（{} 行）\n\nファイルを直接書き換えます。この操作は元に戻せません。実行しますか？",
+            "「{}」を「{}」に置き換えます。\n\n対象: {} ファイル（{} 行）\n\nファイルを直接書き換えます。{}\n実行しますか？",
             self.last_find,
             self.last_replace,
             group(res.matched_files as u64),
-            group(res.hits.len() as u64)
+            group(res.hits.len() as u64),
+            if self.settings.grep_backup {
+                "書き換える前の内容は「ファイル名.bak」として同じフォルダに残します（すでにあれば .bak2、.bak3 …）。"
+            } else {
+                "バックアップは作らないので、元に戻せません。"
+            }
         ))
     }
 
@@ -676,6 +682,7 @@ impl App {
         let search = self.opts;
         let pattern = self.last_find.clone();
         let replacement = self.replacement_text();
+        let backup = self.settings.grep_backup;
         self.cancel_jobs();
         let id = self.next_job;
         self.next_job += 1;
@@ -684,7 +691,7 @@ impl App {
         let hwnd = self.hwnd.0 as isize;
         std::thread::spawn(move || {
             let t = Instant::now();
-            let report = grep::grep_replace(&files, &pattern, search, &replacement, &prog);
+            let report = grep::grep_replace(&files, &pattern, search, &replacement, backup, &prog);
             post(hwnd, WM_RESULTS_DONE, JobDone::GrepReplace { id, report, skipped, elapsed: t.elapsed() });
         });
         unsafe {

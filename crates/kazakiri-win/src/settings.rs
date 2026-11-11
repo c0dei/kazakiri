@@ -18,11 +18,13 @@ pub struct Settings {
     pub tab_width: usize,
     /// 長い行を画面の幅で折り返して表示する
     pub wrap: bool,
+    /// GREP 置換の前に、各ファイルのバックアップ（.bak）を作る
+    pub grep_backup: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { font: String::new(), font_size: 14.0, dark: false, whitespace: false, log_colors: true, tab_width: 4, wrap: false }
+        Settings { font: String::new(), font_size: 14.0, dark: false, whitespace: false, log_colors: true, tab_width: 4, wrap: false, grep_backup: true }
     }
 }
 
@@ -61,6 +63,7 @@ impl Settings {
                 "whitespace" => s.whitespace = flag(v),
                 "log_colors" => s.log_colors = flag(v),
                 "wrap" => s.wrap = flag(v),
+                "grep_backup" => s.grep_backup = flag(v),
                 "tab_width" => {
                     if let Ok(x) = v.parse::<usize>() {
                         s.tab_width = x.clamp(1, 16);
@@ -75,8 +78,8 @@ impl Settings {
     pub fn to_text(&self) -> String {
         format!(
             "# kazakiri の設定（アプリから変更すると上書きされます）\n\
-             font = {}\nfont_size = {}\ndark = {}\nwhitespace = {}\nlog_colors = {}\ntab_width = {}\nwrap = {}\n",
-            self.font, self.font_size, self.dark, self.whitespace, self.log_colors, self.tab_width, self.wrap
+             font = {}\nfont_size = {}\ndark = {}\nwhitespace = {}\nlog_colors = {}\ntab_width = {}\nwrap = {}\ngrep_backup = {}\n",
+            self.font, self.font_size, self.dark, self.whitespace, self.log_colors, self.tab_width, self.wrap, self.grep_backup
         )
     }
 
@@ -97,7 +100,7 @@ mod tests {
 
     #[test]
     fn roundtrip_and_defaults() {
-        let s = Settings { font: "Consolas".into(), font_size: 16.5, dark: true, whitespace: true, log_colors: false, tab_width: 8, wrap: true };
+        let s = Settings { font: "Consolas".into(), font_size: 16.5, dark: true, whitespace: true, log_colors: false, tab_width: 8, wrap: true, grep_backup: false };
         assert_eq!(Settings::parse(&s.to_text()), s);
         let broken = Settings::parse("font_size = abc\nunknown = 1\ntab_width = 99\n");
         assert_eq!(broken.font_size, 14.0);
