@@ -12,6 +12,7 @@ use windows::Win32::Graphics::Gdi::LOGFONTW;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::Ime::*;
 
+use super::multi::MultiMove;
 use super::*;
 
 /// 保存スレッドからの完了通知
@@ -151,7 +152,7 @@ impl App {
         if !self.check_editable() {
             return;
         }
-        if self.rect_type(s) {
+        if self.rect_type(s) || self.multi_type(s) {
             return;
         }
         let Some(doc) = self.doc.clone() else { return };
@@ -187,7 +188,7 @@ impl App {
         if !self.check_editable() {
             return;
         }
-        if self.rect_delete(forward) {
+        if self.rect_delete(forward) || self.multi_delete(forward) {
             return;
         }
         let Some(doc) = self.doc.clone() else { return };
@@ -218,7 +219,7 @@ impl App {
     }
 
     pub(super) fn cut(&mut self) {
-        if self.rect_cut() {
+        if self.rect_cut() || self.multi_cut() {
             return;
         }
         if self.selection().is_none() || !self.check_editable() {
@@ -265,6 +266,9 @@ impl App {
     // ---- カーソル移動 ----
 
     pub(super) fn move_horizontal(&mut self, forward: bool, extend: bool) {
+        if self.multi_move(if forward { MultiMove::Right } else { MultiMove::Left }, extend) {
+            return;
+        }
         let Some(doc) = self.doc.clone() else { return };
         // 選択中に矢印だけ押したら、選択の端へ
         if let (false, Some((a, b))) = (extend, self.selection()) {
@@ -339,6 +343,9 @@ impl App {
     }
 
     pub(super) fn move_line_edge(&mut self, end: bool, extend: bool) {
+        if self.multi_move(if end { MultiMove::End } else { MultiMove::Home }, extend) {
+            return;
+        }
         let Some(doc) = self.doc.clone() else { return };
         let c = self.caret();
         let Some((s, e)) = doc.line_of_offset(c).and_then(|l| doc.line_range(l)) else { return };
