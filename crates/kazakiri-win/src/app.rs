@@ -79,6 +79,8 @@ enum Prompt {
     GrepFiles,
     /// CSV の列フィルタ（「3 = ERROR」の形）
     ColumnFilter,
+    /// GREP の結果の置換：置換後の文字列
+    GrepReplaceWith,
 }
 
 /// 借用中に実行できない処理（モーダルダイアログはメッセージを再入させる）
@@ -89,6 +91,8 @@ enum Deferred {
     Confirm(Pending),
     /// そのまま行う（ダイアログを伴うことがある）
     Perform(Pending),
+    /// GREP 置換の最終確認（文章）
+    ConfirmGrepReplace(String),
 }
 
 struct Gfx {
@@ -431,6 +435,13 @@ unsafe fn run_deferred(hwnd: HWND, d: Deferred) {
                         app.clear_discard();
                     });
                 }
+            }
+        }
+        Deferred::ConfirmGrepReplace(question) => {
+            let text = wide(&question);
+            let r = unsafe { MessageBoxW(Some(hwnd), PCWSTR(text.as_ptr()), w!("GREP 置換"), MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) };
+            if r == IDYES {
+                with_app(|app| app.run_grep_replace());
             }
         }
         Deferred::Confirm(action) => {
@@ -1037,6 +1048,7 @@ impl App {
             }
             menu::ID_REPLACE => self.start_prompt(Prompt::ReplaceFind),
             menu::ID_FIND_ALL => self.find_all(),
+            menu::ID_GREP_REPLACE => self.start_grep_replace(),
             menu::ID_GREP => self.start_prompt(Prompt::GrepQuery),
             menu::ID_NEXT_RESULT => return self.next_result(true),
             menu::ID_PREV_RESULT => return self.next_result(false),
@@ -1169,6 +1181,7 @@ impl App {
             Prompt::Find | Prompt::ReplaceFind | Prompt::GrepQuery => selected().unwrap_or_else(|| self.last_find.clone()),
             Prompt::GotoLine => String::new(),
             Prompt::ColumnFilter => self.last_filter.clone(),
+            Prompt::GrepReplaceWith => self.last_replace.clone(),
             Prompt::ReplaceWith => self.last_replace.clone(),
             Prompt::GrepFolder => self.default_grep_folder(),
             Prompt::GrepFiles => self.grep_files.clone(),
@@ -1225,6 +1238,12 @@ impl App {
             Some(Prompt::ColumnFilter) => {
                 self.last_filter = std::mem::take(&mut self.input);
                 self.start_filter();
+            }
+            Some(Prompt::GrepReplaceWith) => {
+                self.last_replace = std::mem::take(&mut self.input);
+                if let Some(q) = self.grep_replace_question() {
+                    return Some(Deferred::ConfirmGrepReplace(q));
+                }
             }
             Some(Prompt::Find) => {
                 self.last_find = std::mem::take(&mut self.input);
@@ -1914,6 +1933,10 @@ impl App {
         match self.prompt {
             Some(Prompt::Find) => format!("検索{flags}: {}|  Enter:次 Shift+Enter:前 Alt+Enter:すべて一覧 Alt+C:大小区別 Alt+R:正規表現 Esc:取消", self.input),
             Some(Prompt::GotoLine) => format!("行番号へ移動: {}|", self.input),
+            Some(Prompt::GrepReplaceWith) => {
+                let esc = if self.opts.regex { " ($1 や \\n が使えます)" } else { "" };
+                format!("GREP の結果「{}」を置換{flags}: {}|{esc}  Enter:確認へ Esc:取消", self.last_find, self.input)
+            }
             Some(Prompt::ColumnFilter) => format!("列フィルタ: {}|  例: 3 = ERROR / 2 : 語を含む / 4 >= 100 / 1 ~ 正規表現 / 5 empty", self.input),
             Some(Prompt::ReplaceFind) => format!("置換{flags} 検索する文字列: {}|  Enter:次へ Alt+C:大小区別 Alt+R:正規表現 Esc:取消", self.input),
             Some(Prompt::ReplaceWith) => {

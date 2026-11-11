@@ -33,6 +33,7 @@ const COMMANDS: &[(&str, u32)] = &[
     ("find_all", ID_FIND_ALL),
     ("replace", ID_REPLACE),
     ("grep", ID_GREP),
+    ("grep_replace", ID_GREP_REPLACE),
     ("next_result", ID_NEXT_RESULT),
     ("prev_result", ID_PREV_RESULT),
     ("close_results", ID_CLOSE_RESULTS),
