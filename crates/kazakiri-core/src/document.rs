@@ -662,7 +662,7 @@ impl Document {
     /// 繰り返し検索するときは `search::Query` を使う
     pub fn find(&self, pattern: &str, from: u64) -> Option<(u64, u64)> {
         use crate::search::{Direction, Query, SearchControl, SearchOptions, SearchOutcome};
-        let q = Query::new(self, pattern, SearchOptions { case_sensitive: true, regex: false }).ok()?;
+        let q = Query::new(self, pattern, SearchOptions { case_sensitive: true, regex: false, whole_word: false }).ok()?;
         match q.find(self, from, Direction::Forward, &SearchControl::default()) {
             SearchOutcome::Found(s, e) => Some((s, e)),
             _ => None,

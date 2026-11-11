@@ -27,6 +27,8 @@ const NEAR: usize = 1 << 20;
 pub struct SearchOptions {
     pub case_sensitive: bool,
     pub regex: bool,
+    /// 単語単位（前後が単語の文字でないところだけに一致する）
+    pub whole_word: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,7 +84,7 @@ impl Query {
         if pattern.is_empty() {
             return Err("検索語が空です".into());
         }
-        let matcher = if !opts.regex && opts.case_sensitive {
+        let matcher = if !opts.regex && opts.case_sensitive && !opts.whole_word {
             let needle = doc.encode(pattern);
             Matcher::Bytes {
                 fwd: memmem::Finder::new(&needle).into_owned(),
@@ -90,6 +92,16 @@ impl Query {
             }
         } else {
             let body = if opts.regex { pattern.to_string() } else { regex::escape(pattern) };
+            // 単語単位：両端が単語の文字のときだけ \b を付ける（正規表現は全体を囲む）
+            let body = if !opts.whole_word {
+                body
+            } else if opts.regex {
+                format!(r"\b(?:{body})\b")
+            } else {
+                let word = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
+                let (l, r) = (if word(pattern.chars().next()) { r"\b" } else { "" }, if word(pattern.chars().next_back()) { r"\b" } else { "" });
+                format!("{l}{body}{r}")
+            };
             // m: ^ $ を行頭・行末に / R: CRLF の CR を行末として扱う
             let flags = if opts.case_sensitive { "(?mR)" } else { "(?imR)" };
             let src = format!("{flags}{body}");
@@ -540,9 +552,9 @@ mod tests {
         text.match_indices(pat).map(|(i, _)| i).collect()
     }
 
-    const CS: SearchOptions = SearchOptions { case_sensitive: true, regex: false };
-    const CI: SearchOptions = SearchOptions { case_sensitive: false, regex: false };
-    const RE: SearchOptions = SearchOptions { case_sensitive: true, regex: true };
+    const CS: SearchOptions = SearchOptions { case_sensitive: true, regex: false, whole_word: false };
+    const CI: SearchOptions = SearchOptions { case_sensitive: false, regex: false, whole_word: false };
+    const RE: SearchOptions = SearchOptions { case_sensitive: true, regex: true, whole_word: false };
 
     #[test]
     fn forward_and_backward_literal() {
@@ -581,7 +593,7 @@ mod tests {
             assert_eq!(s1, s2);
             assert_eq!(&bytes[s2 as usize..e2 as usize], &*encoding_rs::SHIFT_JIS.encode("エラー発生").0);
         }
-        let ci = all(&d, "error=\\d", SearchOptions { case_sensitive: false, regex: true }, Direction::Backward);
+        let ci = all(&d, "error=\\d", SearchOptions { case_sensitive: false, regex: true, whole_word: false }, Direction::Backward);
         assert_eq!(ci.len(), 50);
         assert_eq!(&bytes[ci[0].0 as usize..ci[0].1 as usize], b"Error=5");
     }
@@ -639,6 +651,33 @@ mod tests {
         let (bytes, _, _) = encoding_rs::EUC_JP.encode("日本語 abc ｱｲ\n");
         let d = doc(bytes.into_owned());
         assert_eq!(encoded_len(&d, "日本語 ｱ"), d.encode("日本語 ｱ").len());
+    }
+
+    #[test]
+    fn whole_word() {
+        let text = "foo foobar barfoo foo_x (foo) FOO foo";
+        let d = doc(text.as_bytes().to_vec());
+        let ww = |cs: bool, regex: bool| SearchOptions { case_sensitive: cs, regex, whole_word: true };
+        let starts = |q: &Query| q.find_all(&d, None, usize::MAX, &SearchControl::default()).ranges.iter().map(|r| r.0).collect::<Vec<_>>();
+        // 単語として独立した foo：先頭、(foo)、FOO（大文字小文字を区別しないとき）、末尾
+        assert_eq!(starts(&Query::new(&d, "foo", ww(true, false)).unwrap()), vec![0, 25, 34]);
+        assert_eq!(starts(&Query::new(&d, "foo", ww(false, false)).unwrap()), vec![0, 25, 30, 34]);
+        // 正規表現：全体を囲む
+        let d2 = doc(b"a12 12 b3 456".to_vec());
+        let q = Query::new(&d2, r"\d+", ww(true, true)).unwrap();
+        let r: Vec<_> = q.find_all(&d2, None, usize::MAX, &SearchControl::default()).ranges;
+        assert_eq!(r, vec![(4, 6), (10, 13)]);
+        // 単語の文字で始まらない・終わらない検索語は、その側に境界を付けない
+        let d3 = doc(b"call foo(x) foo(y)x".to_vec());
+        let q = Query::new(&d3, "foo(", ww(true, false)).unwrap();
+        assert_eq!(q.find_all(&d3, None, usize::MAX, &SearchControl::default()).ranges.len(), 2);
+        // Shift_JIS（文字列の正規表現の経路）でも位置が正しい
+        let (sj, _, _) = encoding_rs::SHIFT_JIS.encode("あ foo いfoo foo\n");
+        let d4 = doc(sj.into_owned());
+        let q = Query::new(&d4, "foo", ww(true, false)).unwrap();
+        let r = q.find_all(&d4, None, usize::MAX, &SearchControl::default()).ranges;
+        assert_eq!(r.len(), 2, "{r:?}");
+        assert_eq!(r[0].0, 3);
     }
 
     #[test]

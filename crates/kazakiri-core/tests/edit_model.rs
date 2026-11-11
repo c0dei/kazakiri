@@ -108,8 +108,8 @@ fn check_search(c: &Case, doc: &Document, model: &str) {
             from += i + needle.len();
         }
         for opts in [
-            SearchOptions { case_sensitive: true, regex: false },
-            SearchOptions { case_sensitive: true, regex: true },
+            SearchOptions { case_sensitive: true, regex: false, whole_word: false },
+            SearchOptions { case_sensitive: true, regex: true, whole_word: false },
         ] {
             let q = Query::new(doc, needle, opts).unwrap();
             let ctl = SearchControl::default();
@@ -155,7 +155,7 @@ fn run(c: Case, seed: u64, steps: usize) {
             8 => {
                 let from = ["ab", "あい", "c"][rng.below(3)];
                 let to = c.pieces[rng.below(c.pieces.len())];
-                let q = Query::new(ed.doc(), from, SearchOptions { case_sensitive: true, regex: false }).unwrap();
+                let q = Query::new(ed.doc(), from, SearchOptions { case_sensitive: true, regex: false, whole_word: false }).unwrap();
                 let r = q.find_all(ed.doc(), Some(to), usize::MAX, &SearchControl::default());
                 let n = ed.replace_all(&r.ranges, &r.replacements, (0, 0)).unwrap();
                 assert_eq!(n, model.matches(from).count(), "replace count");

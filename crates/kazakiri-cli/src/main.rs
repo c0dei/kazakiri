@@ -107,9 +107,9 @@ fn open(path: &Path, needle: Option<&str>) {
     if let Some(needle) = needle {
         let gbps = |el: Duration| doc.len() as f64 / (1u64 << 30) as f64 / el.as_secs_f64();
         let modes = [
-            ("literal", SearchOptions { case_sensitive: true, regex: false }),
-            ("ignore-case", SearchOptions { case_sensitive: false, regex: false }),
-            ("regex", SearchOptions { case_sensitive: true, regex: true }),
+            ("literal", SearchOptions { case_sensitive: true, regex: false, whole_word: false }),
+            ("ignore-case", SearchOptions { case_sensitive: false, regex: false, whole_word: false }),
+            ("regex", SearchOptions { case_sensitive: true, regex: true, whole_word: false }),
         ];
         for (name, opts) in modes {
             let q = match Query::new(&doc, needle, opts) {
@@ -162,7 +162,7 @@ fn open(path: &Path, needle: Option<&str>) {
         }
         println!("edited jump+60l: {:?} / screen", t.elapsed() / 1000);
         let t = Instant::now();
-        let q = Query::new(ed.doc(), "EDIT999 ", SearchOptions { case_sensitive: true, regex: false }).unwrap();
+        let q = Query::new(ed.doc(), "EDIT999 ", SearchOptions { case_sensitive: true, regex: false, whole_word: false }).unwrap();
         let r = q.find(ed.doc(), 0, Direction::Forward, &SearchControl::default());
         println!("edited find: {:?} in {:?}", matches!(r, SearchOutcome::Found(..)), t.elapsed());
         let t = Instant::now();
@@ -171,7 +171,7 @@ fn open(path: &Path, needle: Option<&str>) {
 
         // すべて置換：[INFO] → [info]（一致が多いとき）
         let t = Instant::now();
-        let q = Query::new(ed.doc(), "[INFO]", SearchOptions { case_sensitive: true, regex: false }).unwrap();
+        let q = Query::new(ed.doc(), "[INFO]", SearchOptions { case_sensitive: true, regex: false, whole_word: false }).unwrap();
         let found = q.find_all(ed.doc(), Some("[info]"), 50_000_000, &SearchControl::default());
         let t_find = t.elapsed();
         let n = ed.replace_all(&found.ranges, &found.replacements, (0, 0)).unwrap();

@@ -43,6 +43,7 @@ pub const ID_CLOSE_RESULTS: u32 = 311;
 pub const ID_GREP_REPLACE: u32 = 312;
 pub const ID_GREP_BACKUP: u32 = 313;
 pub const ID_RESULTS_TAB: u32 = 314;
+pub const ID_RESULTS_SAVE: u32 = 315;
 pub const ID_CSV: u32 = 600;
 pub const ID_CSV_HEADER: u32 = 601;
 pub const ID_SORT_ASC: u32 = 602;
@@ -182,6 +183,7 @@ pub unsafe fn build(km: &Keymap) -> Result<Menus> {
         item(km, search, ID_NEXT_RESULT, "次の結果(&X)\tF8")?;
         item(km, search, ID_PREV_RESULT, "前の結果(&V)\tShift+F8")?;
         item(km, search, ID_RESULTS_TAB, "結果の一覧を新しいタブに出す(&T)")?;
+        item(km, search, ID_RESULTS_SAVE, "結果の一覧をファイルに保存(&Z)...")?;
         item(km, search, ID_CLOSE_RESULTS, "結果一覧を閉じる\tEsc")?;
         sep(search)?;
         item(km, search, ID_CASE, "大文字と小文字を区別(&C)\tAlt+C")?;

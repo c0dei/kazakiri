@@ -427,7 +427,7 @@ mod tests {
         std::fs::write(hidden.join("f.log"), "エラー in hidden\n").unwrap();
 
         let opts = GrepOptions {
-            search: SearchOptions { case_sensitive: true, regex: false },
+            search: SearchOptions { case_sensitive: true, regex: false, whole_word: false },
             include: parse_include("*.log"),
             recursive: true,
             max_hits: 1000,
@@ -455,7 +455,7 @@ mod tests {
         let r = grep(&dir, "エラー", &GrepOptions { recursive: false, ..opts.clone() }, &GrepProgress::default()).unwrap();
         assert_eq!(r.hits.len(), 2);
         // 正規表現の誤りは最初に返す
-        let bad = GrepOptions { search: SearchOptions { case_sensitive: true, regex: true }, ..opts };
+        let bad = GrepOptions { search: SearchOptions { case_sensitive: true, regex: true, whole_word: false }, ..opts };
         assert!(grep(&dir, "(", &bad, &GrepProgress::default()).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -472,7 +472,7 @@ mod tests {
         std::fs::write(&b, encoding_rs::SHIFT_JIS.encode("名前=foo\r\nfoo 太郎\r\n").0.as_ref()).unwrap();
         std::fs::write(&c, "nothing here\n").unwrap();
         let prog = GrepProgress::default();
-        let opts = SearchOptions { case_sensitive: true, regex: false };
+        let opts = SearchOptions { case_sensitive: true, regex: false, whole_word: false };
         let r = grep_replace(&[a.clone(), b.clone(), c.clone()], "foo", opts, "花子", true, &prog);
         assert_eq!((r.files_changed, r.replaced), (2, 4), "{r:?}");
         assert!(r.failed.is_empty() && !r.cancelled);
@@ -488,7 +488,7 @@ mod tests {
         assert_eq!(encoding_rs::SHIFT_JIS.decode(&std::fs::read(dir.join("b.log.bak")).unwrap()).0, "名前=foo\r\nfoo 太郎\r\n");
         assert!(!dir.join("c.log.bak").exists());
         // 正規表現のキャプチャ
-        let opts = SearchOptions { case_sensitive: true, regex: true };
+        let opts = SearchOptions { case_sensitive: true, regex: true, whole_word: false };
         let r = grep_replace(std::slice::from_ref(&a), r"(\S+)=(\d)", opts, "$2:$1", false, &prog);
         assert_eq!((r.replaced, r.backups), (1, 0));
         assert_eq!(std::fs::read_to_string(&a).unwrap(), "1:花子\nbar 花子\n");
