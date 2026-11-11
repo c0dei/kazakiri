@@ -7,7 +7,7 @@ EmEditor の「大きいファイルが速い」体験を、買い切り不要�
 
 ![Wine 上での動作画面（1GB の Shift_JIS CSV、1,500万行目付近で検索）](docs/screenshot-wine.png)
 
-## いまできること（v0.7）
+## いまできること（v0.8）
 
 ### タブ（複数ファイル）
 - 複数のファイルをタブで開く。Ctrl+O・ドラッグ&ドロップ（複数可）・コマンドライン引数（複数可）・GREP の結果からは新しいタブで開く
@@ -86,6 +86,13 @@ GitHub Actions が Windows 用の実行ファイルを自動でビルドして�
 - 最新の開発版：[Actions](https://github.com/c0dei/kazakiri/actions/workflows/ci.yml) で main の一番新しい成功した実行を開き、
   下の「Artifacts」から `kazakiri-windows-x64` をダウンロード（GitHub へのログインが必要）
 - リリース版：`v` で始まるタグ（例：`v0.3.0`）を push すると [Releases](https://github.com/c0dei/kazakiri/releases) に zip が付く
+
+### セキュリティソフトについて
+
+exe にはアイコン・バージョン情報・マニフェスト（管理者権限は要求しない）を埋め込んである。
+コードは署名していないため、企業のセキュリティソフト（Defender、CrowdStrike Falcon など）では
+「未署名で出回りの少ない exe」として警告されることがある。その場合は配布元の SHA256 を確認したうえで、
+管理者にハッシュを許可リストへ登録してもらう。プロセス注入・フック・外部通信・レジストリ書き込みなどは使っていない。
 
 ## ビルド
 
