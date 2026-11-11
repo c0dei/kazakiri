@@ -145,7 +145,7 @@ impl App {
     pub(super) fn find_all(&mut self) {
         let Some(doc) = self.doc.clone() else { return };
         if self.last_find.is_empty() {
-            self.start_prompt(Prompt::Find);
+            self.want_dialog = Some(0);
             return;
         }
         let query = match Query::new(&doc, &self.last_find, self.opts) {
@@ -636,7 +636,11 @@ impl App {
                 self.message = "GREP の結果が打ち切られているので置換できません。条件やファイルを絞って、もう一度 GREP してください".into();
                 self.invalidate();
             }
-            Some(ResultKind::Grep { .. }) => self.start_prompt(Prompt::GrepReplaceWith),
+            Some(ResultKind::Grep { .. }) => {
+                // 置換後の文字列を入れて「結果を置換」を押す（GREP タブ）
+                self.message = "GREP タブで置換後の文字列を入れて、「結果を置換」を押してください".into();
+                self.want_dialog = Some(2);
+            }
             _ => {
                 self.message = "GREP の結果がありません。先に GREP（Ctrl+Shift+F）をしてください".into();
                 self.invalidate();
