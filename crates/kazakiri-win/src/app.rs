@@ -38,6 +38,7 @@ mod edit;
 mod results;
 mod tabs;
 mod rect;
+mod dark;
 use csv_view::{CsvView, Disp, Effect, SortDone, WM_SORT_DONE};
 use crate::settings::{self, Settings};
 use theme::Theme;
@@ -523,6 +524,23 @@ impl App {
                     (DONE, None)
                 }
                 WM_ERASEBKGND => (Some(LRESULT(1)), None),
+                // ダークテーマのメニューバー（非公開メッセージ。dark.rs を参照）
+                dark::WM_UAHDRAWMENU if self.settings.dark => {
+                    if dark::draw_menu_bar(self.hwnd, lparam, self.theme) {
+                        (Some(LRESULT(1)), None)
+                    } else {
+                        (None, None)
+                    }
+                }
+                dark::WM_UAHDRAWMENUITEM if self.settings.dark => {
+                    dark::draw_menu_item(lparam, self.theme);
+                    (Some(LRESULT(1)), None)
+                }
+                WM_NCPAINT | WM_NCACTIVATE if self.settings.dark => {
+                    let r = DefWindowProcW(self.hwnd, msg, wparam, lparam);
+                    dark::paint_bar_line(self.hwnd, self.theme);
+                    (Some(r), None)
+                }
                 WM_SIZE => {
                     if let Some(g) = &self.gfx {
                         let (w, h) = (loword(lparam.0 as usize), hiword(lparam.0 as usize));
