@@ -418,7 +418,7 @@ impl App {
         }
         let scale = unsafe { GetDpiForWindow(self.hwnd) } as f32 / 96.0;
         let x = (self.text_left() + self.x_of_offset(&doc, c)) * scale;
-        let y = (self.tab_h() + (line - self.top) as f32 * self.line_h) * scale;
+        let y = (self.tab_h() + self.pin_h() + (line - self.top) as f32 * self.line_h) * scale;
         let pt = POINT { x: x as i32, y: y as i32 };
         unsafe {
             let himc = ImmGetContext(self.hwnd);

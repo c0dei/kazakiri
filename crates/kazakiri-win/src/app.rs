@@ -738,6 +738,11 @@ impl App {
                         self.tab_drag_start(x);
                         return (DONE, d);
                     }
+                    // 固定した見出し行
+                    if y < self.pin_h() {
+                        return (DONE, None);
+                    }
+                    let y = y - self.pin_h();
                     if self.in_panel(y) {
                         return (DONE, self.panel_click(y));
                     }
@@ -759,6 +764,10 @@ impl App {
                         self.tab_double_click(x);
                         return (DONE, None);
                     }
+                    if y < self.pin_h() {
+                        return (DONE, None);
+                    }
+                    let y = y - self.pin_h();
                     if self.in_panel(y) {
                         return (DONE, self.panel_click(y));
                     }
@@ -777,7 +786,7 @@ impl App {
                 }
                 WM_MOUSEMOVE if self.dragging => {
                     let (x, y) = self.mouse_pos(lparam);
-                    self.on_drag(x, y);
+                    self.on_drag(x, y - self.pin_h());
                     (DONE, None)
                 }
                 WM_LBUTTONUP if self.dragging => {
@@ -1602,7 +1611,27 @@ impl App {
     }
 
     fn text_height(&self) -> f32 {
-        self.client_size().1 - self.status_h() - self.panel_h()
+        self.client_size().1 - self.status_h() - self.panel_h() - self.pin_h()
+    }
+
+    /// 見出し行を上に固定して表示するか（CSV モードで「1 行目は見出し」のとき）
+    fn pinned(&self) -> bool {
+        self.csv.as_ref().is_some_and(|v| v.header) && self.total_lines() > 1
+    }
+
+    /// 固定した見出し行の高さ（固定しないときは 0）
+    fn pin_h(&self) -> f32 {
+        if self.pinned() { self.line_h } else { 0.0 }
+    }
+
+    /// 本文の先頭にできる行（見出し行を固定していれば 1 行目は固定領域に出るので 2 行目から）
+    fn min_top(&self) -> u64 {
+        u64::from(self.pinned())
+    }
+
+    fn clamp_top(&mut self) {
+        let min = self.min_top();
+        self.top = self.top.clamp(min, self.max_top().max(min));
     }
 
     fn gutter_width(&self) -> f32 {
@@ -1632,7 +1661,8 @@ impl App {
     }
 
     fn scroll_to(&mut self, line: u64) {
-        self.top = line.min(self.max_top());
+        self.top = line;
+        self.clamp_top();
         self.update_scrollbars();
         self.invalidate();
     }
@@ -1716,6 +1746,7 @@ impl App {
     unsafe fn paint(&mut self) -> Result<()> {
         unsafe {
             self.ensure_gfx()?;
+            self.clamp_top();
             let (w, h) = self.client_size();
             let g = self.gfx.as_ref().unwrap();
             let rt: ID2D1RenderTarget = g.target.cast()?;
@@ -1726,6 +1757,12 @@ impl App {
             // タブバーを描き、それより下は丸ごと下へずらして描く
             self.draw_tabs(&rt, brush, w)?;
             rt.SetTransform(&Matrix3x2::translation(0.0, self.tab_h()));
+            let pin = self.pin_h();
+            if pin > 0.0 {
+                self.draw_pinned_header(&rt, brush, w)?;
+            }
+            // 本文は固定した見出し行の下から
+            rt.SetTransform(&Matrix3x2::translation(0.0, self.tab_h() + pin));
 
             let text_h = self.text_height();
             let digits = group(self.total_lines()).len().max(4);
@@ -1789,7 +1826,9 @@ impl App {
                 self.draw_str(&rt, brush, "索引作成中…", gutter + 8.0, 0.0, w)?;
             }
 
-            self.draw_panel(&rt, brush, w, text_h)?;
+            // 結果一覧とステータスバーは、見出し行の分を含めた位置に描く
+            rt.SetTransform(&Matrix3x2::translation(0.0, self.tab_h()));
+            self.draw_panel(&rt, brush, w, text_h + pin)?;
             self.draw_status(&rt, brush, w, h)?;
             rt.SetTransform(&Matrix3x2::identity());
             rt.EndDraw(None, None)
