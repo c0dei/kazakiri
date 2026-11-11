@@ -701,7 +701,7 @@ impl App {
         self.invalidate();
     }
 
-    /// GREP のフォルダの初期値：前回の値 → いまのファイルのフォルダ → 作業フォルダ
+    /// GREP のフォルダの初期値：前回の値 → いまのファイルのフォルダ → 空（起動時の作業フォルダは意味がないので使わない）
     pub(super) fn default_grep_folder(&self) -> String {
         if !self.grep_folder.is_empty() {
             return self.grep_folder.clone();
@@ -709,7 +709,6 @@ impl App {
         self.doc
             .as_ref()
             .and_then(|d| d.path().and_then(|p| p.parent()).map(|p| p.display().to_string()))
-            .or_else(|| std::env::current_dir().ok().map(|p| p.display().to_string()))
             .unwrap_or_default()
     }
 }
