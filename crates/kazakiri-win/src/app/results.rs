@@ -89,7 +89,7 @@ pub(super) enum JobDone {
     FilterFailed { id: u64, message: String },
     GrepReplace { id: u64, report: grep::ReplaceReport, skipped: usize, elapsed: Duration },
     /// 分割・結合の結果（成功なら完了のメッセージ）
-    FileOp { id: u64, result: std::result::Result<String, String> },
+    FileOp { id: u64, result: std::result::Result<String, String>, open: Option<PathBuf> },
     Grep { id: u64, query: String, root: PathBuf, res: std::result::Result<GrepResult, String>, elapsed: Duration },
 }
 
@@ -258,7 +258,7 @@ impl App {
                 let dir = path.parent().map(|p| p.display().to_string()).unwrap_or_default();
                 format!("{} 個に分割しました（{} / {}）", parts.len(), dir, parts.first().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default())
             });
-            post(hwnd, WM_RESULTS_DONE, JobDone::FileOp { id, result });
+            post(hwnd, WM_RESULTS_DONE, JobDone::FileOp { id, result, open: None });
         });
         unsafe {
             SetTimer(Some(self.hwnd), TIMER_SEARCH, 100, None);
@@ -285,7 +285,7 @@ impl App {
             let result = kazakiri_core::split::join_files(&paths, &out, &done, &ctl)
                 .map(|n| format!("{count} 個のファイルを結合しました（{}）→ {}", human_size(n), out.display()))
                 .map_err(|e| e.to_string());
-            post(hwnd, WM_RESULTS_DONE, JobDone::FileOp { id, result });
+            post(hwnd, WM_RESULTS_DONE, JobDone::FileOp { id, result, open: None });
         });
         unsafe {
             SetTimer(Some(self.hwnd), TIMER_SEARCH, 100, None);
@@ -357,7 +357,16 @@ impl App {
             }
             JobDone::Replace { found, elapsed, .. } => self.apply_replace_all(found, elapsed),
             JobDone::FilterFailed { message, .. } => self.message = message,
-            JobDone::FileOp { result, .. } => self.message = result.unwrap_or_else(|e| e),
+            JobDone::FileOp { result, open, .. } => {
+                let ok = result.is_ok();
+                self.message = result.unwrap_or_else(|e| e);
+                // できたファイルを新しいタブで開く
+                if let (true, Some(p)) = (ok, open) {
+                    let msg = std::mem::take(&mut self.message);
+                    self.open(p, None);
+                    self.message = msg;
+                }
+            }
             JobDone::GrepReplace { report, skipped, elapsed, .. } => {
                 let mut notes = Vec::new();
                 if report.cancelled {
