@@ -184,6 +184,42 @@ impl App {
         self.invalidate();
     }
 
+    /// 結果の一覧を、新しいタブ（無題）に文字列として出す。保存や加工がしやすい
+    pub(super) fn results_to_tab(&mut self) {
+        let Some(r) = &self.results else {
+            self.message = "結果の一覧がありません".into();
+            return self.invalidate();
+        };
+        let mut out = String::new();
+        match &r.kind {
+            ResultKind::InDoc { ranges } => {
+                let Some(doc) = self.doc.clone() else { return };
+                for &(s, _) in ranges {
+                    if let Some(l) = doc.line_of_offset(s) {
+                        let text = doc.lines(l, 1).into_iter().next().map(|x| x.text).unwrap_or_default();
+                        out.push_str(&format!("{}: {}\n", l + 1, text));
+                    }
+                }
+            }
+            ResultKind::Grep { root, res } => {
+                for h in &res.hits {
+                    let path = &res.files[h.file];
+                    let rel = path.strip_prefix(root).unwrap_or(path);
+                    out.push_str(&format!("{}({}): {}\n", rel.display(), h.line + 1, h.text));
+                }
+            }
+        }
+        let count = out.lines().count();
+        self.new_tab();
+        let nl = self.newline_str();
+        let text = if nl == "\n" { out } else { out.replace('\n', nl) };
+        self.type_text(&text, EditKind::Other);
+        self.sel = Some((0, 0));
+        self.top = 0;
+        self.message = format!("結果 {} 件を新しいタブに出しました（保存は Ctrl+S）", group(count as u64));
+        self.invalidate();
+    }
+
     /// CSV の列フィルタ：条件に合う行を一覧にする
     pub(super) fn start_filter(&mut self) {
         let Some(doc) = self.doc.clone() else { return };
@@ -412,6 +448,24 @@ impl App {
 
     // ---- 描画 ----
 
+    /// 行の文字列の中の、UTF-16 の範囲 [a, b) に背景を付ける（一致の強調）
+    unsafe fn highlight_units(&self, rt: &ID2D1RenderTarget, brush: &ID2D1SolidColorBrush, text: &str, a: usize, b: usize, x0: f32, y: f32, right: f32) -> Result<()> {
+        let units: Vec<u16> = text.encode_utf16().collect();
+        let (a, b) = (a.min(units.len()), b.min(units.len()));
+        if b <= a {
+            return Ok(());
+        }
+        unsafe {
+            let xa = x0 + self.text_width(&units[..a])?;
+            let xb = (x0 + self.text_width(&units[..b])?).min(right);
+            if xb > xa {
+                brush.SetColor(&self.theme.matched);
+                rt.FillRectangle(&rect(xa, y, xb, y + self.line_h), brush);
+            }
+        }
+        Ok(())
+    }
+
     pub(super) unsafe fn draw_panel(&self, rt: &ID2D1RenderTarget, brush: &ID2D1SolidColorBrush, w: f32, top: f32) -> Result<()> {
         let h = self.panel_h();
         if h <= 0.0 {
@@ -443,15 +497,23 @@ impl App {
                 }
                 match &r.kind {
                     ResultKind::InDoc { ranges } => {
-                        let (s, _) = ranges[i];
-                        let (num, text) = match doc.and_then(|d| d.line_of_offset(s).map(|l| (d, l))) {
-                            Some((d, l)) => (group(l + 1), d.lines(l, 1).into_iter().next().map(|x| x.text).unwrap_or_default()),
-                            None => ("?".into(), String::new()),
+                        let (s, e) = ranges[i];
+                        let (num, line) = match doc.and_then(|d| d.line_of_offset(s).map(|l| (d, l))) {
+                            Some((d, l)) => (group(l + 1), d.lines(l, 1).into_iter().next()),
+                            None => ("?".into(), None),
                         };
+                        let text: String = line.as_ref().map(|x| x.text.chars().take(400).collect()).unwrap_or_default();
+                        // 一致の強調（行全体が範囲のとき＝列フィルタの結果は強調しない）
+                        if let (Some(d), Some(l)) = (doc, &line) {
+                            if !(s <= l.start && e >= l.end) {
+                                let a = d.decode(&d.read(l.start, s.max(l.start))).encode_utf16().count();
+                                let len = d.decode(&d.read(s.max(l.start), e.min(l.end))).encode_utf16().count();
+                                self.highlight_units(rt, brush, &text, a, a + len, self.char_w * 15.0, y, w - 4.0)?;
+                            }
+                        }
                         brush.SetColor(&self.theme.gutter_text);
                         self.draw_str(rt, brush, &format!("{num:>12}"), 4.0, y, self.char_w * 14.0)?;
                         brush.SetColor(&self.theme.text);
-                        let text: String = text.chars().take(400).collect();
                         self.draw_str(rt, brush, &text, self.char_w * 15.0, y, w - 4.0)?;
                     }
                     ResultKind::Grep { root, res } => {
@@ -462,8 +524,10 @@ impl App {
                         brush.SetColor(&self.theme.panel_file);
                         let lw = self.text_width(&loc.encode_utf16().collect::<Vec<_>>())?.min(w * 0.45);
                         self.draw_str(rt, brush, &loc, 8.0, y, 8.0 + lw)?;
+                        let shown = format!(": {}", hit.text);
+                        self.highlight_units(rt, brush, &shown, hit.col + 2, hit.col + 2 + hit.col_len, 8.0 + lw, y, w - 4.0)?;
                         brush.SetColor(&self.theme.text);
-                        self.draw_str(rt, brush, &format!(": {}", hit.text), 8.0 + lw, y, w - 4.0)?;
+                        self.draw_str(rt, brush, &shown, 8.0 + lw, y, w - 4.0)?;
                     }
                 }
             }

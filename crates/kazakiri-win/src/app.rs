@@ -1093,6 +1093,7 @@ impl App {
             menu::ID_REPLACE => return Some(Deferred::ShowFind(1)),
             menu::ID_FIND_ALL => self.find_all(),
             menu::ID_GREP_REPLACE => self.start_grep_replace(),
+            menu::ID_RESULTS_TAB => self.results_to_tab(),
             menu::ID_GREP_BACKUP => {
                 self.settings.grep_backup = !self.settings.grep_backup;
                 self.settings.save();

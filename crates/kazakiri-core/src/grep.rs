@@ -39,6 +39,9 @@ pub struct GrepHit {
     pub end: u64,
     /// その行の文字列（長ければ切り詰める）
     pub text: String,
+    /// 一致の位置（`text` の中の UTF-16 の位置と長さ。切り詰めた分は含めない）
+    pub col: usize,
+    pub col_len: usize,
 }
 
 #[derive(Debug, Default)]
@@ -205,7 +208,10 @@ fn grep_file(path: &Path, file: usize, pattern: &str, opts: &GrepOptions, prog: 
             continue;
         }
         last_line = Some(line);
-        hits.push(GrepHit { file, line, start: s, end: e, text: line_text(&doc, s) });
+        let ls = doc.line_start_at_or_before(s);
+        let col = doc.decode(&doc.read(ls, s)).encode_utf16().count();
+        let col_len = doc.decode(&doc.read(s, e.min(ls + 4096))).encode_utf16().count();
+        hits.push(GrepHit { file, line, start: s, end: e, text: line_text(&doc, s), col, col_len });
     }
     prog.hits.fetch_add(hits.len(), Ordering::Relaxed);
     Ok(hits)

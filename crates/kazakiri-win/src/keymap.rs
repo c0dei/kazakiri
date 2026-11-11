@@ -38,6 +38,7 @@ const COMMANDS: &[(&str, u32)] = &[
     ("next_result", ID_NEXT_RESULT),
     ("prev_result", ID_PREV_RESULT),
     ("close_results", ID_CLOSE_RESULTS),
+    ("results_to_tab", ID_RESULTS_TAB),
     ("case", ID_CASE),
     ("regex", ID_REGEX),
     ("goto", ID_GOTO),
