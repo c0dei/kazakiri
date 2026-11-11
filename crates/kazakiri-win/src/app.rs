@@ -29,7 +29,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 use windows_numerics::{Matrix3x2, Vector2};
 
 use crate::menu::{self, Menus};
-use crate::{clipboard, recent};
+use crate::{clipboard, keymap, recent};
 
 mod csv_view;
 mod theme;
@@ -132,6 +132,7 @@ struct App {
     format: IDWriteTextFormat,
     gfx: Option<Gfx>,
     menus: Menus,
+    keymap: keymap::Keymap,
     line_h: f32,
     char_w: f32,
     /// いま表示している Document（編集のたびに editor から取り直す）
@@ -219,7 +220,8 @@ unsafe fn run_inner() -> std::result::Result<(), (&'static str, windows::core::E
         };
         RegisterClassW(&wc);
 
-        let menus = menu::build().map_err(|e| ("CreateMenu", e))?;
+        let keymap = keymap::Keymap::load();
+        let menus = menu::build(&keymap).map_err(|e| ("CreateMenu", e))?;
         let hwnd = CreateWindowExW(
             WS_EX_ACCEPTFILES,
             class,
@@ -252,6 +254,7 @@ unsafe fn run_inner() -> std::result::Result<(), (&'static str, windows::core::E
             format,
             gfx: None,
             menus,
+            keymap,
             line_h,
             char_w,
             doc: None,
@@ -302,6 +305,9 @@ unsafe fn run_inner() -> std::result::Result<(), (&'static str, windows::core::E
         }
         for arg in args {
             app.open(PathBuf::from(arg), None);
+        }
+        if let Some(first) = app.keymap.problems.first() {
+            app.message = format!("keys.ini: {first}（ほか {} 件）", app.keymap.problems.len() - 1);
         }
         app.apply_title_theme();
         APP.with(|a| *a.borrow_mut() = Some(app));
@@ -910,6 +916,7 @@ impl App {
 
     unsafe fn command(&mut self, id: u32) -> Option<Deferred> {
         match id {
+            menu::ID_KEYS => self.edit_keys(),
             menu::ID_NEW => self.new_tab(),
             menu::ID_CLOSE_TAB => return self.guarded(Pending::CloseTab),
             menu::ID_NEXT_TAB => self.cycle_tab(true),
@@ -1000,10 +1007,11 @@ impl App {
     unsafe fn on_key(&mut self, vk: VIRTUAL_KEY) -> Option<Deferred> {
         let ctrl = unsafe { GetKeyState(VK_CONTROL.0 as i32) } < 0;
         let shift = unsafe { GetKeyState(VK_SHIFT.0 as i32) } < 0;
-        // Ctrl+Tab / Ctrl+Shift+Tab：タブの切り替え（入力欄が開いていても効く）
-        if ctrl && vk == VK_TAB {
-            self.cycle_tab(!shift);
-            return None;
+        // キー割り当て（keys.ini）。入力欄が開いているときはタブの切り替えだけ効く
+        if let Some(id) = self.keymap.lookup(ctrl, shift, vk.0) {
+            if self.prompt.is_none() || matches!(id, menu::ID_NEXT_TAB | menu::ID_PREV_TAB) {
+                return unsafe { self.command(id) };
+            }
         }
         if self.prompt.is_some() {
             match vk {
@@ -1067,37 +1075,8 @@ impl App {
             // 編集
             VK_RETURN => self.insert_newline(),
             VK_BACK => self.delete_char(false),
-            VK_DELETE if shift => self.cut(),
             VK_DELETE => self.delete_char(true),
             VK_TAB if !ctrl => self.type_text("\t", EditKind::Typing),
-            VK_INSERT if ctrl => self.copy(),
-            VK_INSERT if shift => self.paste(),
-            VK_F8 => return self.next_result(!shift),
-            VK_F3 if shift => return unsafe { self.command(menu::ID_FIND_PREV) },
-            VK_F3 => return unsafe { self.command(menu::ID_FIND_NEXT) },
-            VK_F5 => return unsafe { self.command(menu::ID_RELOAD) },
-            _ if ctrl && shift && vk == VK_S => return Some(Deferred::SaveAs),
-            _ if ctrl && shift && vk == VK_F => self.start_prompt(Prompt::GrepQuery),
-            _ if ctrl && shift && vk == VK_C => self.toggle_csv(),
-            _ if ctrl && shift && vk == VK_W => self.toggle_whitespace(),
-            _ if ctrl && vk == VK_W => return self.guarded(Pending::CloseTab),
-            _ if ctrl && matches!(vk, VK_OEM_PLUS | VK_ADD) => self.zoom(1.0),
-            _ if ctrl && matches!(vk, VK_OEM_MINUS | VK_SUBTRACT) => self.zoom(-1.0),
-            _ if ctrl && matches!(vk, VK_0 | VK_NUMPAD0) => self.zoom(0.0),
-            _ if ctrl && vk == VK_H => self.start_prompt(Prompt::ReplaceFind),
-            _ if ctrl && shift && vk == VK_Z => self.undo(true),
-            _ if ctrl && vk == VK_N => return unsafe { self.command(menu::ID_NEW) },
-            _ if ctrl && vk == VK_O => return unsafe { self.command(menu::ID_OPEN) },
-            _ if ctrl && vk == VK_S => return unsafe { self.command(menu::ID_SAVE) },
-            _ if ctrl && vk == VK_Z => self.undo(false),
-            _ if ctrl && vk == VK_Y => self.undo(true),
-            _ if ctrl && vk == VK_X => self.cut(),
-            _ if ctrl && vk == VK_V => self.paste(),
-            _ if ctrl && vk == VK_F => self.start_prompt(Prompt::Find),
-            _ if ctrl && vk == VK_G => self.start_prompt(Prompt::GotoLine),
-            _ if ctrl && vk == VK_C => self.copy(),
-            _ if ctrl && vk == VK_A => return unsafe { self.command(menu::ID_SELECT_ALL) },
-            _ if ctrl && vk == VK_T => return unsafe { self.command(menu::ID_FOLLOW) },
             _ => {}
         }
         None
