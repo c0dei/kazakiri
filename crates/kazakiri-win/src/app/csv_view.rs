@@ -344,14 +344,42 @@ impl App {
             v.header = !v.header;
             self.message = format!("1 行目を見出しとして扱う: {}", on_off(v.header));
         }
+        self.clamp_top();
+        self.update_scrollbars();
         self.invalidate();
     }
 
     fn after_view_change(&mut self) {
         self.layout_cache.borrow_mut().clear();
         self.x_off = 0.0;
+        self.clamp_top();
         self.update_scrollbars();
         self.invalidate();
+    }
+
+    /// 固定した見出し行（1 行目）を、本文の上に描く
+    pub(super) unsafe fn draw_pinned_header(&self, rt: &ID2D1RenderTarget, brush: &ID2D1SolidColorBrush, w: f32) -> Result<()> {
+        let Some(doc) = &self.doc else { return Ok(()) };
+        let Some(line) = doc.lines(0, 1).into_iter().next() else { return Ok(()) };
+        let gutter = self.gutter_width();
+        unsafe {
+            brush.SetColor(&self.theme.panel_head);
+            rt.FillRectangle(&rect(0.0, 0.0, w, self.line_h), brush);
+            brush.SetColor(&self.theme.gutter_bg);
+            rt.FillRectangle(&rect(0.0, 0.0, gutter, self.line_h), brush);
+            brush.SetColor(&self.theme.gutter_text);
+            self.draw_str(rt, brush, "1", self.char_w * 0.5, 0.0, gutter)?;
+            // 本文の下との境目
+            brush.SetColor(&self.theme.dim);
+            rt.FillRectangle(&rect(gutter, self.line_h - 1.0, w, self.line_h), brush);
+            rt.PushAxisAlignedClip(&rect(gutter, 0.0, w, self.line_h), D2D1_ANTIALIAS_MODE_ALIASED);
+            let disp = self.display(&line);
+            let layout = self.dw.CreateTextLayout(&disp.units, &self.format, 1.0e6, self.line_h)?;
+            let entry = CachedLine { end: line.end, generation: 0, layout, disp };
+            self.draw_line(rt, brush, &line, &entry, self.text_left(), 0.0)?;
+            rt.PopAxisAlignedClip();
+        }
+        Ok(())
     }
 
     /// 描く前に、見える行で列の幅を決める
