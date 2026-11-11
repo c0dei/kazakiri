@@ -341,6 +341,79 @@ impl App {
         }
     }
 
+    /// タブを押した：ドラッグで並べ替えを始める（閉じるボタンの上は除く）
+    pub(super) fn tab_drag_start(&mut self, x: f32) {
+        if let Some((i, false)) = self.tab_at(x) {
+            self.tab_drag = Some((i, false));
+            unsafe {
+                SetCapture(self.hwnd);
+            }
+        }
+    }
+
+    /// ドラッグ中のタブを、マウスの下にあるタブの位置へ動かす
+    pub(super) fn tab_drag_move(&mut self, x: f32) {
+        let Some((from, _)) = self.tab_drag else { return };
+        // 端にいるときは、はみ出した分だけ近いタブに合わせる
+        let total = self.tab_boxes().last().map_or(0.0, |b| b.x1);
+        let probe = (x + self.tab_scroll).clamp(0.0, (total - 1.0).max(0.0)) - self.tab_scroll;
+        let Some((to, _)) = self.tab_at(probe) else { return };
+        if to == from {
+            return;
+        }
+        // 表示中のタブの状態は App 側にあり、tabs[active] は空の入れ物なので、並べ替えは番号だけでよい
+        let t = self.tabs.remove(from);
+        self.tabs.insert(to, t);
+        self.active = if self.active == from {
+            to
+        } else if from < self.active && to >= self.active {
+            self.active - 1
+        } else if from > self.active && to <= self.active {
+            self.active + 1
+        } else {
+            self.active
+        };
+        self.tab_drag = Some((to, true));
+        self.invalidate();
+    }
+
+    /// 開いているファイルを覚えておく（終了時）
+    pub(super) fn save_session(&self) {
+        let mut paths = Vec::new();
+        let mut active = 0;
+        for i in 0..self.tabs.len() {
+            let doc = if i == self.active { self.doc.as_ref() } else { self.tabs[i].doc.as_ref() };
+            if let Some(p) = doc.and_then(|d| d.path()) {
+                if i == self.active {
+                    active = paths.len();
+                }
+                paths.push(p.to_path_buf());
+            }
+        }
+        crate::session::save(&paths, active);
+    }
+
+    /// 前回開いていたファイルを開く
+    pub(super) fn restore_session(&mut self) {
+        let (paths, active) = crate::session::load();
+        let mut opened = 0;
+        let mut target = None;
+        for (i, p) in paths.into_iter().enumerate() {
+            if !p.is_file() {
+                continue;
+            }
+            if i == active {
+                target = Some(opened);
+            }
+            self.open(p, None);
+            opened += 1;
+        }
+        if let Some(t) = target {
+            self.switch_to(t);
+        }
+        self.message.clear();
+    }
+
     /// タブバーの何もない所をダブルクリックしたら新しいタブ
     pub(super) fn tab_double_click(&mut self, x: f32) {
         if self.tab_at(x).is_none() {

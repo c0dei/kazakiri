@@ -181,6 +181,8 @@ struct App {
     rect: Option<rect::RectSel>,
     /// Alt を矩形選択に使った（離したときにメニューを開かない）
     alt_used: bool,
+    /// ドラッグで並べ替え中のタブ（番号, 動かしたか）
+    tab_drag: Option<(usize, bool)>,
     message: String,
     opened_at: Option<Instant>,
     recent: Vec<PathBuf>,
@@ -284,6 +286,7 @@ unsafe fn run_inner() -> std::result::Result<(), (&'static str, windows::core::E
             dragging: false,
             rect: None,
             alt_used: false,
+            tab_drag: None,
             message: "Ctrl+O: 開く / Ctrl+N: 新規 / ドラッグ&ドロップでも開けます".into(),
             opened_at: None,
             recent: recent::load(),
@@ -293,7 +296,11 @@ unsafe fn run_inner() -> std::result::Result<(), (&'static str, windows::core::E
         };
         // 引数のファイルをそれぞれタブで開く
         app.new_doc();
-        for arg in std::env::args_os().skip(1) {
+        let args: Vec<_> = std::env::args_os().skip(1).collect();
+        if args.is_empty() {
+            app.restore_session();
+        }
+        for arg in args {
             app.open(PathBuf::from(arg), None);
         }
         app.apply_title_theme();
@@ -670,7 +677,9 @@ impl App {
                 WM_LBUTTONDOWN => {
                     let (x, y) = self.mouse_pos(lparam);
                     if y < 0.0 {
-                        return (DONE, self.tab_click(x, false));
+                        let d = self.tab_click(x, false);
+                        self.tab_drag_start(x);
+                        return (DONE, d);
                     }
                     if self.in_panel(y) {
                         return (DONE, self.panel_click(y));
@@ -697,6 +706,16 @@ impl App {
                         return (DONE, self.panel_click(y));
                     }
                     self.select_word_at(x, y);
+                    (DONE, None)
+                }
+                WM_MOUSEMOVE if self.tab_drag.is_some() => {
+                    let (x, _) = self.mouse_pos(lparam);
+                    self.tab_drag_move(x);
+                    (DONE, None)
+                }
+                WM_LBUTTONUP if self.tab_drag.is_some() => {
+                    self.tab_drag = None;
+                    let _ = ReleaseCapture();
                     (DONE, None)
                 }
                 WM_MOUSEMOVE if self.dragging => {
@@ -766,6 +785,7 @@ impl App {
                     (DONE, None)
                 }
                 WM_DESTROY => {
+                    self.save_session();
                     self.cancel_search();
                     PostQuitMessage(0);
                     (DONE, None)
