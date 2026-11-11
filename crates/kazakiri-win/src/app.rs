@@ -58,6 +58,8 @@ const COPY_LIMIT: u64 = 256 << 20;
 const TIMER_INDEX: usize = 1;
 const TIMER_SEARCH: usize = 2;
 const TIMER_FOLLOW: usize = 3;
+/// 長い行の横スクロールで取り出す窓の大きさの上限（バイト）。描画の上限（8192 UTF-16 単位）に収まる大きさ
+const LONG_LINE_WINDOW: usize = 8000;
 /// 検索スレッドからの完了通知
 const WM_SEARCH_DONE: u32 = WM_APP + 1;
 
@@ -794,8 +796,9 @@ impl App {
                     match code {
                         SB_LINELEFT => self.hscroll_by(-self.char_w * 4.0),
                         SB_LINERIGHT => self.hscroll_by(self.char_w * 4.0),
-                        SB_PAGELEFT => self.hscroll_by(-self.char_w * 40.0),
-                        SB_PAGERIGHT => self.hscroll_by(self.char_w * 40.0),
+                        // 1 ページ = 画面の幅（長い行を、画面の幅ずつ読み進められる）
+                        SB_PAGELEFT => self.hscroll_by(-(self.client_size().0 - self.gutter_width()).max(self.char_w * 40.0)),
+                        SB_PAGERIGHT => self.hscroll_by((self.client_size().0 - self.gutter_width()).max(self.char_w * 40.0)),
                         SB_THUMBTRACK | SB_THUMBPOSITION => {
                             let mut si = SCROLLINFO { cbSize: size_of::<SCROLLINFO>() as u32, fMask: SIF_TRACKPOS, ..Default::default() };
                             let _ = GetScrollInfo(self.hwnd, SB_HORZ, &mut si);
@@ -1566,7 +1569,7 @@ impl App {
             return;
         }
         let line_no = self.line_at_y(&doc, y);
-        let Some(line) = doc.lines(line_no, 1).into_iter().next() else { return };
+        let Some(line) = self.lines_view(&doc, line_no, 1).into_iter().next() else { return };
         let Some(off) = self.offset_at(&doc, x, y) else { return };
         let chars: Vec<char> = line.text.chars().collect();
         let prefix_chars = doc.decode(&doc.read(line.start, off)).chars().count();
@@ -1593,17 +1596,41 @@ impl App {
         self.invalidate();
     }
 
+    /// 行を取り出す。横にスクロールしているとき、64KB を超える長い行は、その位置の窓（`Line::skipped` が 0 でない）にする
+    fn lines_view(&self, doc: &Document, first: u64, count: usize) -> Vec<Line> {
+        let mut v = doc.lines(first, count);
+        if !self.wrap_on() && self.csv.is_none() {
+            // 1 桁 ≒ 1 バイトとして、横の位置を行の中のバイト位置にする。窓は、画面の幅の 3 倍ほどのバイト数
+            let cols = (self.client_size().0 / self.char_w.max(1.0)) as usize;
+            let window = (cols * 3 + 64).clamp(256, LONG_LINE_WINDOW);
+            let from = (self.x_off / self.char_w.max(1.0)) as u64;
+            for l in &mut v {
+                if l.truncated {
+                    if let Some(w) = doc.line_window(l.number, from, window) {
+                        *l = w;
+                    }
+                }
+            }
+        }
+        v
+    }
+
+    /// 行頭の x 座標。長い行の窓は、横スクロール分をすでに窓の位置で消費している
+    fn line_x0(&self, line: &Line) -> f32 {
+        if line.skipped > 0 { self.gutter_width() + 4.0 } else { self.text_left() }
+    }
+
     /// 画面上の点に対応するバイト位置
     fn offset_at(&self, doc: &Document, x: f32, y: f32) -> Option<u64> {
         if self.wrap_on() {
             return self.offset_at_wrapped(doc, x, y);
         }
         let line_no = self.top + (y.max(0.0) / self.line_h) as u64;
-        let Some(line) = doc.lines(line_no, 1).into_iter().next() else {
+        let Some(line) = self.lines_view(doc, line_no, 1).into_iter().next() else {
             return doc.progress().done.then(|| doc.len());
         };
         let d = self.display(&line);
-        let tx = x - self.text_left();
+        let tx = x - self.line_x0(&line);
         let idx = unsafe { self.unit_at_x(&d.units[..d.shown], tx) }.unwrap_or(0).min(d.shown);
         Some(self.src_units_to_offset(doc, &line, d.to_src(idx)))
     }
@@ -1781,7 +1808,14 @@ impl App {
             nTrackPos: 0,
         };
         let (w, _) = self.client_size();
-        let hmax = (self.char_w * 2000.0).max(self.x_off + w);
+        // 長い行があれば、その長さまでスクロールできる（1 桁 ≒ 1 バイト）
+        let long_max = self.doc.as_ref().map_or(0.0, |d| {
+            (self.top..self.top + self.visible_lines() as u64 + 1)
+                .filter_map(|n| d.line_range(n))
+                .map(|(s, e)| (e - s) as f32 * self.char_w)
+                .fold(0.0f32, f32::max)
+        });
+        let hmax = (self.char_w * 2000.0).max(self.x_off + w).max(long_max).min(1.0e9);
         let h = SCROLLINFO {
             cbSize: size_of::<SCROLLINFO>() as u32,
             fMask: SIF_RANGE | SIF_PAGE | SIF_POS,
@@ -1864,7 +1898,7 @@ impl App {
             let gutter = self.gutter_width();
 
             let lines = match &self.doc {
-                Some(doc) => doc.lines(self.top, self.visible_lines() + 1),
+                Some(doc) => self.lines_view(doc, self.top, self.visible_lines() + 1),
                 None => Vec::new(),
             };
 
@@ -1926,7 +1960,7 @@ impl App {
                         self.fill_units(&rt, brush, &entry.layout, &entry.disp.units, a, b, self.text_left(), y, self.theme.column)?;
                     }
                 }
-                self.draw_line(&rt, brush, line, &entry, self.text_left(), y)?;
+                self.draw_line(&rt, brush, line, &entry, self.line_x0(line), y)?;
                 cache.insert(line.start, entry);
             }
             *self.layout_cache.borrow_mut() = cache;

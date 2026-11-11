@@ -547,7 +547,7 @@ mod tests {
     use super::*;
 
     fn line(text: &str) -> Line {
-        Line { number: 0, start: 0, end: text.len() as u64, text: text.into(), truncated: false }
+        Line { number: 0, start: 0, end: text.len() as u64, text: text.into(), truncated: false, skipped: 0 }
     }
 
     #[test]
