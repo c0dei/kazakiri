@@ -118,6 +118,155 @@ fn cmp_key(a: &Key, b: &Key) -> Ordering {
     }
 }
 
+/// 列フィルタの条件
+#[derive(Debug)]
+pub enum Cond {
+    /// 等しい
+    Eq(String),
+    /// 等しくない
+    Ne(String),
+    /// 含む
+    Contains(String),
+    /// 正規表現に一致
+    Regex(regex::Regex),
+    /// 数値として比較（数値でない値は一致しない）
+    Num(std::cmp::Ordering, bool, f64),
+    Empty,
+    NotEmpty,
+}
+
+/// 「3 = ERROR」のような、1 つの列に対する条件
+#[derive(Debug)]
+pub struct Filter {
+    /// 0 から数えた列
+    pub column: usize,
+    pub cond: Cond,
+    /// 文字列の比較で大文字と小文字を区別しない
+    pub ignore_case: bool,
+}
+
+impl Filter {
+    /// 書式（列は 1 から数える）:
+    /// `3 = 値`、`3 != 値`、`3 : 含む語`、`3 ~ 正規表現`、`3 >= 100`（`> < >= <=`）、`3 empty`、`3 !empty`
+    pub fn parse(text: &str, ignore_case: bool) -> Result<Filter, String> {
+        let t = text.trim();
+        let split = t.find(|c: char| !c.is_ascii_digit()).ok_or("「列 条件 値」の形で書いてください（例: 3 = ERROR）")?;
+        let column: usize = t[..split].parse().map_err(|_| "列の番号が読めません（例: 3 = ERROR）".to_string())?;
+        if column == 0 {
+            return Err("列は 1 から数えます".into());
+        }
+        let rest = t[split..].trim_start();
+        let (op, value) = ["!empty", "empty", ">=", "<=", "!=", "=", ":", "~", ">", "<"]
+            .iter()
+            .find_map(|op| rest.strip_prefix(op).map(|v| (*op, v.trim())))
+            .ok_or("条件は = != : ~ > < >= <= empty !empty のどれかです")?;
+        let cond = match op {
+            "empty" => Cond::Empty,
+            "!empty" => Cond::NotEmpty,
+            "=" => Cond::Eq(value.to_string()),
+            "!=" => Cond::Ne(value.to_string()),
+            ":" => Cond::Contains(value.to_string()),
+            "~" => {
+                let re = regex::RegexBuilder::new(value).case_insensitive(ignore_case).build().map_err(|e| format!("正規表現が正しくありません: {e}"))?;
+                Cond::Regex(re)
+            }
+            _ => {
+                let n: f64 = value.replace(',', "").parse().map_err(|_| format!("数値が読めません: {value}"))?;
+                match op {
+                    ">" => Cond::Num(Ordering::Greater, false, n),
+                    ">=" => Cond::Num(Ordering::Greater, true, n),
+                    "<" => Cond::Num(Ordering::Less, false, n),
+                    _ => Cond::Num(Ordering::Less, true, n),
+                }
+            }
+        };
+        if matches!(cond, Cond::Eq(_) | Cond::Ne(_) | Cond::Contains(_)) && value.is_empty() {
+            return Err("比較する値が空です（空の列を探すなら 「3 empty」）".into());
+        }
+        Ok(Filter { column: column - 1, cond, ignore_case })
+    }
+
+    fn matches_field(&self, field: &str) -> bool {
+        let v = unquote(field);
+        let v = v.trim();
+        let eq = |a: &str, b: &str| if self.ignore_case { a.to_lowercase() == b.to_lowercase() } else { a == b };
+        match &self.cond {
+            Cond::Eq(x) => eq(v, x),
+            Cond::Ne(x) => !eq(v, x),
+            Cond::Contains(x) => {
+                if self.ignore_case {
+                    v.to_lowercase().contains(&x.to_lowercase())
+                } else {
+                    v.contains(x.as_str())
+                }
+            }
+            Cond::Regex(re) => re.is_match(v),
+            Cond::Num(ord, or_equal, n) => match v.replace(',', "").parse::<f64>() {
+                Ok(x) if x.is_finite() => {
+                    let c = x.partial_cmp(n).unwrap_or(Ordering::Equal);
+                    c == *ord || (*or_equal && c == Ordering::Equal)
+                }
+                _ => false,
+            },
+            Cond::Empty => v.is_empty(),
+            Cond::NotEmpty => !v.is_empty(),
+        }
+    }
+
+    /// 1 行（改行を含まない）が条件に合うか。その列がない行は、空の列として扱う
+    pub fn matches_line(&self, line: &str, delim: char) -> bool {
+        let fields = split_fields(line, delim);
+        let field = fields.get(self.column).map_or("", |r| &line[r.clone()]);
+        self.matches_field(field)
+    }
+}
+
+/// 列フィルタに合う行を探す。戻り値の範囲は各行の [開始, 終了)（改行を含まない）。
+/// `header` なら 1 行目は対象にしない
+pub fn filter_lines(doc: &Document, delim: char, header: bool, f: &Filter, limit: usize, ctl: &SearchControl) -> Result<crate::search::FindAll, String> {
+    use std::sync::atomic::Ordering as AO;
+    let (count, exact) = doc.line_count();
+    if !exact {
+        return Err("索引の作成中は列フィルタを使えません".into());
+    }
+    const CHUNK: u64 = 20_000;
+    let chunks: Vec<(usize, usize)> = (0..count.div_ceil(CHUNK)).map(|i| ((i * CHUNK) as usize, ((i + 1) * CHUNK).min(count) as usize)).collect();
+    let mut out = crate::search::FindAll::default();
+    let total = std::sync::atomic::AtomicUsize::new(0);
+    for window in chunks.chunks(crate::search::threads()) {
+        if ctl.cancel.load(AO::Relaxed) {
+            out.cancelled = true;
+            break;
+        }
+        let parts = crate::search::run_parallel(window, |&(a, b)| {
+            if ctl.cancel.load(AO::Relaxed) || total.load(AO::Relaxed) > limit {
+                return None;
+            }
+            let mut hits = Vec::new();
+            for line in doc.lines(a as u64, b - a) {
+                if header && line.number == 0 {
+                    continue;
+                }
+                if f.matches_line(&line.text, delim) {
+                    hits.push((line.start, line.end));
+                }
+            }
+            total.fetch_add(hits.len(), AO::Relaxed);
+            ctl.scanned.fetch_add((b - a) as u64, AO::Relaxed);
+            Some(hits)
+        });
+        for part in parts.into_iter().flatten() {
+            out.ranges.extend(part);
+        }
+        if out.ranges.len() > limit {
+            out.ranges.truncate(limit);
+            out.truncated = true;
+            break;
+        }
+    }
+    Ok(out)
+}
+
 /// 列で並べ替えた内容（ファイルの文字コードのバイト列）を作る。
 /// 本文全体（BOM の後ろから末尾まで）をこれで置き換えれば並べ替えになる
 pub fn sort_document(doc: &Document, opts: SortOptions, ctl: &SearchControl) -> Result<Vec<u8>, String> {
@@ -212,6 +361,43 @@ mod tests {
             std::thread::yield_now();
         }
         d
+    }
+
+    #[test]
+    fn filter_parse_and_match() {
+        let f = Filter::parse("2 = bob", true).unwrap();
+        assert!(f.matches_line("1,BOB,3", ','));
+        assert!(!f.matches_line("1,bobby,3", ','));
+        let f = Filter::parse("3 >= 1,000", false).unwrap();
+        assert!(f.matches_line("a,b,\"1,500\"", ','));
+        assert!(!f.matches_line("a,b,999", ','));
+        assert!(!f.matches_line("a,b,x", ','));
+        let f = Filter::parse("2 : err", true).unwrap();
+        assert!(f.matches_line("1,An ERROR here,3", ','));
+        let f = Filter::parse("3 empty", false).unwrap();
+        assert!(f.matches_line("a,b", ',') && f.matches_line("a,b,", ',') && !f.matches_line("a,b,c", ','));
+        let f = Filter::parse("1 ~ ^\\d+$", false).unwrap();
+        assert!(f.matches_line("123,x", ',') && !f.matches_line("12a,x", ','));
+        let f = Filter::parse("2 != x", false).unwrap();
+        assert!(f.matches_line("1,y", ',') && !f.matches_line("1,x", ','));
+        for bad in ["", "abc", "0 = x", "2", "2 ?? x", "2 > abc", "2 = ", "2 ~ ("] {
+            assert!(Filter::parse(bad, false).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn filter_lines_over_document() {
+        let text: String = std::iter::once("id,name,score\r\n".to_string()).chain((1..=50_000).map(|i| format!("{i},n{},{}\r\n", i % 7, i % 100))).collect();
+        let d = ready(text.as_bytes());
+        let f = Filter::parse("3 >= 98", false).unwrap();
+        let r = filter_lines(&d, ',', true, &f, usize::MAX, &SearchControl::default()).unwrap();
+        assert_eq!(r.ranges.len(), 50_000 / 100 * 2);
+        let (s, e) = r.ranges[0];
+        assert_eq!(&text.as_bytes()[s as usize..e as usize], b"98,n0,98");
+        // 見出しを含めると「id」の行も対象になりうる（ここでは数値でないので一致しない）
+        let f = Filter::parse("2 = n3", false).unwrap();
+        let r = filter_lines(&d, ',', true, &f, 100, &SearchControl::default()).unwrap();
+        assert!(r.truncated && r.ranges.len() == 100);
     }
 
     #[test]

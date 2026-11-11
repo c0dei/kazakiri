@@ -77,6 +77,8 @@ enum Prompt {
     GrepQuery,
     GrepFolder,
     GrepFiles,
+    /// CSV の列フィルタ（「3 = ERROR」の形）
+    ColumnFilter,
 }
 
 /// 借用中に実行できない処理（モーダルダイアログはメッセージを再入させる）
@@ -173,6 +175,7 @@ struct App {
     prompt: Option<Prompt>,
     input: String,
     last_find: String,
+    last_filter: String,
     opts: SearchOptions,
     search: Option<SearchJob>,
     next_job: u64,
@@ -285,6 +288,7 @@ unsafe fn run_inner() -> std::result::Result<(), (&'static str, windows::core::E
             prompt: None,
             input: String::new(),
             last_find: String::new(),
+            last_filter: String::new(),
             opts: SearchOptions { case_sensitive: false, regex: false },
             search: None,
             next_job: 1,
@@ -1010,6 +1014,14 @@ impl App {
                 self.invalidate();
             }
             menu::ID_GOTO => self.start_prompt(Prompt::GotoLine),
+            menu::ID_FILTER => {
+                if self.csv.is_some() {
+                    self.start_prompt(Prompt::ColumnFilter)
+                } else {
+                    self.message = "列フィルタは CSV/TSV モードで使えます（Ctrl+Shift+C）".into();
+                    self.invalidate();
+                }
+            }
             menu::ID_CSV => self.toggle_csv(),
             menu::ID_WHITESPACE => self.toggle_whitespace(),
             menu::ID_LOG_COLORS => self.toggle_log_colors(),
@@ -1156,6 +1168,7 @@ impl App {
         self.input = match p {
             Prompt::Find | Prompt::ReplaceFind | Prompt::GrepQuery => selected().unwrap_or_else(|| self.last_find.clone()),
             Prompt::GotoLine => String::new(),
+            Prompt::ColumnFilter => self.last_filter.clone(),
             Prompt::ReplaceWith => self.last_replace.clone(),
             Prompt::GrepFolder => self.default_grep_folder(),
             Prompt::GrepFiles => self.grep_files.clone(),
@@ -1208,6 +1221,10 @@ impl App {
                 self.grep_files = std::mem::take(&mut self.input);
                 self.start_grep();
                 return None;
+            }
+            Some(Prompt::ColumnFilter) => {
+                self.last_filter = std::mem::take(&mut self.input);
+                self.start_filter();
             }
             Some(Prompt::Find) => {
                 self.last_find = std::mem::take(&mut self.input);
@@ -1897,6 +1914,7 @@ impl App {
         match self.prompt {
             Some(Prompt::Find) => format!("検索{flags}: {}|  Enter:次 Shift+Enter:前 Alt+Enter:すべて一覧 Alt+C:大小区別 Alt+R:正規表現 Esc:取消", self.input),
             Some(Prompt::GotoLine) => format!("行番号へ移動: {}|", self.input),
+            Some(Prompt::ColumnFilter) => format!("列フィルタ: {}|  例: 3 = ERROR / 2 : 語を含む / 4 >= 100 / 1 ~ 正規表現 / 5 empty", self.input),
             Some(Prompt::ReplaceFind) => format!("置換{flags} 検索する文字列: {}|  Enter:次へ Alt+C:大小区別 Alt+R:正規表現 Esc:取消", self.input),
             Some(Prompt::ReplaceWith) => {
                 let esc = if self.opts.regex { " ($1 や \\n が使えます)" } else { "" };

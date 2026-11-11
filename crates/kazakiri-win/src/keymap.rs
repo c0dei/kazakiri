@@ -43,6 +43,7 @@ const COMMANDS: &[(&str, u32)] = &[
     ("csv_header", ID_CSV_HEADER),
     ("sort_asc", ID_SORT_ASC),
     ("sort_desc", ID_SORT_DESC),
+    ("column_filter", ID_FILTER),
     ("whitespace", ID_WHITESPACE),
     ("log_colors", ID_LOG_COLORS),
     ("dark", ID_DARK),
