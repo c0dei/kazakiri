@@ -250,12 +250,7 @@ impl App {
                 if e <= s {
                     continue;
                 }
-                let brush = match eff {
-                    Effect::Mark => &g.effects[0],
-                    Effect::LogError => &g.effects[1],
-                    Effect::LogWarn => &g.effects[2],
-                    Effect::LogDebug => &g.effects[3],
-                };
+                let brush = g.brush_for(eff);
                 let _ = layout.SetDrawingEffect(brush, DWRITE_TEXT_RANGE { startPosition: (s - a) as u32, length: (e - s) as u32 });
             }
             Ok(layout)

@@ -25,6 +25,13 @@ pub(super) struct Theme {
     pub log_error: D2D1_COLOR_F,
     pub log_warn: D2D1_COLOR_F,
     pub log_debug: D2D1_COLOR_F,
+    /// 構文の色分け
+    pub syn_str: D2D1_COLOR_F,
+    pub syn_num: D2D1_COLOR_F,
+    pub syn_kw: D2D1_COLOR_F,
+    pub syn_comment: D2D1_COLOR_F,
+    pub syn_tag: D2D1_COLOR_F,
+    pub syn_key: D2D1_COLOR_F,
 }
 
 pub(super) static LIGHT: Theme = Theme {
@@ -47,6 +54,12 @@ pub(super) static LIGHT: Theme = Theme {
     log_error: rgb(0xD0, 0x1F, 0x1F),
     log_warn: rgb(0xC0, 0x6A, 0x00),
     log_debug: rgb(0x90, 0x90, 0x90),
+    syn_str: rgb(0x0A, 0x7A, 0x32),
+    syn_num: rgb(0x00, 0x6F, 0xB4),
+    syn_kw: rgb(0x9B, 0x2D, 0xC4),
+    syn_comment: rgb(0x78, 0x82, 0x8C),
+    syn_tag: rgb(0xB0, 0x30, 0x40),
+    syn_key: rgb(0x1F, 0x5F, 0xA8),
 };
 
 pub(super) static DARK: Theme = Theme {
@@ -69,4 +82,10 @@ pub(super) static DARK: Theme = Theme {
     log_error: rgb(0xFF, 0x6B, 0x6B),
     log_warn: rgb(0xF0, 0xB0, 0x50),
     log_debug: rgb(0x80, 0x86, 0x8E),
+    syn_str: rgb(0x98, 0xC3, 0x79),
+    syn_num: rgb(0xD1, 0x9A, 0x66),
+    syn_kw: rgb(0xC6, 0x78, 0xDD),
+    syn_comment: rgb(0x7F, 0x84, 0x8E),
+    syn_tag: rgb(0xE0, 0x6C, 0x75),
+    syn_key: rgb(0x61, 0xAF, 0xEF),
 };

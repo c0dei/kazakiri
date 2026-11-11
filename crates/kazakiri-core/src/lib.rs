@@ -11,6 +11,7 @@ mod pieces;
 pub mod search;
 pub mod source;
 pub mod split;
+pub mod syntax;
 
 pub use convert::Convert;
 pub use document::{commit_save, Document, EditError, Line, Refresh};
