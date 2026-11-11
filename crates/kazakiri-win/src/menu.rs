@@ -39,6 +39,7 @@ pub const ID_NEXT_RESULT: u32 = 309;
 pub const ID_PREV_RESULT: u32 = 310;
 pub const ID_CLOSE_RESULTS: u32 = 311;
 pub const ID_GREP_REPLACE: u32 = 312;
+pub const ID_GREP_BACKUP: u32 = 313;
 pub const ID_CSV: u32 = 600;
 pub const ID_CSV_HEADER: u32 = 601;
 pub const ID_SORT_ASC: u32 = 602;
@@ -170,6 +171,7 @@ pub unsafe fn build(km: &Keymap) -> Result<Menus> {
         sep(search)?;
         item(km, search, ID_GREP, "フォルダ内を検索 (GREP)(&G)...\tCtrl+Shift+F")?;
         item(km, search, ID_GREP_REPLACE, "GREP の結果を置換(&E)...")?;
+        item(km, search, ID_GREP_BACKUP, "GREP 置換の前にバックアップ (.bak) を作る(&B)")?;
         item(km, search, ID_NEXT_RESULT, "次の結果(&X)\tF8")?;
         item(km, search, ID_PREV_RESULT, "前の結果(&V)\tShift+F8")?;
         item(km, search, ID_CLOSE_RESULTS, "結果一覧を閉じる\tEsc")?;
@@ -226,6 +228,7 @@ impl Menus {
             CheckMenuItem(self.view, ID_WHITESPACE, check(s.whitespace));
             CheckMenuItem(self.view, ID_LOG_COLORS, check(s.log_colors));
             CheckMenuItem(self.view, ID_WRAP, check(s.wrap));
+            CheckMenuItem(self.search, ID_GREP_BACKUP, check(s.grep_backup));
             CheckMenuItem(self.view, ID_DARK, check(s.dark));
             CheckMenuItem(self.view, ID_CSV, check(csv.is_some()));
             for (i, (_, d)) in DELIMS.iter().enumerate() {
