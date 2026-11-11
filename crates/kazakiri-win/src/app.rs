@@ -75,6 +75,8 @@ enum Prompt {
     GotoLine,
     /// CSV の列フィルタ（「3 = ERROR」の形）
     ColumnFilter,
+    /// ファイルの分割（行数 または サイズ）
+    Split,
 }
 
 /// 借用中に実行できない処理（モーダルダイアログはメッセージを再入させる）
@@ -91,6 +93,8 @@ enum Deferred {
     ShowMenu(usize),
     /// 検索・置換・GREP のダイアログを開く（タブの番号）
     ShowFind(usize),
+    /// 結合するファイルを選んで、出力先を決める
+    Join,
 }
 
 struct Gfx {
@@ -483,6 +487,24 @@ unsafe fn run_deferred(hwnd: HWND, d: Deferred) {
             }
         }
         Deferred::ShowFind(tab) => unsafe { find_dialog::show(hwnd, tab) },
+        Deferred::Join => {
+            let paths = unsafe { open_dialog(hwnd) };
+            if paths.len() < 2 {
+                with_app(|app| {
+                    app.message = "結合するファイルを 2 つ以上選んでください（Ctrl や Shift を押しながら）".into();
+                    app.invalidate();
+                });
+                return;
+            }
+            let suggested = paths[0].with_file_name(format!(
+                "{}.joined.{}",
+                paths[0].file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "file".into()),
+                paths[0].extension().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "txt".into())
+            ));
+            if let Some(out) = unsafe { edit::save_dialog(hwnd, Some(suggested)) } {
+                with_app(|app| app.start_join(paths, out));
+            }
+        }
         Deferred::ShowMenu(i) => {
             if let Some(Some((menu, x, y))) = with_app(|app| app.bar_popup(i)) {
                 unsafe {
@@ -1037,6 +1059,15 @@ impl App {
     unsafe fn command(&mut self, id: u32) -> Option<Deferred> {
         match id {
             menu::ID_KEYS => self.edit_keys(),
+            menu::ID_SPLIT => {
+                if self.doc.as_ref().and_then(|d| d.path()).is_none() {
+                    self.message = "分割するには、先にファイルとして保存してください".into();
+                    self.invalidate();
+                } else {
+                    self.start_prompt(Prompt::Split);
+                }
+            }
+            menu::ID_JOIN => return Some(Deferred::Join),
             id if (menu::ID_CONV_ENC_BASE..menu::ID_CONV_ENC_BASE + menu::CONV_ENCODINGS.len() as u32).contains(&id)
                 || (menu::ID_CONV_NL_BASE..menu::ID_CONV_NL_BASE + menu::CONV_NEWLINES.len() as u32).contains(&id) =>
             {
@@ -1266,6 +1297,7 @@ impl App {
         self.input = match p {
             Prompt::GotoLine => String::new(),
             Prompt::ColumnFilter => self.last_filter.clone(),
+            Prompt::Split => "1000000".into(),
         };
         self.invalidate();
     }
@@ -1284,6 +1316,10 @@ impl App {
             Some(Prompt::ColumnFilter) => {
                 self.last_filter = std::mem::take(&mut self.input);
                 self.start_filter();
+            }
+            Some(Prompt::Split) => {
+                let spec = std::mem::take(&mut self.input);
+                self.start_split(&spec);
             }
             Some(Prompt::GotoLine) => {
                 let input = std::mem::take(&mut self.input);
@@ -2095,6 +2131,7 @@ impl App {
         );
         match self.prompt {
             Some(Prompt::GotoLine) => format!("行番号へ移動: {}|", self.input),
+            Some(Prompt::Split) => format!("ファイルを分割（1 ファイルの行数、またはサイズ。例: 1000000 / 512MB / 2GB）: {}|  Enter:実行 Esc:取消", self.input),
             Some(Prompt::ColumnFilter) => format!("列フィルタ: {}|  例: 3 = ERROR / 2 : 語を含む / 4 >= 100 / 1 ~ 正規表現 / 5 empty", self.input),
             None if self.rjob.is_some() => self.job_status(self.rjob.as_ref().unwrap()),
             None if self.saving.is_some() => {

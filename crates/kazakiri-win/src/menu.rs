@@ -19,6 +19,8 @@ pub const ID_CLOSE_TAB: u32 = 107;
 pub const ID_NEXT_TAB: u32 = 108;
 pub const ID_PREV_TAB: u32 = 109;
 pub const ID_KEYS: u32 = 112;
+pub const ID_SPLIT: u32 = 113;
+pub const ID_JOIN: u32 = 114;
 pub const ID_COPY: u32 = 200;
 pub const ID_SELECT_ALL: u32 = 201;
 pub const ID_UNDO: u32 = 202;
@@ -148,6 +150,8 @@ pub unsafe fn build(km: &Keymap) -> Result<Menus> {
         popup(file, recent, "最近使ったファイル(&F)")?;
         sep(file)?;
         item(km, file, ID_CLOSE_TAB, "タブを閉じる(&C)\tCtrl+W")?;
+        item(km, file, ID_SPLIT, "ファイルを分割(&L)...")?;
+        item(km, file, ID_JOIN, "ファイルを結合(&J)...")?;
         item(km, file, ID_KEYS, "キー割り当てを編集(&K)...")?;
         item(km, file, ID_EXIT, "終了(&X)")?;
         popup(bar, file, "ファイル(&F)")?;

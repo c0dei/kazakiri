@@ -66,6 +66,8 @@ pub(super) enum JobKind {
     Grep { prog: Arc<GrepProgress> },
     /// GREP 結果の置換（ファイルを書き換える）
     GrepReplace { prog: Arc<GrepProgress> },
+    /// ファイルの分割・結合（書き出したバイト数と、全体のバイト数）
+    FileOp { ctl: Arc<SearchControl>, done: Arc<std::sync::atomic::AtomicU64>, total: u64, label: String },
     /// CSV の並べ替え
     Sort { ctl: Arc<SearchControl>, total: u64, name: String },
 }
@@ -75,6 +77,7 @@ impl ResultsJob {
         match &self.what {
             JobKind::FindAll { ctl, .. } => ctl.cancel.store(true, Ordering::Relaxed),
             JobKind::Grep { prog } | JobKind::GrepReplace { prog } => prog.cancel(),
+            JobKind::FileOp { ctl, .. } => ctl.cancel.store(true, Ordering::Relaxed),
             JobKind::Sort { ctl, .. } => ctl.cancel.store(true, Ordering::Relaxed),
         }
     }
@@ -85,6 +88,8 @@ pub(super) enum JobDone {
     Replace { id: u64, found: FindAll, elapsed: Duration },
     FilterFailed { id: u64, message: String },
     GrepReplace { id: u64, report: grep::ReplaceReport, skipped: usize, elapsed: Duration },
+    /// 分割・結合の結果（成功なら完了のメッセージ）
+    FileOp { id: u64, result: std::result::Result<String, String> },
     Grep { id: u64, query: String, root: PathBuf, res: std::result::Result<GrepResult, String>, elapsed: Duration },
 }
 
@@ -220,6 +225,74 @@ impl App {
         self.invalidate();
     }
 
+    /// 開いているファイルを分割する（入力欄の内容：行数 または サイズ）
+    pub(super) fn start_split(&mut self, spec: &str) {
+        let Some(doc) = self.doc.clone() else { return };
+        let Some(path) = doc.path().map(|p| p.to_path_buf()) else {
+            self.message = "分割するには、先にファイルとして保存してください".into();
+            return self.invalidate();
+        };
+        let by = match kazakiri_core::split::parse_split_spec(spec) {
+            Ok(b) => b,
+            Err(e) => {
+                self.message = e;
+                return self.invalidate();
+            }
+        };
+        if self.is_modified() {
+            self.message = "編集中の内容で分割します（保存はされません）".into();
+        }
+        // CSV の見出し行を、2 つ目以降の先頭にも付ける
+        let header = self.csv.as_ref().is_some_and(|v| v.header);
+        self.cancel_jobs();
+        let id = self.next_job;
+        self.next_job += 1;
+        let ctl = Arc::new(SearchControl::default());
+        let done = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        self.rjob = Some(ResultsJob { id, started: Instant::now(), what: JobKind::FileOp { ctl: ctl.clone(), done: done.clone(), total: doc.len(), label: "ファイルを分割中".into() } });
+        let hwnd = self.hwnd.0 as isize;
+        std::thread::spawn(move || {
+            let r = kazakiri_core::split::split_file(&doc, &path, by, header, &done, &ctl);
+            drop(doc);
+            let result = r.map(|parts| {
+                let dir = path.parent().map(|p| p.display().to_string()).unwrap_or_default();
+                format!("{} 個に分割しました（{} / {}）", parts.len(), dir, parts.first().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default())
+            });
+            post(hwnd, WM_RESULTS_DONE, JobDone::FileOp { id, result });
+        });
+        unsafe {
+            SetTimer(Some(self.hwnd), TIMER_SEARCH, 100, None);
+        }
+        self.invalidate();
+    }
+
+    /// 選んだファイルを順に結合して `out` に書く
+    pub(super) fn start_join(&mut self, paths: Vec<PathBuf>, out: PathBuf) {
+        if paths.contains(&out) {
+            self.message = "結合の出力先が、結合するファイルと同じです。別の名前にしてください".into();
+            return self.invalidate();
+        }
+        self.cancel_jobs();
+        let id = self.next_job;
+        self.next_job += 1;
+        let total: u64 = paths.iter().filter_map(|p| std::fs::metadata(p).ok()).map(|m| m.len()).sum();
+        let ctl = Arc::new(SearchControl::default());
+        let done = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        self.rjob = Some(ResultsJob { id, started: Instant::now(), what: JobKind::FileOp { ctl: ctl.clone(), done: done.clone(), total, label: "ファイルを結合中".into() } });
+        let hwnd = self.hwnd.0 as isize;
+        let count = paths.len();
+        std::thread::spawn(move || {
+            let result = kazakiri_core::split::join_files(&paths, &out, &done, &ctl)
+                .map(|n| format!("{count} 個のファイルを結合しました（{}）→ {}", human_size(n), out.display()))
+                .map_err(|e| e.to_string());
+            post(hwnd, WM_RESULTS_DONE, JobDone::FileOp { id, result });
+        });
+        unsafe {
+            SetTimer(Some(self.hwnd), TIMER_SEARCH, 100, None);
+        }
+        self.invalidate();
+    }
+
     /// CSV の列フィルタ：条件に合う行を一覧にする
     pub(super) fn start_filter(&mut self) {
         let Some(doc) = self.doc.clone() else { return };
@@ -261,7 +334,7 @@ impl App {
 
     pub(super) fn on_job_done(&mut self, done: JobDone) {
         let id = match &done {
-            JobDone::FindAll { id, .. } | JobDone::Replace { id, .. } | JobDone::Grep { id, .. } | JobDone::FilterFailed { id, .. } | JobDone::GrepReplace { id, .. } => *id,
+            JobDone::FindAll { id, .. } | JobDone::Replace { id, .. } | JobDone::Grep { id, .. } | JobDone::FilterFailed { id, .. } | JobDone::GrepReplace { id, .. } | JobDone::FileOp { id, .. } => *id,
         };
         if self.rjob.as_ref().map(|j| j.id) != Some(id) {
             return; // 中止した、または古い結果
@@ -284,6 +357,7 @@ impl App {
             }
             JobDone::Replace { found, elapsed, .. } => self.apply_replace_all(found, elapsed),
             JobDone::FilterFailed { message, .. } => self.message = message,
+            JobDone::FileOp { result, .. } => self.message = result.unwrap_or_else(|e| e),
             JobDone::GrepReplace { report, skipped, elapsed, .. } => {
                 let mut notes = Vec::new();
                 if report.cancelled {
@@ -546,6 +620,10 @@ impl App {
                 format!("{what}「{}」 {:.0}%  {secs:.1} 秒  (Esc で中止)", self.last_find, pct.min(100.0))
             }
             JobKind::Sort { ctl, total, name } => super::csv_view::sort_status(ctl, *total, name, secs),
+            JobKind::FileOp { done, total, label, .. } => {
+                let d = done.load(Ordering::Relaxed);
+                format!("{label} {:.0}%（{} / {}）  {secs:.1} 秒  (Esc で中止)", (d as f64 * 100.0 / (*total).max(1) as f64).min(100.0), human_size(d), human_size(*total))
+            }
             JobKind::GrepReplace { prog } => format!(
                 "GREP 置換中 {} / {} ファイル  {secs:.1} 秒  (Esc で中止。書き換え済みのファイルは戻りません)",
                 group(prog.files_done.load(Ordering::Relaxed) as u64),
