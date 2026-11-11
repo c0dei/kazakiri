@@ -5,6 +5,7 @@ mod app;
 #[cfg(windows)]
 mod clipboard;
 #[cfg(windows)]
+mod keymap;
 mod menu;
 #[cfg(windows)]
 mod recent;

@@ -3,6 +3,8 @@
 use std::path::PathBuf;
 
 use encoding_rs::Encoding;
+
+use crate::keymap::Keymap;
 use windows::core::{Result, PCWSTR};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
@@ -16,6 +18,7 @@ pub const ID_SAVE_AS: u32 = 106;
 pub const ID_CLOSE_TAB: u32 = 107;
 pub const ID_NEXT_TAB: u32 = 108;
 pub const ID_PREV_TAB: u32 = 109;
+pub const ID_KEYS: u32 = 112;
 pub const ID_COPY: u32 = 200;
 pub const ID_SELECT_ALL: u32 = 201;
 pub const ID_UNDO: u32 = 202;
@@ -77,8 +80,14 @@ fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
-unsafe fn item(menu: HMENU, id: u32, text: &str) -> Result<()> {
-    let w = wide(text);
+/// メニュー項目。キーの表示（`\t` の後ろ）は keys.ini の設定に合わせる
+unsafe fn item(km: &Keymap, menu: HMENU, id: u32, text: &str) -> Result<()> {
+    let text = match km.label(id) {
+        Some("") => text.split('\t').next().unwrap_or(text).to_string(),
+        Some(k) => format!("{}\t{k}", text.split('\t').next().unwrap_or(text)),
+        None => text.to_string(),
+    };
+    let w = wide(&text);
     unsafe { AppendMenuW(menu, MF_STRING, id as usize, PCWSTR(w.as_ptr())) }
 }
 
@@ -91,75 +100,76 @@ unsafe fn popup(bar: HMENU, sub: HMENU, text: &str) -> Result<()> {
     unsafe { AppendMenuW(bar, MF_POPUP, sub.0 as usize, PCWSTR(w.as_ptr())) }
 }
 
-pub unsafe fn build() -> Result<Menus> {
+pub unsafe fn build(km: &Keymap) -> Result<Menus> {
     unsafe {
         let bar = CreateMenu()?;
 
         let file = CreatePopupMenu()?;
         let recent = CreatePopupMenu()?;
-        item(file, ID_NEW, "新しいタブ(&N)\tCtrl+N")?;
-        item(file, ID_OPEN, "開く(&O)...\tCtrl+O")?;
-        item(file, ID_SAVE, "上書き保存(&S)\tCtrl+S")?;
-        item(file, ID_SAVE_AS, "名前を付けて保存(&A)...\tCtrl+Shift+S")?;
+        item(km, file, ID_NEW, "新しいタブ(&N)\tCtrl+N")?;
+        item(km, file, ID_OPEN, "開く(&O)...\tCtrl+O")?;
+        item(km, file, ID_SAVE, "上書き保存(&S)\tCtrl+S")?;
+        item(km, file, ID_SAVE_AS, "名前を付けて保存(&A)...\tCtrl+Shift+S")?;
         sep(file)?;
-        item(file, ID_RELOAD, "再読み込み(&R)\tF5")?;
-        item(file, ID_FOLLOW, "末尾を追従(&T)\tCtrl+T")?;
+        item(km, file, ID_RELOAD, "再読み込み(&R)\tF5")?;
+        item(km, file, ID_FOLLOW, "末尾を追従(&T)\tCtrl+T")?;
         sep(file)?;
         popup(file, recent, "最近使ったファイル(&F)")?;
         sep(file)?;
-        item(file, ID_CLOSE_TAB, "タブを閉じる(&C)\tCtrl+W")?;
-        item(file, ID_EXIT, "終了(&X)")?;
+        item(km, file, ID_CLOSE_TAB, "タブを閉じる(&C)\tCtrl+W")?;
+        item(km, file, ID_KEYS, "キー割り当てを編集(&K)...")?;
+        item(km, file, ID_EXIT, "終了(&X)")?;
         popup(bar, file, "ファイル(&F)")?;
 
         let edit = CreatePopupMenu()?;
-        item(edit, ID_UNDO, "元に戻す(&U)\tCtrl+Z")?;
-        item(edit, ID_REDO, "やり直し(&R)\tCtrl+Y")?;
+        item(km, edit, ID_UNDO, "元に戻す(&U)\tCtrl+Z")?;
+        item(km, edit, ID_REDO, "やり直し(&R)\tCtrl+Y")?;
         sep(edit)?;
-        item(edit, ID_CUT, "切り取り(&T)\tCtrl+X")?;
-        item(edit, ID_COPY, "コピー(&C)\tCtrl+C")?;
-        item(edit, ID_PASTE, "貼り付け(&P)\tCtrl+V")?;
-        item(edit, ID_SELECT_ALL, "すべて選択(&A)\tCtrl+A")?;
+        item(km, edit, ID_CUT, "切り取り(&T)\tCtrl+X")?;
+        item(km, edit, ID_COPY, "コピー(&C)\tCtrl+C")?;
+        item(km, edit, ID_PASTE, "貼り付け(&P)\tCtrl+V")?;
+        item(km, edit, ID_SELECT_ALL, "すべて選択(&A)\tCtrl+A")?;
         popup(bar, edit, "編集(&E)")?;
 
         let search = CreatePopupMenu()?;
-        item(search, ID_FIND, "検索(&F)...\tCtrl+F")?;
-        item(search, ID_FIND_NEXT, "次を検索(&N)\tF3")?;
-        item(search, ID_FIND_PREV, "前を検索(&P)\tShift+F3")?;
-        item(search, ID_FIND_ALL, "すべて検索して一覧(&L)\t検索欄で Alt+Enter")?;
-        item(search, ID_REPLACE, "置換(&H)...\tCtrl+H")?;
+        item(km, search, ID_FIND, "検索(&F)...\tCtrl+F")?;
+        item(km, search, ID_FIND_NEXT, "次を検索(&N)\tF3")?;
+        item(km, search, ID_FIND_PREV, "前を検索(&P)\tShift+F3")?;
+        item(km, search, ID_FIND_ALL, "すべて検索して一覧(&L)\t検索欄で Alt+Enter")?;
+        item(km, search, ID_REPLACE, "置換(&H)...\tCtrl+H")?;
         sep(search)?;
-        item(search, ID_GREP, "フォルダ内を検索 (GREP)(&G)...\tCtrl+Shift+F")?;
-        item(search, ID_NEXT_RESULT, "次の結果(&X)\tF8")?;
-        item(search, ID_PREV_RESULT, "前の結果(&V)\tShift+F8")?;
-        item(search, ID_CLOSE_RESULTS, "結果一覧を閉じる\tEsc")?;
+        item(km, search, ID_GREP, "フォルダ内を検索 (GREP)(&G)...\tCtrl+Shift+F")?;
+        item(km, search, ID_NEXT_RESULT, "次の結果(&X)\tF8")?;
+        item(km, search, ID_PREV_RESULT, "前の結果(&V)\tShift+F8")?;
+        item(km, search, ID_CLOSE_RESULTS, "結果一覧を閉じる\tEsc")?;
         sep(search)?;
-        item(search, ID_CASE, "大文字と小文字を区別(&C)\tAlt+C")?;
-        item(search, ID_REGEX, "正規表現(&R)\tAlt+R")?;
+        item(km, search, ID_CASE, "大文字と小文字を区別(&C)\tAlt+C")?;
+        item(km, search, ID_REGEX, "正規表現(&R)\tAlt+R")?;
         sep(search)?;
-        item(search, ID_GOTO, "行へ移動(&G)...\tCtrl+G")?;
+        item(km, search, ID_GOTO, "行へ移動(&G)...\tCtrl+G")?;
         popup(bar, search, "検索(&S)")?;
 
         let view = CreatePopupMenu()?;
-        item(view, ID_CSV, "CSV/TSV モード(&C)\tCtrl+Shift+C")?;
+        item(km, view, ID_CSV, "CSV/TSV モード(&C)\tCtrl+Shift+C")?;
         sep(view)?;
         for (i, (name, _)) in DELIMS.iter().enumerate() {
-            item(view, ID_DELIM_BASE + i as u32, &format!("区切り: {name}"))?;
+            item(km, view, ID_DELIM_BASE + i as u32, &format!("区切り: {name}"))?;
         }
-        item(view, ID_CSV_HEADER, "1 行目は見出し(&H)")?;
+        item(km, view, ID_CSV_HEADER, "1 行目は見出し(&H)")?;
         sep(view)?;
-        item(view, ID_SORT_ASC, "カーソルの列で昇順に並べ替え(&A)")?;
-        item(view, ID_SORT_DESC, "カーソルの列で降順に並べ替え(&D)")?;
+        item(km, view, ID_SORT_ASC, "カーソルの列で昇順に並べ替え(&A)")?;
+        item(km, view, ID_SORT_DESC, "カーソルの列で降順に並べ替え(&D)")?;
         sep(view)?;
-        item(view, ID_WHITESPACE, "空白・タブ・改行を表示(&W)\tCtrl+Shift+W")?;
-        item(view, ID_LOG_COLORS, "ログレベルの色分け(&L)")?;
-        item(view, ID_DARK, "ダークテーマ(&K)")?;
+        item(km, view, ID_WHITESPACE, "空白・タブ・改行を表示(&W)\tCtrl+Shift+W")?;
+        item(km, view, ID_LOG_COLORS, "ログレベルの色分け(&L)")?;
+        item(km, view, ID_DARK, "ダークテーマ(&K)")?;
         sep(view)?;
-        item(view, ID_ZOOM_IN, "拡大(&I)\tCtrl++")?;
-        item(view, ID_ZOOM_OUT, "縮小(&O)\tCtrl+-")?;
-        item(view, ID_ZOOM_RESET, "標準の大きさ(&0)\tCtrl+0")?;
+        item(km, view, ID_ZOOM_IN, "拡大(&I)\tCtrl++")?;
+        item(km, view, ID_ZOOM_OUT, "縮小(&O)\tCtrl+-")?;
+        item(km, view, ID_ZOOM_RESET, "標準の大きさ(&0)\tCtrl+0")?;
         sep(view)?;
-        item(view, ID_NEXT_TAB, "次のタブ(&N)\tCtrl+Tab")?;
-        item(view, ID_PREV_TAB, "前のタブ(&P)\tCtrl+Shift+Tab")?;
+        item(km, view, ID_NEXT_TAB, "次のタブ(&N)\tCtrl+Tab")?;
+        item(km, view, ID_PREV_TAB, "前のタブ(&P)\tCtrl+Shift+Tab")?;
         popup(bar, view, "表示(&V)")?;
 
         let encoding = CreatePopupMenu()?;
@@ -167,7 +177,7 @@ pub unsafe fn build() -> Result<Menus> {
             if i == 1 {
                 sep(encoding)?;
             }
-            item(encoding, ID_ENC_BASE + i as u32, &format!("{name} で開き直す"))?;
+            item(km, encoding, ID_ENC_BASE + i as u32, &format!("{name} で開き直す"))?;
         }
         popup(bar, encoding, "エンコード(&N)")?;
 
@@ -223,12 +233,12 @@ impl Menus {
                 }
             }
             if recent.is_empty() {
-                let _ = item(self.recent, 0, "（なし）");
+                let _ = item(&Keymap::default(), self.recent, 0, "（なし）");
                 let _ = EnableMenuItem(self.recent, 0, MF_BYPOSITION | MF_GRAYED);
             }
             for (i, p) in recent.iter().enumerate() {
                 let label = format!("&{} {}", (i + 1) % 10, p.display());
-                let _ = item(self.recent, ID_RECENT_BASE + i as u32, &label);
+                let _ = item(&Keymap::default(), self.recent, ID_RECENT_BASE + i as u32, &label);
             }
         }
     }
