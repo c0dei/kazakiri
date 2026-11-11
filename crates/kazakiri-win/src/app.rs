@@ -21,7 +21,7 @@ use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::Com::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::Dialogs::*;
-use windows::Win32::UI::Controls::SetScrollInfo;
+use windows::Win32::UI::Controls::{SetScrollInfo, ShowScrollBar};
 use windows::Win32::UI::HiDpi::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::Shell::*;
@@ -39,6 +39,7 @@ mod results;
 mod tabs;
 mod rect;
 mod dark;
+mod wrap;
 use csv_view::{CsvView, Disp, Effect, SortDone, WM_SORT_DONE};
 use crate::settings::{self, Settings};
 use theme::Theme;
@@ -1045,6 +1046,7 @@ impl App {
             menu::ID_CSV => self.toggle_csv(),
             menu::ID_WHITESPACE => self.toggle_whitespace(),
             menu::ID_LOG_COLORS => self.toggle_log_colors(),
+            menu::ID_WRAP => self.toggle_wrap(),
             menu::ID_DARK => self.set_dark(!self.settings.dark),
             menu::ID_ZOOM_IN => self.zoom(1.0),
             menu::ID_ZOOM_OUT => self.zoom(-1.0),
@@ -1436,7 +1438,7 @@ impl App {
         }
         // 行番号欄のクリックは行全体を選択
         if x < self.gutter_width() {
-            let line = self.top + (y / self.line_h) as u64;
+            let line = self.line_at_y(&doc, y);
             if let Some((s, _)) = doc.line_range(line) {
                 let next = doc.line_range(line + 1).map_or(doc.len(), |(n, _)| n);
                 self.sel = Some((s, next));
@@ -1485,7 +1487,7 @@ impl App {
         if x < self.gutter_width() || y >= self.text_height() {
             return;
         }
-        let line_no = self.top + (y / self.line_h) as u64;
+        let line_no = self.line_at_y(&doc, y);
         let Some(line) = doc.lines(line_no, 1).into_iter().next() else { return };
         let Some(off) = self.offset_at(&doc, x, y) else { return };
         let chars: Vec<char> = line.text.chars().collect();
@@ -1515,6 +1517,9 @@ impl App {
 
     /// 画面上の点に対応するバイト位置
     fn offset_at(&self, doc: &Document, x: f32, y: f32) -> Option<u64> {
+        if self.wrap_on() {
+            return self.offset_at_wrapped(doc, x, y);
+        }
         let line_no = self.top + (y.max(0.0) / self.line_h) as u64;
         let Some(line) = doc.lines(line_no, 1).into_iter().next() else {
             return doc.progress().done.then(|| doc.len());
@@ -1649,6 +1654,9 @@ impl App {
     }
 
     fn max_top(&self) -> u64 {
+        if self.wrap_on() {
+            return self.max_top_wrapped();
+        }
         self.total_lines().saturating_sub(self.visible_lines() as u64)
     }
 
@@ -1668,6 +1676,9 @@ impl App {
     }
 
     fn hscroll_by(&mut self, dx: f32) {
+        if self.wrap_on() {
+            return;
+        }
         self.x_off = (self.x_off + dx).max(0.0);
         self.update_scrollbars();
         self.invalidate();
@@ -1705,6 +1716,8 @@ impl App {
         unsafe {
             SetScrollInfo(self.hwnd, SB_VERT, &v, true);
             SetScrollInfo(self.hwnd, SB_HORZ, &h, true);
+            // 折り返し表示のときは横スクロールバーを出さない
+            let _ = ShowScrollBar(self.hwnd, SB_HORZ, !self.wrap_on());
         }
     }
 
@@ -1779,13 +1792,35 @@ impl App {
 
             // 本文
             rt.PushAxisAlignedClip(&rect(gutter, 0.0, w, text_h), D2D1_ANTIALIAS_MODE_ALIASED);
+            // 折り返し表示：行を折り返し行に分けて描く（行番号は最初の折り返し行だけ）
+            let mut wrapped_numbers: Vec<(f32, u64)> = Vec::new();
+            if self.wrap_on() {
+                self.csv_measure(&lines);
+                let mut y = 0.0;
+                'rows: for line in &lines {
+                    let rows = self.rows_of(line.clone());
+                    for r in 0..rows.count() {
+                        if y >= text_h {
+                            break 'rows;
+                        }
+                        let (a, b) = rows.range(r);
+                        let layout = self.row_layout(&rows.disp, a, b)?;
+                        self.draw_row(&rt, brush, line, &rows.disp, &layout, (a, b), self.text_left(), y)?;
+                        if r == 0 {
+                            wrapped_numbers.push((y, line.number));
+                        }
+                        y += self.line_h;
+                    }
+                }
+            }
             // 直前に描いた行のレイアウトは使い回す（1 行スクロールなら作り直すのは 1 行だけ）
-            self.csv_measure(&lines);
+            let lines_nowrap: &[Line] = if self.wrap_on() { &[] } else { &lines };
+            self.csv_measure(lines_nowrap);
             let generation = self.csv.as_ref().map_or(0, |v| v.generation.get());
             let caret_col = self.caret_column().map(|(c, _, _)| c);
             let mut old = std::mem::take(&mut *self.layout_cache.borrow_mut());
             let mut cache = HashMap::with_capacity(lines.len());
-            for (i, line) in lines.iter().enumerate() {
+            for (i, line) in lines_nowrap.iter().enumerate() {
                 let y = i as f32 * self.line_h;
                 let entry = match old.remove(&line.start) {
                     Some(c) if c.end == line.end && c.generation == generation => c,
@@ -1815,7 +1850,14 @@ impl App {
             *self.layout_cache.borrow_mut() = cache;
             rt.PopAxisAlignedClip();
 
-            for (i, line) in lines.iter().enumerate() {
+            if self.wrap_on() {
+                for &(y, number) in &wrapped_numbers {
+                    let num = format!("{:>width$}", group(number + 1), width = digits);
+                    brush.SetColor(&self.theme.gutter_text);
+                    self.draw_str(&rt, brush, &num, self.char_w * 0.5, y, gutter)?;
+                }
+            }
+            for (i, line) in lines_nowrap.iter().enumerate() {
                 let y = i as f32 * self.line_h;
                 let num = format!("{:>width$}", group(line.number + 1), width = digits);
                 brush.SetColor(&self.theme.gutter_text);
@@ -1836,18 +1878,28 @@ impl App {
     }
 
     unsafe fn draw_line(&self, rt: &ID2D1RenderTarget, brush: &ID2D1SolidColorBrush, line: &Line, c: &CachedLine, x: f32, y: f32) -> Result<()> {
-        let (layout, units, shown, d) = (&c.layout, &c.disp.units, c.disp.shown, &c.disp);
+        unsafe { self.draw_row(rt, brush, line, &c.disp, &c.layout, (0, c.disp.units.len()), x, y) }
+    }
+
+    /// 行の一部（折り返し表示のときの 1 行分。折り返さなければ全体）を描く。
+    /// `layout` は `d.units[row.0..row.1]` のレイアウト
+    #[allow(clippy::too_many_arguments)]
+    unsafe fn draw_row(&self, rt: &ID2D1RenderTarget, brush: &ID2D1SolidColorBrush, line: &Line, d: &Disp, layout: &IDWriteTextLayout, row: (usize, usize), x: f32, y: f32) -> Result<()> {
+        let (ra, rb) = (row.0 as u32, row.1 as u32);
+        let units = &d.units[row.0..row.1];
+        let last = row.1 == d.units.len();
+        let local = |(ua, ub): (u32, u32)| (ua.clamp(ra, rb) - ra, ub.clamp(ra, rb) - ra);
         unsafe {
             if let Some(doc) = &self.doc {
                 // 選択範囲
                 if let Some((a, b)) = self.selection() {
                     let next = line.end + newline_len(doc, line);
                     if a < next.max(line.start + 1) && b > line.start {
-                        let (ua, ub) = self.span_units(doc, line, a, b, d);
+                        let (ua, ub) = local(self.span_units(doc, line, a, b, d));
                         self.fill_units(rt, brush, layout, units, ua, ub, x, y, self.theme.select)?;
                         // 改行まで選択していたら行末に印
-                        if b > line.end && a <= line.end {
-                            let ex = x + self.text_width(&units[..shown])?;
+                        if last && b > line.end && a <= line.end {
+                            let ex = x + self.text_width(&units[..d.shown.saturating_sub(row.0).min(units.len())])?;
                             rt.FillRectangle(&rect(ex, y, ex + self.char_w, y + self.line_h), brush);
                         }
                     }
@@ -1855,7 +1907,7 @@ impl App {
                 // 検索一致（選択と同じなら一致の色を優先）
                 if let Some((hs, he)) = self.hit {
                     if hs < line.end.max(line.start + 1) && he > line.start {
-                        let (ua, ub) = self.span_units(doc, line, hs, he, d);
+                        let (ua, ub) = local(self.span_units(doc, line, hs, he, d));
                         self.fill_units(rt, brush, layout, units, ua, ub, x, y, self.theme.matched)?;
                     }
                 }
@@ -1877,9 +1929,12 @@ impl App {
                 let c = self.caret();
                 if c >= line.start && c <= line.end && self.prompt.is_none() {
                     let (ua, _) = self.span_units(doc, line, c, c, d);
-                    let cx = x + self.text_width(&units[..ua as usize])?;
-                    brush.SetColor(&self.theme.caret);
-                    rt.FillRectangle(&rect(cx - 0.5, y + 1.0, cx + 1.5, y + self.line_h - 1.0), brush);
+                    // 折り返しの境目は、次の折り返し行の先頭に出す
+                    if ua >= ra && (ua < rb || (last && ua == rb)) {
+                        let cx = x + self.text_width(&units[..(ua - ra) as usize])?;
+                        brush.SetColor(&self.theme.caret);
+                        rt.FillRectangle(&rect(cx - 0.5, y + 1.0, cx + 1.5, y + self.line_h - 1.0), brush);
+                    }
                 }
             }
         }
