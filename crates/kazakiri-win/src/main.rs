@@ -5,6 +5,7 @@ mod app;
 #[cfg(windows)]
 mod clipboard;
 #[cfg(windows)]
+mod history;
 mod keymap;
 mod menu;
 #[cfg(windows)]
