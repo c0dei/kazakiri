@@ -440,7 +440,7 @@ impl App {
             (self.x_of_offset(&doc, c), (line - self.top) as f32 * self.line_h)
         };
         let x = (self.text_left() + cx) * scale;
-        let y = (self.tab_h() + self.pin_h() + row_y) * scale;
+        let y = (self.chrome_h() + self.pin_h() + row_y) * scale;
         let pt = POINT { x: x as i32, y: y as i32 };
         unsafe {
             let himc = ImmGetContext(self.hwnd);

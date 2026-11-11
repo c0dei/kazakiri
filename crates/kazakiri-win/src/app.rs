@@ -39,6 +39,7 @@ mod results;
 mod tabs;
 mod rect;
 mod dark;
+mod menubar;
 mod wrap;
 mod multi;
 use csv_view::{CsvView, Disp, Effect, SortDone, WM_SORT_DONE};
@@ -95,6 +96,8 @@ enum Deferred {
     Perform(Pending),
     /// GREP 置換の最終確認（文章）
     ConfirmGrepReplace(String),
+    /// 自前のメニューバーの項目のポップアップを出す
+    ShowMenu(usize),
 }
 
 struct Gfx {
@@ -196,6 +199,10 @@ struct App {
     rect: Option<rect::RectSel>,
     /// マルチカーソル（ほかのカーソル）
     multi: Option<multi::Multi>,
+    /// ダークテーマのとき、自分で描くメニューバーを使っている
+    custom_menu: bool,
+    /// 開いているメニューバーの項目
+    menu_open: Option<usize>,
     /// Alt を矩形選択に使った（離したときにメニューを開かない）
     alt_used: bool,
     /// ドラッグで並べ替え中のタブ（番号, 動かしたか）
@@ -308,6 +315,8 @@ unsafe fn run_inner() -> std::result::Result<(), (&'static str, windows::core::E
             dragging: false,
             rect: None,
             multi: None,
+            custom_menu: false,
+            menu_open: None,
             alt_used: false,
             tab_drag: None,
             message: "Ctrl+O: 開く / Ctrl+N: 新規 / ドラッグ&ドロップでも開けます".into(),
@@ -330,6 +339,7 @@ unsafe fn run_inner() -> std::result::Result<(), (&'static str, windows::core::E
             app.message = format!("keys.ini: {first}（ほか {} 件）", app.keymap.problems.len() - 1);
         }
         app.apply_title_theme();
+        app.sync_menu_bar();
         APP.with(|a| *a.borrow_mut() = Some(app));
         DragAcceptFiles(hwnd, true);
         let _ = ShowWindow(hwnd, SW_SHOW);
@@ -444,6 +454,18 @@ unsafe fn run_deferred(hwnd: HWND, d: Deferred) {
                     });
                 }
             }
+        }
+        Deferred::ShowMenu(i) => {
+            if let Some(Some((menu, x, y))) = with_app(|app| app.bar_popup(i)) {
+                unsafe {
+                    // メニューを閉じるまで戻らない。選んだ項目は WM_COMMAND で届く
+                    let _ = TrackPopupMenu(menu, TPM_LEFTALIGN | TPM_TOPALIGN, x, y, None, hwnd, None);
+                }
+            }
+            with_app(|app| {
+                app.menu_open = None;
+                app.invalidate();
+            });
         }
         Deferred::ConfirmGrepReplace(question) => {
             let text = wide(&question);
@@ -565,23 +587,6 @@ impl App {
                     (DONE, None)
                 }
                 WM_ERASEBKGND => (Some(LRESULT(1)), None),
-                // ダークテーマのメニューバー（非公開メッセージ。dark.rs を参照）
-                dark::WM_UAHDRAWMENU if self.settings.dark => {
-                    if dark::draw_menu_bar(self.hwnd, lparam, self.theme) {
-                        (Some(LRESULT(1)), None)
-                    } else {
-                        (None, None)
-                    }
-                }
-                dark::WM_UAHDRAWMENUITEM if self.settings.dark => {
-                    dark::draw_menu_item(lparam, self.theme);
-                    (Some(LRESULT(1)), None)
-                }
-                WM_NCPAINT | WM_NCACTIVATE if self.settings.dark => {
-                    let r = DefWindowProcW(self.hwnd, msg, wparam, lparam);
-                    dark::paint_bar_line(self.hwnd, self.theme);
-                    (Some(r), None)
-                }
                 WM_SIZE => {
                     if let Some(g) = &self.gfx {
                         let (w, h) = (loword(lparam.0 as usize), hiword(lparam.0 as usize));
@@ -725,7 +730,7 @@ impl App {
                     if GetKeyState(VK_CONTROL.0 as i32) < 0 {
                         // Ctrl+ホイールで文字の大きさ
                         self.zoom(if delta > 0 { 1.0 } else { -1.0 });
-                    } else if self.in_panel(pt.y as f32 / scale - self.tab_h()) {
+                    } else if self.in_panel(pt.y as f32 / scale - self.chrome_h() - self.pin_h()) {
                         self.panel_scroll(-delta * 3 / 120);
                     } else if GetKeyState(VK_SHIFT.0 as i32) < 0 {
                         self.hscroll_by(-(delta as f32) / 120.0 * self.char_w * 8.0);
@@ -741,6 +746,10 @@ impl App {
                 }
                 WM_LBUTTONDOWN => {
                     let (x, y) = self.mouse_pos(lparam);
+                    // 自前のメニューバー：項目を押したらポップアップを出す
+                    if y < -self.tab_h() {
+                        return (DONE, self.bar_item_at(x).map(Deferred::ShowMenu));
+                    }
                     if y < 0.0 {
                         let d = self.tab_click(x, false);
                         self.tab_drag_start(x);
@@ -766,10 +775,13 @@ impl App {
                 WM_MBUTTONDOWN => {
                     let (x, y) = self.mouse_pos(lparam);
                     // タブを中ボタンでクリックしたら閉じる
-                    (DONE, if y < 0.0 { self.tab_click(x, true) } else { None })
+                    (DONE, if (-self.tab_h()..0.0).contains(&y) { self.tab_click(x, true) } else { None })
                 }
                 WM_LBUTTONDBLCLK => {
                     let (x, y) = self.mouse_pos(lparam);
+                    if y < -self.tab_h() {
+                        return (DONE, None);
+                    }
                     if y < 0.0 {
                         self.tab_double_click(x);
                         return (DONE, None);
@@ -838,6 +850,10 @@ impl App {
                     (None, self.command(id))
                 }
                 WM_SYSCHAR if matches!(char::from_u32(wparam.0 as u32), Some('c' | 'C' | 'r' | 'R')) => (DONE, None),
+                WM_SYSKEYDOWN if self.custom_menu && self.prompt.is_none() && self.bar_mnemonic_key(wparam).is_some() => {
+                    (DONE, self.bar_mnemonic_key(wparam).map(Deferred::ShowMenu))
+                }
+                WM_SYSCHAR if self.custom_menu && self.bar_mnemonic_key(wparam).is_some() => (DONE, None),
                 WM_CHAR => {
                     self.on_char(wparam.0 as u32);
                     (DONE, None)
@@ -1460,7 +1476,7 @@ impl App {
         let scale = unsafe { GetDpiForWindow(self.hwnd) } as f32 / 96.0;
         let x = loword(lparam.0 as usize) as i16 as f32 / scale;
         // 本文の座標（タブバーの下を 0 とする）。タブバーの上なら負になる
-        let y = hiword(lparam.0 as usize) as i16 as f32 / scale - self.tab_h();
+        let y = hiword(lparam.0 as usize) as i16 as f32 / scale - self.chrome_h();
         (x, y)
     }
 
@@ -1640,7 +1656,7 @@ impl App {
             let _ = GetClientRect(self.hwnd, &mut rc);
             let scale = GetDpiForWindow(self.hwnd) as f32 / 96.0;
             // タブバーを除いた大きさ（本文・結果一覧・ステータスバーの領域）
-            ((rc.right - rc.left) as f32 / scale, ((rc.bottom - rc.top) as f32 / scale - self.tab_h()).max(0.0))
+            ((rc.right - rc.left) as f32 / scale, ((rc.bottom - rc.top) as f32 / scale - self.chrome_h()).max(0.0))
         }
     }
 
@@ -1800,15 +1816,19 @@ impl App {
             rt.BeginDraw();
             rt.Clear(Some(&self.theme.bg));
 
-            // タブバーを描き、それより下は丸ごと下へずらして描く
+            // メニューバー（ダークテーマのとき）とタブバーを描き、それより下は丸ごと下へずらして描く
+            if self.custom_menu {
+                self.draw_menu_bar(&rt, brush, w)?;
+            }
+            rt.SetTransform(&Matrix3x2::translation(0.0, self.menu_h()));
             self.draw_tabs(&rt, brush, w)?;
-            rt.SetTransform(&Matrix3x2::translation(0.0, self.tab_h()));
+            rt.SetTransform(&Matrix3x2::translation(0.0, self.chrome_h()));
             let pin = self.pin_h();
             if pin > 0.0 {
                 self.draw_pinned_header(&rt, brush, w)?;
             }
             // 本文は固定した見出し行の下から
-            rt.SetTransform(&Matrix3x2::translation(0.0, self.tab_h() + pin));
+            rt.SetTransform(&Matrix3x2::translation(0.0, self.chrome_h() + pin));
 
             let text_h = self.text_height();
             let digits = group(self.total_lines()).len().max(4);
@@ -1902,7 +1922,7 @@ impl App {
             }
 
             // 結果一覧とステータスバーは、見出し行の分を含めた位置に描く
-            rt.SetTransform(&Matrix3x2::translation(0.0, self.tab_h()));
+            rt.SetTransform(&Matrix3x2::translation(0.0, self.chrome_h()));
             self.draw_panel(&rt, brush, w, text_h + pin)?;
             self.draw_status(&rt, brush, w, h)?;
             rt.SetTransform(&Matrix3x2::identity());

@@ -47,6 +47,7 @@ impl App {
         // ブラシを作り直す
         self.gfx = None;
         self.apply_title_theme();
+        self.sync_menu_bar();
         self.settings.save();
         self.message = format!("ダークテーマ: {}", on_off(dark));
         self.invalidate();
