@@ -77,6 +77,8 @@ pub(super) enum Effect {
     LogError,
     LogWarn,
     LogDebug,
+    /// 構文の色分け
+    Syn(kazakiri_core::syntax::Kind),
 }
 
 /// ログレベルの語（単語として現れたもの）を探す。戻り値は UTF-16 の位置
@@ -190,6 +192,19 @@ impl Disp {
     }
 
     /// ログレベルの語に色を付ける
+    /// 構文の色分け（行ごと。複数行にわたる文字列やコメントは追わない）
+    pub fn with_syntax(mut self, line: &Line, lang: kazakiri_core::syntax::Lang) -> Disp {
+        for (r, kind) in kazakiri_core::syntax::highlight(lang, &line.text) {
+            let a = line.text[..r.start].encode_utf16().count();
+            let b = a + line.text[r.clone()].encode_utf16().count();
+            let (da, db) = (self.to_disp(a) as u32, self.to_disp(b) as u32);
+            if db > da {
+                self.effects.push((da, db, Effect::Syn(kind)));
+            }
+        }
+        self
+    }
+
     pub fn with_log_colors(mut self, line: &Line) -> Disp {
         for (a, b, e) in log_levels(&line.text) {
             let (da, db) = (self.to_disp(a as usize) as u32, self.to_disp(b as usize) as u32);
@@ -284,7 +299,19 @@ impl App {
             None if self.settings.whitespace => Disp::whitespace(line, self.settings.tab_width, self.eol_mark(line)),
             None => Disp::plain(line),
         };
+        // CSV 表示でなく、ファイルの種類が分かるとき（拡張子）は、構文の色分け。そうでなければログレベルの色分け
+        if self.csv.is_none() && self.settings.syntax {
+            if let Some(lang) = self.syntax_lang() {
+                return d.with_syntax(line, lang);
+            }
+        }
         if self.settings.log_colors { d.with_log_colors(line) } else { d }
+    }
+
+    /// 開いているファイルの拡張子から決めた言語
+    pub(super) fn syntax_lang(&self) -> Option<kazakiri_core::syntax::Lang> {
+        let ext = self.doc.as_ref()?.path()?.extension()?.to_str()?.to_string();
+        kazakiri_core::syntax::Lang::from_extension(&ext)
     }
 
     /// 行末の印：CRLF は ¶、LF は ↓、CR は ←、ファイルの終わりは [EOF]

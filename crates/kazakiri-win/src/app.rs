@@ -99,11 +99,30 @@ enum Deferred {
     ExternalSort(bool),
 }
 
+impl Gfx {
+    /// 色の種類に対応する、文字の色を変えるためのブラシ
+    fn brush_for(&self, e: Effect) -> &IUnknown {
+        use kazakiri_core::syntax::Kind;
+        &self.effects[match e {
+            Effect::Mark => 0,
+            Effect::LogError => 1,
+            Effect::LogWarn => 2,
+            Effect::LogDebug => 3,
+            Effect::Syn(Kind::Str) => 4,
+            Effect::Syn(Kind::Num) => 5,
+            Effect::Syn(Kind::Keyword) => 6,
+            Effect::Syn(Kind::Comment) => 7,
+            Effect::Syn(Kind::Tag) => 8,
+            Effect::Syn(Kind::Key) => 9,
+        }]
+    }
+}
+
 struct Gfx {
     target: ID2D1HwndRenderTarget,
     brush: ID2D1SolidColorBrush,
     /// 文字の色を変える範囲用（空白の印、ERROR、WARN、DEBUG）
-    effects: [IUnknown; 4],
+    effects: Vec<IUnknown>,
 }
 
 /// 実行中の検索
@@ -1155,6 +1174,13 @@ impl App {
             menu::ID_WHITESPACE => self.toggle_whitespace(),
             menu::ID_LOG_COLORS => self.toggle_log_colors(),
             menu::ID_WRAP => self.toggle_wrap(),
+            menu::ID_SYNTAX => {
+                self.settings.syntax = !self.settings.syntax;
+                self.settings.save();
+                self.message = format!("構文の色分け: {}", on_off(self.settings.syntax));
+                self.layout_cache.borrow_mut().clear();
+                self.invalidate();
+            }
             menu::ID_IME_INLINE => {
                 self.settings.ime_inline = !self.settings.ime_inline;
                 self.settings.save();
@@ -1826,7 +1852,18 @@ impl App {
             let brush = target.CreateSolidColorBrush(&self.theme.text, None)?;
             let t = self.theme;
             let mk = |c: &D2D1_COLOR_F| -> Result<IUnknown> { target.CreateSolidColorBrush(c, None)?.cast() };
-            let effects = [mk(&t.marks)?, mk(&t.log_error)?, mk(&t.log_warn)?, mk(&t.log_debug)?];
+            let effects = vec![
+                mk(&t.marks)?,
+                mk(&t.log_error)?,
+                mk(&t.log_warn)?,
+                mk(&t.log_debug)?,
+                mk(&t.syn_str)?,
+                mk(&t.syn_num)?,
+                mk(&t.syn_kw)?,
+                mk(&t.syn_comment)?,
+                mk(&t.syn_tag)?,
+                mk(&t.syn_key)?,
+            ];
             self.gfx = Some(Gfx { target, brush, effects });
             // レイアウトは古いブラシを指しているので作り直す
             self.layout_cache.borrow_mut().clear();
@@ -1910,12 +1947,7 @@ impl App {
                         let disp = self.display(line);
                         let layout = self.dw.CreateTextLayout(&disp.units, &self.format, 1.0e6, self.line_h)?;
                         for &(a, b, e) in &disp.effects {
-                            let brush = match e {
-                                Effect::Mark => &g.effects[0],
-                                Effect::LogError => &g.effects[1],
-                                Effect::LogWarn => &g.effects[2],
-                                Effect::LogDebug => &g.effects[3],
-                            };
+                            let brush = g.brush_for(e);
                             let _ = layout.SetDrawingEffect(brush, DWRITE_TEXT_RANGE { startPosition: a, length: b - a });
                         }
                         CachedLine { end: line.end, generation, layout, disp }

@@ -52,6 +52,7 @@ const COMMANDS: &[(&str, u32)] = &[
     ("whitespace", ID_WHITESPACE),
     ("wrap", ID_WRAP),
     ("log_colors", ID_LOG_COLORS),
+    ("syntax", ID_SYNTAX),
     ("dark", ID_DARK),
     ("zoom_in", ID_ZOOM_IN),
     ("zoom_out", ID_ZOOM_OUT),

@@ -22,11 +22,13 @@ pub struct Settings {
     pub grep_backup: bool,
     /// IME の変換中の文字を、IME の窓ではなくエディタの中に描く
     pub ime_inline: bool,
+    /// 拡張子で決まる言語（JSON・SQL・XML など）の色分け
+    pub syntax: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { font: String::new(), font_size: 14.0, dark: false, whitespace: false, log_colors: true, tab_width: 4, wrap: false, grep_backup: true, ime_inline: true }
+        Settings { font: String::new(), font_size: 14.0, dark: false, whitespace: false, log_colors: true, tab_width: 4, wrap: false, grep_backup: true, ime_inline: true, syntax: true }
     }
 }
 
@@ -67,6 +69,7 @@ impl Settings {
                 "wrap" => s.wrap = flag(v),
                 "grep_backup" => s.grep_backup = flag(v),
                 "ime_inline" => s.ime_inline = flag(v),
+                "syntax" => s.syntax = flag(v),
                 "tab_width" => {
                     if let Ok(x) = v.parse::<usize>() {
                         s.tab_width = x.clamp(1, 16);
@@ -81,8 +84,8 @@ impl Settings {
     pub fn to_text(&self) -> String {
         format!(
             "# kazakiri の設定（アプリから変更すると上書きされます）\n\
-             font = {}\nfont_size = {}\ndark = {}\nwhitespace = {}\nlog_colors = {}\ntab_width = {}\nwrap = {}\ngrep_backup = {}\nime_inline = {}\n",
-            self.font, self.font_size, self.dark, self.whitespace, self.log_colors, self.tab_width, self.wrap, self.grep_backup, self.ime_inline
+             font = {}\nfont_size = {}\ndark = {}\nwhitespace = {}\nlog_colors = {}\ntab_width = {}\nwrap = {}\ngrep_backup = {}\nime_inline = {}\nsyntax = {}\n",
+            self.font, self.font_size, self.dark, self.whitespace, self.log_colors, self.tab_width, self.wrap, self.grep_backup, self.ime_inline, self.syntax
         )
     }
 
@@ -103,7 +106,7 @@ mod tests {
 
     #[test]
     fn roundtrip_and_defaults() {
-        let s = Settings { font: "Consolas".into(), font_size: 16.5, dark: true, whitespace: true, log_colors: false, tab_width: 8, wrap: true, grep_backup: false, ime_inline: false };
+        let s = Settings { font: "Consolas".into(), font_size: 16.5, dark: true, whitespace: true, log_colors: false, tab_width: 8, wrap: true, grep_backup: false, ime_inline: false, syntax: false };
         assert_eq!(Settings::parse(&s.to_text()), s);
         let broken = Settings::parse("font_size = abc\nunknown = 1\ntab_width = 99\n");
         assert_eq!(broken.font_size, 14.0);
