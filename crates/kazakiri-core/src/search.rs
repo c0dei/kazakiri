@@ -443,16 +443,17 @@ enum Template {
 /// 位置を元のバイト位置に戻すために、一致のたびに呼ぶので、エンコードし直さずに数えられる場合は数える
 /// （ASCII だけなら文字列の長さ、Shift_JIS なら 1 文字 1〜2 バイト、UTF-16 なら 2 バイト単位）
 fn encoded_len(doc: &Document, s: &str) -> usize {
+    let enc = doc.encoding().encoding;
+    // UTF-16 は ASCII でも 1 文字 2 バイト
+    if enc == encoding_rs::UTF_16LE || enc == encoding_rs::UTF_16BE {
+        return s.encode_utf16().count() * 2;
+    }
     if s.is_ascii() {
         return s.len();
     }
-    let enc = doc.encoding().encoding;
     if enc == encoding_rs::SHIFT_JIS && !s.contains('\u{FFFD}') {
         // ASCII と半角カナは 1 バイト、それ以外（全角・記号）は 2 バイト
         return s.chars().map(|c| if (c as u32) < 0x80 || ('\u{FF61}'..='\u{FF9F}').contains(&c) { 1 } else { 2 }).sum();
-    }
-    if enc == encoding_rs::UTF_16LE || enc == encoding_rs::UTF_16BE {
-        return s.encode_utf16().count() * 2;
     }
     doc.encode(s).len()
 }
@@ -631,7 +632,7 @@ mod tests {
         let mut u16b = vec![0xFF, 0xFE];
         u16b.extend("あいう\n".encode_utf16().flat_map(|u| u.to_le_bytes()));
         let d = doc(u16b);
-        for text in ["あ", "a日b🙂", ""] {
+        for text in ["あ", "a日b🙂", "", "abc"] {
             assert_eq!(encoded_len(&d, text), d.encode(text).len(), "{text:?}");
         }
         // EUC-JP は従来どおり（エンコードして数える）
