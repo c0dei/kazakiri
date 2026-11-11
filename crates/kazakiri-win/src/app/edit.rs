@@ -30,6 +30,8 @@ pub(super) struct SaveJob {
 pub(super) struct SaveDone {
     result: std::result::Result<PathBuf, String>,
     target: PathBuf,
+    /// 変換して保存したときの文字コード（保存後に開き直すときに使う）
+    converted: Option<&'static Encoding>,
 }
 
 /// 「保存しますか？」のあとに行う操作
@@ -498,7 +500,8 @@ impl App {
             Some(t) => t,
             None => return Some(Deferred::SaveAs),
         };
-        if !self.is_modified() && doc.path() == Some(target.as_path()) {
+        let conv = self.convert.take();
+        if conv.is_none() && !self.is_modified() && doc.path() == Some(target.as_path()) {
             self.message = "変更はありません".into();
             self.invalidate();
             return None;
@@ -509,9 +512,9 @@ impl App {
         self.saving = Some(SaveJob { written: written.clone(), cancel: cancel.clone(), total: doc.len(), target: target.clone() });
         let hwnd = self.hwnd.0 as isize;
         std::thread::spawn(move || {
-            let result = doc.write_temp(&target, &written, &cancel).map_err(|e| e.to_string());
+            let result = doc.write_temp_with(&target, &written, &cancel, conv.as_ref()).map_err(|e| e.to_string());
             drop(doc);
-            let done = Box::into_raw(Box::new(SaveDone { result, target }));
+            let done = Box::into_raw(Box::new(SaveDone { result, target, converted: conv.map(|c| c.encoding) }));
             if unsafe { PostMessageW(Some(HWND(hwnd as *mut _)), WM_SAVE_DONE, WPARAM(0), LPARAM(done as isize)) }.is_err() {
                 drop(unsafe { Box::from_raw(done) });
             }
@@ -521,6 +524,24 @@ impl App {
         }
         self.invalidate();
         None
+    }
+
+    /// 文字コード（または改行コード）を変えて保存：保存先を選んでから書き出す
+    pub(super) fn start_convert_save(&mut self, id: u32) -> Option<Deferred> {
+        let doc = self.doc.clone()?;
+        if self.saving.is_some() {
+            return None;
+        }
+        let cur = doc.encoding();
+        let mut conv = kazakiri_core::Convert { encoding: cur.encoding, bom: cur.bom_len > 0, newline: None };
+        if let Some(&(_, enc, bom)) = id.checked_sub(menu::ID_CONV_ENC_BASE).and_then(|i| menu::CONV_ENCODINGS.get(i as usize)) {
+            conv.encoding = enc;
+            conv.bom = bom;
+        } else if let Some(&(_, nl)) = id.checked_sub(menu::ID_CONV_NL_BASE).and_then(|i| menu::CONV_NEWLINES.get(i as usize)) {
+            conv.newline = Some(nl);
+        }
+        self.convert = Some(conv);
+        Some(Deferred::SaveAs)
     }
 
     pub(super) fn on_save_done(&mut self, done: SaveDone) {
@@ -535,7 +556,7 @@ impl App {
             }
         };
         let Some(doc) = self.doc.take() else { return };
-        let forced = doc.forced_encoding();
+        let forced = done.converted.or(doc.forced_encoding());
         let view = (self.top, self.x_off, self.sel);
         // マップを閉じる（Windows はマップ中のファイルを置き換えられない）
         let weak = Arc::downgrade(&doc);
