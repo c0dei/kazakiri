@@ -478,7 +478,7 @@ pub fn sort_to_file(doc: &Document, opts: SortOptions, out: &Path, run_rows: usi
         let mut n = 0u64;
         while let Some(item) = heap.pop() {
             n += 1;
-            if n % 65536 == 0 && ctl.cancel.load(AO::Relaxed) {
+            if n.is_multiple_of(65536) && ctl.cancel.load(AO::Relaxed) {
                 let _ = std::fs::remove_file(&temp);
                 return Err("並べ替えを中止しました".into());
             }
