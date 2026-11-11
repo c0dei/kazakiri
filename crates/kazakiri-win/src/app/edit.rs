@@ -149,6 +149,9 @@ impl App {
         if !self.check_editable() {
             return;
         }
+        if self.rect_type(s) {
+            return;
+        }
         let Some(doc) = self.doc.clone() else { return };
         if !doc.can_encode(s) {
             self.message = format!("この文字は {} で表せないため入力できません", doc.encoding().name());
@@ -182,6 +185,9 @@ impl App {
         if !self.check_editable() {
             return;
         }
+        if self.rect_delete(forward) {
+            return;
+        }
         let Some(doc) = self.doc.clone() else { return };
         let sel = self.sel.unwrap_or((0, 0));
         let (a, b) = if sel.0 != sel.1 {
@@ -210,6 +216,9 @@ impl App {
     }
 
     pub(super) fn cut(&mut self) {
+        if self.rect_cut() {
+            return;
+        }
         if self.selection().is_none() || !self.check_editable() {
             return;
         }
