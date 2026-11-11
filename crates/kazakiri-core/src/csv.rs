@@ -42,6 +42,50 @@ pub fn split_fields(line: &str, delim: char) -> Vec<Range<usize>> {
     out
 }
 
+/// 1 行を読み終えた時点で、引用符の中にいるか（＝次の行が同じレコードの続きか）。
+/// `start_quoted` は、この行の頭が前の行から続く引用符の中か。
+/// 引用が始まるのはフィールドの先頭の `"` だけ（`split_fields` と同じ決まり）
+pub fn ends_in_quote(line: &str, delim: char, start_quoted: bool) -> bool {
+    let mut quoted = start_quoted;
+    let mut field_start = !start_quoted;
+    let mut it = line.chars().peekable();
+    while let Some(c) = it.next() {
+        if quoted {
+            if c == '"' {
+                if it.peek() == Some(&'"') {
+                    it.next();
+                } else {
+                    quoted = false;
+                }
+            }
+        } else if c == '"' && field_start {
+            quoted = true;
+            field_start = false;
+        } else {
+            field_start = c == delim;
+        }
+    }
+    quoted
+}
+
+/// 引用符の中に改行を含むレコードがあれば、その最初の続きの行（0 から数える）。
+/// 行を単位に並べ替えたり絞り込んだりすると、そのレコードが壊れる
+pub fn first_continuation_line(doc: &Document, delim: char, ctl: &SearchControl) -> Option<u64> {
+    let (count, _) = doc.line_count();
+    let mut quoted = false;
+    for i in 0..count {
+        if i % 65536 == 0 && ctl.cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            return None;
+        }
+        if quoted {
+            return Some(i);
+        }
+        let (s, e) = doc.line_range(i)?;
+        quoted = ends_in_quote(&doc.decode(&doc.read(s, e)), delim, false);
+    }
+    None
+}
+
 /// 引用符を外したフィールドの中身
 pub fn unquote(field: &str) -> String {
     let t = field.trim_matches(|c| c == ' ');
@@ -277,6 +321,13 @@ pub fn sort_document(doc: &Document, opts: SortOptions, ctl: &SearchControl) -> 
     if count > SORT_LIMIT {
         return Err(format!("行が多すぎて並べ替えできません（{} 万行まで）", SORT_LIMIT / 10_000));
     }
+    // 引用符の中に改行を含むレコードがあると、行ごとの並べ替えでレコードが壊れる
+    if let Some(n) = first_continuation_line(doc, opts.delim, ctl) {
+        return Err(format!(
+            "{} 行目が前の行から続くレコード（引用符の中の改行）なので、並べ替えるとレコードが壊れます。並べ替えは行いません",
+            n + 1
+        ));
+    }
     // 最後の行が空（ファイルが改行で終わる）なら並べ替えの対象にしない
     let last_empty = doc.line_range(count - 1).is_some_and(|(s, e)| s == e);
     let body_end = if last_empty { count - 1 } else { count };
@@ -361,6 +412,34 @@ mod tests {
             std::thread::yield_now();
         }
         d
+    }
+
+    #[test]
+    fn quote_state_across_lines() {
+        assert!(!ends_in_quote("a,b,c", ',', false));
+        assert!(ends_in_quote("a,\"multi", ',', false));
+        assert!(!ends_in_quote("end\",x", ',', true));
+        assert!(!ends_in_quote("a,\"x\"\"y\",b", ',', false));
+        // フィールドの途中の " は引用の開始ではない（5" のような値）
+        assert!(!ends_in_quote("a,5\" screen,c", ',', false));
+        // 続きの行がさらに続く
+        assert!(ends_in_quote("still inside", ',', true));
+        // 引用の中の "" は " そのもの。閉じていなければ次の行に続く
+        assert!(!ends_in_quote("\"\"\"quoted\"\"\"", ',', false));
+        assert!(ends_in_quote("\"\"\"quoted\"\" start", ',', false));
+    }
+
+    #[test]
+    fn sort_refuses_multiline_records() {
+        let d = ready(b"id,note\r\n2,\"line one\r\nline two\"\r\n1,plain\r\n");
+        assert_eq!(first_continuation_line(&d, ',', &SearchControl::default()), Some(2));
+        let o = SortOptions { column: 0, delim: ',', descending: false, header: true };
+        let e = sort_document(&d, o, &SearchControl::default()).unwrap_err();
+        assert!(e.contains("3 行目"), "{e}");
+        // 改行を含まないファイルはこれまでどおり
+        let d = ready(b"id,note\r\n2,\"a, b\"\r\n1,plain\r\n");
+        assert_eq!(first_continuation_line(&d, ',', &SearchControl::default()), None);
+        assert!(sort_document(&d, o, &SearchControl::default()).is_ok());
     }
 
     #[test]
