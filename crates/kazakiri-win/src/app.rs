@@ -185,6 +185,14 @@ struct App {
     input: String,
     last_find: String,
     last_filter: String,
+    /// 検索語・置換語の履歴
+    history: crate::history::History,
+    /// 履歴をたどっているとき、いま出している履歴の番号
+    hist_cursor: Option<usize>,
+    /// 履歴をたどる前に入力していた文字列
+    hist_draft: String,
+    /// 入力欄を開いた直後で、最初の入力が前回の語を置き換える状態（→ で残して編集に切り替える）
+    input_fresh: bool,
     /// 置換の対象を絞る範囲（複数行を選んで Ctrl+H したとき）
     replace_scope: Option<(u64, u64)>,
     opts: SearchOptions,
@@ -306,6 +314,10 @@ unsafe fn run_inner() -> std::result::Result<(), (&'static str, windows::core::E
             input: String::new(),
             last_find: String::new(),
             last_filter: String::new(),
+            history: crate::history::History::load(),
+            hist_cursor: None,
+            hist_draft: String::new(),
+            input_fresh: false,
             replace_scope: None,
             opts: SearchOptions { case_sensitive: false, regex: false },
             search: None,
@@ -1131,11 +1143,27 @@ impl App {
                 // 置換中も F3 / Shift+F3 で移動できる
                 VK_F3 if self.prompt == Some(Prompt::ReplaceWith) => self.find(if shift { Direction::Backward } else { Direction::Forward }),
                 VK_BACK => {
-                    self.input.pop();
+                    if std::mem::take(&mut self.input_fresh) {
+                        self.input.clear();
+                    } else {
+                        self.input.pop();
+                    }
+                    self.hist_cursor = None;
                     self.invalidate();
                 }
+                // → / End：前回の語を残して、続きを編集する
+                VK_RIGHT | VK_END => {
+                    self.input_fresh = false;
+                    self.invalidate();
+                }
+                // ↑↓：履歴から呼び出す
+                VK_UP => self.history_step(true),
+                VK_DOWN => self.history_step(false),
                 _ if ctrl && vk == VK_V => {
                     if let Some(s) = clipboard_text() {
+                        if std::mem::take(&mut self.input_fresh) {
+                            self.input.clear();
+                        }
                         self.input.push_str(s.lines().next().unwrap_or(""));
                         self.invalidate();
                     }
@@ -1210,15 +1238,55 @@ impl App {
         };
         let Some(c) = c else { return };
         if self.prompt.is_some() {
+            if std::mem::take(&mut self.input_fresh) {
+                self.input.clear();
+            }
             self.input.push(c);
+            self.hist_cursor = None;
             self.invalidate();
         } else {
             self.type_text(c.encode_utf8(&mut [0; 4]), EditKind::Typing);
         }
     }
 
+    /// 入力欄の種類に対応する履歴
+    fn history_kind(&self) -> Option<crate::history::Kind> {
+        use crate::history::Kind;
+        match self.prompt {
+            Some(Prompt::Find | Prompt::ReplaceFind | Prompt::GrepQuery) => Some(Kind::Find),
+            Some(Prompt::ReplaceWith | Prompt::GrepReplaceWith) => Some(Kind::Replace),
+            _ => None,
+        }
+    }
+
+    /// 履歴をたどる（`older` なら古い方へ）。いちばん新しい側まで戻ると、たどる前の入力に戻る
+    fn history_step(&mut self, older: bool) {
+        let Some(kind) = self.history_kind() else { return };
+        let len = self.history.list(kind).len();
+        let next = match (self.hist_cursor, older) {
+            (None, true) if len > 0 => {
+                self.hist_draft = self.input.clone();
+                Some(0)
+            }
+            (Some(i), true) if i + 1 < len => Some(i + 1),
+            (Some(i), true) => Some(i),
+            (Some(0), false) => None,
+            (Some(i), false) => Some(i - 1),
+            (None, _) => return,
+        };
+        self.input = match next {
+            Some(i) => self.history.list(kind)[i].clone(),
+            None => std::mem::take(&mut self.hist_draft),
+        };
+        self.hist_cursor = next;
+        self.input_fresh = false;
+        self.invalidate();
+    }
+
     fn start_prompt(&mut self, p: Prompt) {
         self.prompt = Some(p);
+        self.hist_cursor = None;
+        self.hist_draft.clear();
         // 複数行を選んで置換を始めたら、その範囲の中だけを置換する（1 行の選択は検索語になる）
         if p == Prompt::ReplaceFind {
             self.replace_scope = self.selection().filter(|&(a, b)| {
@@ -1238,6 +1306,9 @@ impl App {
             Prompt::GrepFolder => self.default_grep_folder(),
             Prompt::GrepFiles => self.grep_files.clone(),
         };
+        // 検索語などは、最初に打った文字が前回の語を置き換える（フォルダ名などは、そのまま続きを編集）
+        self.input_fresh = !self.input.is_empty()
+            && matches!(p, Prompt::Find | Prompt::ReplaceFind | Prompt::GrepQuery | Prompt::ReplaceWith | Prompt::GrepReplaceWith | Prompt::ColumnFilter);
         self.invalidate();
     }
 
@@ -1251,6 +1322,10 @@ impl App {
     }
 
     fn submit_prompt(&mut self, shift: bool, ctrl: bool) -> Option<Deferred> {
+        if let Some(kind) = self.history_kind() {
+            let word = self.input.clone();
+            self.history.push(kind, &word);
+        }
         match self.prompt.take() {
             Some(Prompt::ReplaceFind) => {
                 self.last_find = std::mem::take(&mut self.input);
@@ -2101,7 +2176,7 @@ impl App {
             if self.opts.regex { "[.*]" } else { "" }
         );
         match self.prompt {
-            Some(Prompt::Find) => format!("検索{flags}: {}|  Enter:次 Shift+Enter:前 Alt+Enter:すべて一覧 Alt+C:大小区別 Alt+R:正規表現 Esc:取消", self.input),
+            Some(Prompt::Find) => format!("検索{flags}: {}|  Enter:次 Shift+Enter:前 Alt+Enter:すべて一覧 ↑↓:履歴 Alt+C:大小区別 Alt+R:正規表現 Esc:取消", self.input),
             Some(Prompt::GotoLine) => format!("行番号へ移動: {}|", self.input),
             Some(Prompt::GrepReplaceWith) => {
                 let esc = if self.opts.regex { " ($1 や \\n が使えます)" } else { "" };
