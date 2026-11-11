@@ -1,4 +1,4 @@
-//! ダークテーマのときの、自分で描くメニューバー。
+//! 自分で描くメニューバー（既定。ダークテーマでは必ず、ライトテーマでは設定 `native_menu` で標準に戻せる）。
 //!
 //! ネイティブのメニューバーは Windows が白く塗り、暗くする公式の方法がない。
 //! そこでダークテーマのあいだはネイティブのバーを外し（`SetMenu(None)`）、タブバーと同じように
@@ -92,7 +92,8 @@ impl App {
 
     /// ダークテーマのあいだは自前のバーを使う（ネイティブのバーを外す／戻す）
     pub(super) fn sync_menu_bar(&mut self) {
-        let want = self.settings.dark;
+        // ダークテーマは必ず自前（ネイティブは暗くできない）。ライトも、見た目をそろえるため既定は自前
+        let want = self.settings.dark || !self.settings.native_menu;
         if want == self.custom_menu {
             return;
         }
