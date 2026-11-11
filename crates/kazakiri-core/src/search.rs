@@ -229,7 +229,7 @@ impl Query {
                 // 位置を元のバイト位置に戻す。前の一致からの差分だけエンコードするので全体で O(n)
                 let (mut dec, mut raw) = (0usize, cs);
                 let mut advance = |to: usize| {
-                    raw += doc.encode(&text[dec..to]).len();
+                    raw += encoded_len(doc, &text[dec..to]);
                     dec = to;
                     raw
                 };
@@ -439,10 +439,28 @@ enum Template {
     Expand(String),
 }
 
+/// デコードした文字列 `s` を元の文字コードに戻したときのバイト数。
+/// 位置を元のバイト位置に戻すために、一致のたびに呼ぶので、エンコードし直さずに数えられる場合は数える
+/// （ASCII だけなら文字列の長さ、Shift_JIS なら 1 文字 1〜2 バイト、UTF-16 なら 2 バイト単位）
+fn encoded_len(doc: &Document, s: &str) -> usize {
+    if s.is_ascii() {
+        return s.len();
+    }
+    let enc = doc.encoding().encoding;
+    if enc == encoding_rs::SHIFT_JIS && !s.contains('\u{FFFD}') {
+        // ASCII と半角カナは 1 バイト、それ以外（全角・記号）は 2 バイト
+        return s.chars().map(|c| if (c as u32) < 0x80 || ('\u{FF61}'..='\u{FF9F}').contains(&c) { 1 } else { 2 }).sum();
+    }
+    if enc == encoding_rs::UTF_16LE || enc == encoding_rs::UTF_16BE {
+        return s.encode_utf16().count() * 2;
+    }
+    doc.encode(s).len()
+}
+
 /// デコード後の位置を、元ファイルのバイト位置に戻す（再エンコードした長さで求める）
 fn map_back(doc: &Document, cs: usize, text: &str, s: usize, e: usize) -> (usize, usize) {
-    let start = cs + doc.encode(&text[..s]).len();
-    (start, start + doc.encode(&text[s..e]).len())
+    let start = cs + encoded_len(doc, &text[..s]);
+    (start, start + encoded_len(doc, &text[s..e]))
 }
 
 fn floor_char(s: &str, mut i: usize) -> usize {
@@ -598,6 +616,28 @@ mod tests {
         let (s, e) = (r.ranges[3].0, r.ranges[3].1);
         assert_eq!(q.replacement_at(&d, s, e, "[$1]").unwrap(), b"[3]");
         assert!(q.replacement_at(&d, s + 1, e, "x").is_none());
+    }
+
+    #[test]
+    fn encoded_len_matches_real_encoding() {
+        // Shift_JIS：ASCII・半角カナ・全角・記号・機種依存文字
+        let sj = "abc ｱｲｳ 日本語のテキスト、①㈱ <>\\ ~ ｶﾀｶﾅ\r\n";
+        let (bytes, _, _) = encoding_rs::SHIFT_JIS.encode(sj);
+        let d = doc(bytes.into_owned());
+        for text in [sj, "abc", "", "全角だけ", "ｱ", "a日b"] {
+            assert_eq!(encoded_len(&d, text), d.encode(text).len(), "{text:?}");
+        }
+        // UTF-16
+        let mut u16b = vec![0xFF, 0xFE];
+        u16b.extend("あいう\n".encode_utf16().flat_map(|u| u.to_le_bytes()));
+        let d = doc(u16b);
+        for text in ["あ", "a日b🙂", ""] {
+            assert_eq!(encoded_len(&d, text), d.encode(text).len(), "{text:?}");
+        }
+        // EUC-JP は従来どおり（エンコードして数える）
+        let (bytes, _, _) = encoding_rs::EUC_JP.encode("日本語 abc ｱｲ\n");
+        let d = doc(bytes.into_owned());
+        assert_eq!(encoded_len(&d, "日本語 ｱ"), d.encode("日本語 ｱ").len());
     }
 
     #[test]
