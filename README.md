@@ -169,14 +169,13 @@ cargo run --release -p kazakiri-cli -- open big.log "ERROR"     # 開く・索�
 | Ctrl+↑ / Ctrl+↓ | カーソルを動かさずにスクロール |
 | F5 | 再読み込み（追記だけなら増えた分だけ読み込む） |
 | Ctrl+T | 末尾の追従（tail -f 相当）のオン・オフ |
-| Ctrl+F | 検索語の入力（Enter: 次、Shift+Enter: 前、Ctrl+V: 貼り付け、Esc: 取り消し） |
+| Ctrl+F | 検索ダイアログ（検索タブ）を開く |
 | F3 / Shift+F3 | 次を検索 / 前を検索 |
-| Alt+C / Alt+R | 大文字小文字の区別 / 正規表現 の切り替え |
+| Alt+C / Alt+R | 大文字小文字の区別 / 正規表現 の切り替え（ダイアログのチェックボックスにも反映される） |
 | Esc | 検索・保存の中止、選択の解除 |
 | Ctrl+G | 行番号へ移動 |
-| Ctrl+H | 置換（検索語 → 置換後。Enter: 置換して次、Shift+Enter: 置換せず次、Ctrl+Enter / Alt+A: すべて置換） |
-| 検索欄で Alt+Enter | すべて検索して一覧 |
-| Ctrl+Shift+F | GREP（検索語 → フォルダ → 対象ファイル `*.log;*.txt` など） |
+| Ctrl+H | 検索ダイアログの置換タブ（複数行を選んでいれば「選択範囲の中だけ」を使える） |
+| Ctrl+Shift+F | 検索ダイアログの GREP タブ（フォルダ・対象ファイル `*.log;*.txt` など） |
 | F8 / Shift+F8 | 一覧の次 / 前の結果へ |
 | Ctrl+Shift+C | CSV/TSV モードの切り替え（並べ替えは「表示」メニュー） |
 | Ctrl+Shift+W | 空白・タブ・改行の表示の切り替え |
