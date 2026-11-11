@@ -46,6 +46,7 @@ const COMMANDS: &[(&str, u32)] = &[
     ("sort_desc", ID_SORT_DESC),
     ("column_filter", ID_FILTER),
     ("whitespace", ID_WHITESPACE),
+    ("wrap", ID_WRAP),
     ("log_colors", ID_LOG_COLORS),
     ("dark", ID_DARK),
     ("zoom_in", ID_ZOOM_IN),

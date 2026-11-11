@@ -16,11 +16,13 @@ pub struct Settings {
     pub log_colors: bool,
     /// タブの幅（半角の文字数）
     pub tab_width: usize,
+    /// 長い行を画面の幅で折り返して表示する
+    pub wrap: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { font: String::new(), font_size: 14.0, dark: false, whitespace: false, log_colors: true, tab_width: 4 }
+        Settings { font: String::new(), font_size: 14.0, dark: false, whitespace: false, log_colors: true, tab_width: 4, wrap: false }
     }
 }
 
@@ -58,6 +60,7 @@ impl Settings {
                 "dark" => s.dark = flag(v),
                 "whitespace" => s.whitespace = flag(v),
                 "log_colors" => s.log_colors = flag(v),
+                "wrap" => s.wrap = flag(v),
                 "tab_width" => {
                     if let Ok(x) = v.parse::<usize>() {
                         s.tab_width = x.clamp(1, 16);
@@ -72,8 +75,8 @@ impl Settings {
     pub fn to_text(&self) -> String {
         format!(
             "# kazakiri の設定（アプリから変更すると上書きされます）\n\
-             font = {}\nfont_size = {}\ndark = {}\nwhitespace = {}\nlog_colors = {}\ntab_width = {}\n",
-            self.font, self.font_size, self.dark, self.whitespace, self.log_colors, self.tab_width
+             font = {}\nfont_size = {}\ndark = {}\nwhitespace = {}\nlog_colors = {}\ntab_width = {}\nwrap = {}\n",
+            self.font, self.font_size, self.dark, self.whitespace, self.log_colors, self.tab_width, self.wrap
         )
     }
 
@@ -94,7 +97,7 @@ mod tests {
 
     #[test]
     fn roundtrip_and_defaults() {
-        let s = Settings { font: "Consolas".into(), font_size: 16.5, dark: true, whitespace: true, log_colors: false, tab_width: 8 };
+        let s = Settings { font: "Consolas".into(), font_size: 16.5, dark: true, whitespace: true, log_colors: false, tab_width: 8, wrap: true };
         assert_eq!(Settings::parse(&s.to_text()), s);
         let broken = Settings::parse("font_size = abc\nunknown = 1\ntab_width = 99\n");
         assert_eq!(broken.font_size, 14.0);

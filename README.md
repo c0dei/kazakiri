@@ -35,7 +35,8 @@ EmEditor の「大きいファイルが速い」体験を、買い切り不要�
 - 空白・タブ・改行の表示（Ctrl+Shift+W）：空白は `･`、全角空白は `□`、タブは `>` と桁送り、改行は CRLF が `¶`・LF が `↓`・CR が `←`、ファイルの終わりは `[EOF]`
 - ログレベルの色分け：ERROR / FATAL は赤、WARN は橙、DEBUG / TRACE は灰（単語として現れたものだけ。既定でオン）
 - 文字の大きさ：Ctrl++ / Ctrl+- / Ctrl+0（標準に戻す）、Ctrl+ホイール
-- 設定は `%APPDATA%\kazakiri\settings.ini` に自動で保存（font, font_size, dark, whitespace, log_colors, tab_width。テキストエディタで直接編集もできる）
+- 折り返して表示（表示 → 折り返して表示）：長い行を画面の幅で折り返す。文字単位の折り返しで、スクロールは元の行を単位に行う。オンのあいだは横スクロールバーと矩形選択は使えない（キー割り当て名は `wrap`）
+- 設定は `%APPDATA%\kazakiri\settings.ini` に自動で保存（font, font_size, dark, whitespace, log_colors, tab_width, wrap。テキストエディタで直接編集もできる）
 
 ![空白の表示とログの色分け（ダークテーマ）](docs/screenshot-whitespace.png)
 

@@ -67,6 +67,11 @@ impl App {
 
     /// Alt+クリック：矩形選択を始める
     pub(super) fn rect_start(&mut self, x: f32, y: f32) {
+        if self.wrap_on() {
+            self.message = "折り返して表示しているときは矩形選択できません（表示 → 折り返して表示 をオフに）".into();
+            self.invalidate();
+            return;
+        }
         let line = self.top + (y.max(0.0) / self.line_h) as u64;
         self.set_rect_end(None, line, x - self.text_left());
         if let Some(e) = &mut self.editor {
@@ -98,6 +103,9 @@ impl App {
 
     /// Alt+Shift+矢印
     pub(super) fn rect_key(&mut self, vk: VIRTUAL_KEY) {
+        if self.wrap_on() {
+            return;
+        }
         self.alt_used = true;
         let Some(doc) = self.doc.clone() else { return };
         let r = match self.rect() {

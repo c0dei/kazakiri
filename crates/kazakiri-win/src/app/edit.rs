@@ -60,7 +60,7 @@ impl App {
         self.sel.map_or(0, |(_, h)| h)
     }
 
-    fn set_caret(&mut self, pos: u64, extend: bool) {
+    pub(super) fn set_caret(&mut self, pos: u64, extend: bool) {
         // 次の検索はカーソル位置から
         self.hit = None;
         self.sel = match (extend, self.sel) {
@@ -316,6 +316,9 @@ impl App {
     }
 
     pub(super) fn move_vertical(&mut self, lines: i64, extend: bool) {
+        if self.wrap_on() {
+            return self.move_rows(lines, extend);
+        }
         let Some(doc) = self.doc.clone() else { return };
         let c = self.caret();
         let Some(line) = doc.line_of_offset(c) else { return };
@@ -389,6 +392,11 @@ impl App {
     pub(super) fn ensure_visible(&mut self, pos: u64) {
         let Some(doc) = self.doc.clone() else { return };
         let Some(line) = doc.line_of_offset(pos) else { return };
+        if self.wrap_on() {
+            self.ensure_visible_wrapped(&doc, pos);
+            self.update_scrollbars();
+            return;
+        }
         let vis = self.visible_lines() as u64;
         if line < self.top {
             self.top = line;
@@ -417,8 +425,15 @@ impl App {
             return;
         }
         let scale = unsafe { GetDpiForWindow(self.hwnd) } as f32 / 96.0;
-        let x = (self.text_left() + self.x_of_offset(&doc, c)) * scale;
-        let y = (self.tab_h() + self.pin_h() + (line - self.top) as f32 * self.line_h) * scale;
+        let (cx, row_y) = if self.wrap_on() {
+            let Some((rows, r, x)) = self.locate(&doc, c) else { return };
+            let before = self.rows_between_pub(&doc, self.top, rows.line.number) + r as u64;
+            (x, before as f32 * self.line_h)
+        } else {
+            (self.x_of_offset(&doc, c), (line - self.top) as f32 * self.line_h)
+        };
+        let x = (self.text_left() + cx) * scale;
+        let y = (self.tab_h() + self.pin_h() + row_y) * scale;
         let pt = POINT { x: x as i32, y: y as i32 };
         unsafe {
             let himc = ImmGetContext(self.hwnd);
