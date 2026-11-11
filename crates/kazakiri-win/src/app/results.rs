@@ -64,6 +64,8 @@ pub(super) struct ResultsJob {
 pub(super) enum JobKind {
     FindAll { ctl: Arc<SearchControl>, total: u64, replace: bool },
     Grep { prog: Arc<GrepProgress> },
+    /// GREP 結果の置換（ファイルを書き換える）
+    GrepReplace { prog: Arc<GrepProgress> },
     /// CSV の並べ替え
     Sort { ctl: Arc<SearchControl>, total: u64, name: String },
 }
@@ -72,7 +74,7 @@ impl ResultsJob {
     pub fn cancel(&self) {
         match &self.what {
             JobKind::FindAll { ctl, .. } => ctl.cancel.store(true, Ordering::Relaxed),
-            JobKind::Grep { prog } => prog.cancel(),
+            JobKind::Grep { prog } | JobKind::GrepReplace { prog } => prog.cancel(),
             JobKind::Sort { ctl, .. } => ctl.cancel.store(true, Ordering::Relaxed),
         }
     }
@@ -82,6 +84,7 @@ pub(super) enum JobDone {
     FindAll { id: u64, query: String, found: FindAll, elapsed: Duration },
     Replace { id: u64, found: FindAll, elapsed: Duration },
     FilterFailed { id: u64, message: String },
+    GrepReplace { id: u64, report: grep::ReplaceReport, skipped: usize, elapsed: Duration },
     Grep { id: u64, query: String, root: PathBuf, res: std::result::Result<GrepResult, String>, elapsed: Duration },
 }
 
@@ -222,7 +225,7 @@ impl App {
 
     pub(super) fn on_job_done(&mut self, done: JobDone) {
         let id = match &done {
-            JobDone::FindAll { id, .. } | JobDone::Replace { id, .. } | JobDone::Grep { id, .. } | JobDone::FilterFailed { id, .. } => *id,
+            JobDone::FindAll { id, .. } | JobDone::Replace { id, .. } | JobDone::Grep { id, .. } | JobDone::FilterFailed { id, .. } | JobDone::GrepReplace { id, .. } => *id,
         };
         if self.rjob.as_ref().map(|j| j.id) != Some(id) {
             return; // 中止した、または古い結果
@@ -245,6 +248,28 @@ impl App {
             }
             JobDone::Replace { found, elapsed, .. } => self.apply_replace_all(found, elapsed),
             JobDone::FilterFailed { message, .. } => self.message = message,
+            JobDone::GrepReplace { report, skipped, elapsed, .. } => {
+                let mut notes = Vec::new();
+                if report.cancelled {
+                    notes.push("中止".to_string());
+                }
+                if skipped > 0 {
+                    notes.push(format!("開いているタブのファイル {skipped} 件は対象外"));
+                }
+                if !report.failed.is_empty() {
+                    let first = &report.failed[0];
+                    notes.push(format!("失敗 {} 件（{}: {}）", report.failed.len(), first.0.display(), first.1));
+                }
+                let notes = if notes.is_empty() { String::new() } else { format!("（{}）", notes.join("、")) };
+                self.message = format!(
+                    "GREP 置換: {} ファイル・{} 件を置換しました{notes}  {:.2} 秒",
+                    group(report.files_changed as u64),
+                    group(report.replaced as u64),
+                    elapsed.as_secs_f64()
+                );
+                // 一覧の位置はずれたので閉じる
+                self.results = None;
+            }
             JobDone::Grep { query, root, res, elapsed, .. } => match res {
                 Err(e) => self.message = e,
                 Ok(res) => {
@@ -398,7 +423,7 @@ impl App {
             rt.FillRectangle(&rect(0.0, top, w, top + self.line_h + 2.0), brush);
             brush.SetColor(&self.theme.text);
             let head = match (&self.results, &self.rjob) {
-                (_, Some(job)) if matches!(job.what, JobKind::Grep { .. }) => self.job_status(job),
+                (_, Some(job)) if matches!(job.what, JobKind::Grep { .. } | JobKind::GrepReplace { .. }) => self.job_status(job),
                 (Some(r), _) => format!("{}    F8: 次  Shift+F8: 前  Esc: 閉じる", r.summary),
                 _ => String::new(),
             };
@@ -455,6 +480,11 @@ impl App {
                 format!("{what}「{}」 {:.0}%  {secs:.1} 秒  (Esc で中止)", self.last_find, pct.min(100.0))
             }
             JobKind::Sort { ctl, total, name } => super::csv_view::sort_status(ctl, *total, name, secs),
+            JobKind::GrepReplace { prog } => format!(
+                "GREP 置換中 {} / {} ファイル  {secs:.1} 秒  (Esc で中止。書き換え済みのファイルは戻りません)",
+                group(prog.files_done.load(Ordering::Relaxed) as u64),
+                group(prog.files_total.load(Ordering::Relaxed) as u64),
+            ),
             JobKind::Grep { prog } => format!(
                 "GREP 中「{}」 {} / {} ファイル  {} 件  {} 読み込み  {secs:.1} 秒  (Esc で中止)",
                 self.last_find,
@@ -594,6 +624,72 @@ impl App {
             SetTimer(Some(self.hwnd), TIMER_SEARCH, 100, None);
         }
         self.update_scrollbars();
+        self.invalidate();
+    }
+
+    /// GREP 結果の置換を始める（入力欄を開く）。結果が使えるときだけ
+    pub(super) fn start_grep_replace(&mut self) {
+        match self.results.as_ref().map(|r| &r.kind) {
+            Some(ResultKind::Grep { res, .. }) if res.truncated || res.cancelled => {
+                self.message = "GREP の結果が打ち切られているので置換できません。条件やファイルを絞って、もう一度 GREP してください".into();
+                self.invalidate();
+            }
+            Some(ResultKind::Grep { .. }) => self.start_prompt(Prompt::GrepReplaceWith),
+            _ => {
+                self.message = "GREP の結果がありません。先に GREP（Ctrl+Shift+F）をしてください".into();
+                self.invalidate();
+            }
+        }
+    }
+
+    /// 確認のダイアログに出す文章
+    pub(super) fn grep_replace_question(&self) -> Option<String> {
+        let Some(ResultKind::Grep { res, .. }) = self.results.as_ref().map(|r| &r.kind) else { return None };
+        Some(format!(
+            "「{}」を「{}」に置き換えます。\n\n対象: {} ファイル（{} 行）\n\nファイルを直接書き換えます。この操作は元に戻せません。実行しますか？",
+            self.last_find,
+            self.last_replace,
+            group(res.matched_files as u64),
+            group(res.hits.len() as u64)
+        ))
+    }
+
+    /// 確認のあと：GREP の結果にあるファイルを書き換える
+    pub(super) fn run_grep_replace(&mut self) {
+        let Some(ResultKind::Grep { res, .. }) = self.results.as_ref().map(|r| &r.kind) else { return };
+        // 開いているタブのファイルは書き換えない（編集中の内容とぶつかるため）
+        let open = self.open_paths();
+        let mut seen = std::collections::BTreeSet::new();
+        let mut files = Vec::new();
+        let mut skipped = 0;
+        for h in &res.hits {
+            if !seen.insert(h.file) {
+                continue;
+            }
+            let p = res.files[h.file].clone();
+            if std::fs::canonicalize(&p).is_ok_and(|c| open.contains(&c)) {
+                skipped += 1;
+            } else {
+                files.push(p);
+            }
+        }
+        let search = self.opts;
+        let pattern = self.last_find.clone();
+        let replacement = self.replacement_text();
+        self.cancel_jobs();
+        let id = self.next_job;
+        self.next_job += 1;
+        let prog = Arc::new(GrepProgress::default());
+        self.rjob = Some(ResultsJob { id, started: Instant::now(), what: JobKind::GrepReplace { prog: prog.clone() } });
+        let hwnd = self.hwnd.0 as isize;
+        std::thread::spawn(move || {
+            let t = Instant::now();
+            let report = grep::grep_replace(&files, &pattern, search, &replacement, &prog);
+            post(hwnd, WM_RESULTS_DONE, JobDone::GrepReplace { id, report, skipped, elapsed: t.elapsed() });
+        });
+        unsafe {
+            SetTimer(Some(self.hwnd), TIMER_SEARCH, 100, None);
+        }
         self.invalidate();
     }
 

@@ -104,7 +104,7 @@ impl App {
         self.cancel_search();
         self.search = None;
         // GREP はファイルに結び付かないので続ける
-        if !matches!(self.rjob.as_ref().map(|j| &j.what), Some(JobKind::Grep { .. })) {
+        if !matches!(self.rjob.as_ref().map(|j| &j.what), Some(JobKind::Grep { .. } | JobKind::GrepReplace { .. })) {
             if let Some(j) = self.rjob.take() {
                 j.cancel();
             }
@@ -375,6 +375,16 @@ impl App {
         };
         self.tab_drag = Some((to, true));
         self.invalidate();
+    }
+
+    /// 開いているタブのファイルの（正規化した）パス
+    pub(super) fn open_paths(&self) -> Vec<PathBuf> {
+        (0..self.tabs.len())
+            .filter_map(|i| {
+                let doc = if i == self.active { self.doc.as_ref() } else { self.tabs[i].doc.as_ref() };
+                doc.and_then(|d| d.path()).and_then(|p| std::fs::canonicalize(p).ok())
+            })
+            .collect()
     }
 
     /// 開いているファイルを覚えておく（終了時）

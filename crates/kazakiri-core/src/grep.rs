@@ -288,6 +288,81 @@ pub fn grep(root: &Path, pattern: &str, opts: &GrepOptions, prog: &GrepProgress)
     })
 }
 
+/// GREP 置換の結果
+#[derive(Debug, Default)]
+pub struct ReplaceReport {
+    /// 書き換えたファイル
+    pub files_changed: usize,
+    /// 置換した件数
+    pub replaced: usize,
+    /// 書き換えられなかったファイルと理由
+    pub failed: Vec<(PathBuf, String)>,
+    pub cancelled: bool,
+}
+
+/// `files` のそれぞれで `pattern` に一致する箇所をすべて `replacement` に置き換えて、ファイルを書き換える。
+/// 一致の位置は GREP の結果ではなく、書き換える直前にファイルを探し直して求める
+/// （ファイルが変わっていても正しい箇所だけが変わる）。文字コードと改行コードは各ファイルのまま。
+/// `replacement` は正規表現のときは `$1` などを含められる（`\n` などの展開は呼び出し側で済ませる）
+pub fn grep_replace(files: &[PathBuf], pattern: &str, search: SearchOptions, replacement: &str, prog: &GrepProgress) -> ReplaceReport {
+    use crate::editor::Editor;
+    let mut report = ReplaceReport::default();
+    prog.files_total.store(files.len(), Ordering::Relaxed);
+    for path in files {
+        if prog.ctl.cancel.load(Ordering::Relaxed) {
+            report.cancelled = true;
+            break;
+        }
+        let result = (|| -> Result<usize, String> {
+            let doc = Document::open(path).map_err(|e| e.to_string())?;
+            // 編集には行の索引が必要
+            while !doc.progress().done {
+                if prog.ctl.cancel.load(Ordering::Relaxed) {
+                    return Err("中止".into());
+                }
+                thread::sleep(std::time::Duration::from_millis(1));
+            }
+            if is_binary(&doc) {
+                return Err("バイナリのため対象外".into());
+            }
+            let q = Query::new(&doc, pattern, search)?;
+            let found = q.find_all(&doc, Some(replacement), usize::MAX, &prog.ctl);
+            if found.cancelled {
+                return Err("中止".into());
+            }
+            if found.ranges.is_empty() {
+                return Ok(0);
+            }
+            let mut ed = Editor::new(Arc::new(doc));
+            ed.replace_all(&found.ranges, &found.replacements, (0, 0)).map_err(|e| e.to_string())?;
+            let edited = ed.doc().clone();
+            let temp = edited.write_temp_with(path, &AtomicU64::new(0), &prog.ctl.cancel, None).map_err(|e| e.to_string())?;
+            // マップを閉じてから置き換える（Windows ではマップ中のファイルは置き換えられない）
+            drop(edited);
+            drop(ed);
+            if let Err(e) = crate::document::commit_save(&temp, path) {
+                let _ = std::fs::remove_file(&temp);
+                return Err(e.to_string());
+            }
+            Ok(found.ranges.len())
+        })();
+        match result {
+            Ok(0) => {}
+            Ok(n) => {
+                report.files_changed += 1;
+                report.replaced += n;
+            }
+            Err(e) if e == "中止" => {
+                report.cancelled = true;
+                break;
+            }
+            Err(e) => report.failed.push((path.clone(), e)),
+        }
+        prog.files_done.fetch_add(1, Ordering::Relaxed);
+    }
+    report
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -349,6 +424,40 @@ mod tests {
         // 正規表現の誤りは最初に返す
         let bad = GrepOptions { search: SearchOptions { case_sensitive: true, regex: true }, ..opts };
         assert!(grep(&dir, "(", &bad, &GrepProgress::default()).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn replace_across_files() {
+        let dir = std::env::temp_dir().join(format!("kazakiri-grep-replace-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let a = dir.join("a.log");
+        let b = dir.join("b.log");
+        let c = dir.join("c.log");
+        std::fs::write(&a, "foo=1\nbar foo\n").unwrap();
+        std::fs::write(&b, encoding_rs::SHIFT_JIS.encode("名前=foo\r\nfoo 太郎\r\n").0.as_ref()).unwrap();
+        std::fs::write(&c, "nothing here\n").unwrap();
+        let prog = GrepProgress::default();
+        let opts = SearchOptions { case_sensitive: true, regex: false };
+        let r = grep_replace(&[a.clone(), b.clone(), c.clone()], "foo", opts, "花子", &prog);
+        assert_eq!((r.files_changed, r.replaced), (2, 4), "{r:?}");
+        assert!(r.failed.is_empty() && !r.cancelled);
+        assert_eq!(std::fs::read_to_string(&a).unwrap(), "花子=1\nbar 花子\n");
+        // Shift_JIS・CRLF のまま
+        let bytes = std::fs::read(&b).unwrap();
+        let (s, _, _) = encoding_rs::SHIFT_JIS.decode(&bytes);
+        assert_eq!(s, "名前=花子\r\n花子 太郎\r\n");
+        assert_eq!(std::fs::read_to_string(&c).unwrap(), "nothing here\n");
+        // 正規表現のキャプチャ
+        let opts = SearchOptions { case_sensitive: true, regex: true };
+        let r = grep_replace(std::slice::from_ref(&a), r"(\S+)=(\d)", opts, "$2:$1", &prog);
+        assert_eq!(r.replaced, 1);
+        assert_eq!(std::fs::read_to_string(&a).unwrap(), "1:花子\nbar 花子\n");
+        // 壊れた正規表現は書き換えずに失敗として報告
+        let r = grep_replace(std::slice::from_ref(&a), "(", opts, "x", &prog);
+        assert_eq!(r.failed.len(), 1);
+        assert_eq!(std::fs::read_to_string(&a).unwrap(), "1:花子\nbar 花子\n");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
