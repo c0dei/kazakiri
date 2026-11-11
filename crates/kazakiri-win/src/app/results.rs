@@ -81,6 +81,7 @@ impl ResultsJob {
 pub(super) enum JobDone {
     FindAll { id: u64, query: String, found: FindAll, elapsed: Duration },
     Replace { id: u64, found: FindAll, elapsed: Duration },
+    FilterFailed { id: u64, message: String },
     Grep { id: u64, query: String, root: PathBuf, res: std::result::Result<GrepResult, String>, elapsed: Duration },
 }
 
@@ -180,6 +181,38 @@ impl App {
         self.invalidate();
     }
 
+    /// CSV の列フィルタ：条件に合う行を一覧にする
+    pub(super) fn start_filter(&mut self) {
+        let Some(doc) = self.doc.clone() else { return };
+        let Some(view) = &self.csv else { return };
+        let (delim, header) = (view.delim, view.header);
+        let text = self.last_filter.clone();
+        let filter = match kazakiri_core::csv::Filter::parse(&text, !self.opts.case_sensitive) {
+            Ok(f) => f,
+            Err(e) => {
+                self.message = e;
+                return self.invalidate();
+            }
+        };
+        self.cancel_jobs();
+        let id = self.next_job;
+        self.next_job += 1;
+        let ctl = Arc::new(SearchControl::default());
+        self.rjob = Some(ResultsJob { id, started: Instant::now(), what: JobKind::FindAll { ctl: ctl.clone(), total: doc.line_count().0, replace: false } });
+        let hwnd = self.hwnd.0 as isize;
+        std::thread::spawn(move || {
+            let t = Instant::now();
+            match kazakiri_core::csv::filter_lines(&doc, delim, header, &filter, FIND_ALL_LIMIT, &ctl) {
+                Ok(found) => post(hwnd, WM_RESULTS_DONE, JobDone::FindAll { id, query: text, found, elapsed: t.elapsed() }),
+                Err(e) => post(hwnd, WM_RESULTS_DONE, JobDone::FilterFailed { id, message: e }),
+            }
+        });
+        unsafe {
+            SetTimer(Some(self.hwnd), TIMER_SEARCH, 100, None);
+        }
+        self.invalidate();
+    }
+
     pub(super) fn cancel_jobs(&mut self) {
         self.cancel_search();
         if let Some(j) = self.rjob.take() {
@@ -189,7 +222,7 @@ impl App {
 
     pub(super) fn on_job_done(&mut self, done: JobDone) {
         let id = match &done {
-            JobDone::FindAll { id, .. } | JobDone::Replace { id, .. } | JobDone::Grep { id, .. } => *id,
+            JobDone::FindAll { id, .. } | JobDone::Replace { id, .. } | JobDone::Grep { id, .. } | JobDone::FilterFailed { id, .. } => *id,
         };
         if self.rjob.as_ref().map(|j| j.id) != Some(id) {
             return; // 中止した、または古い結果
@@ -211,6 +244,7 @@ impl App {
                 }
             }
             JobDone::Replace { found, elapsed, .. } => self.apply_replace_all(found, elapsed),
+            JobDone::FilterFailed { message, .. } => self.message = message,
             JobDone::Grep { query, root, res, elapsed, .. } => match res {
                 Err(e) => self.message = e,
                 Ok(res) => {

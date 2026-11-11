@@ -41,6 +41,7 @@ pub const ID_CSV: u32 = 600;
 pub const ID_CSV_HEADER: u32 = 601;
 pub const ID_SORT_ASC: u32 = 602;
 pub const ID_SORT_DESC: u32 = 603;
+pub const ID_FILTER: u32 = 604;
 pub const ID_WHITESPACE: u32 = 620;
 pub const ID_LOG_COLORS: u32 = 621;
 pub const ID_DARK: u32 = 622;
@@ -183,6 +184,7 @@ pub unsafe fn build(km: &Keymap) -> Result<Menus> {
         sep(view)?;
         item(km, view, ID_SORT_ASC, "カーソルの列で昇順に並べ替え(&A)")?;
         item(km, view, ID_SORT_DESC, "カーソルの列で降順に並べ替え(&D)")?;
+        item(km, view, ID_FILTER, "列フィルタ(&F)...")?;
         sep(view)?;
         item(km, view, ID_WHITESPACE, "空白・タブ・改行を表示(&W)\tCtrl+Shift+W")?;
         item(km, view, ID_LOG_COLORS, "ログレベルの色分け(&L)")?;

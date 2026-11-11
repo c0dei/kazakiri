@@ -453,7 +453,7 @@ fn ceil_char(s: &str, mut i: usize) -> usize {
 }
 
 /// [a, b) を行の境目でおおよそ `size` ずつに分ける
-fn split(doc: &Document, a: usize, b: usize, size: usize) -> Vec<(usize, usize)> {
+pub(crate) fn split(doc: &Document, a: usize, b: usize, size: usize) -> Vec<(usize, usize)> {
     let mut out = Vec::new();
     let mut s = a;
     while s < b {
@@ -464,7 +464,7 @@ fn split(doc: &Document, a: usize, b: usize, size: usize) -> Vec<(usize, usize)>
     out
 }
 
-fn run_parallel<T, F>(ranges: &[(usize, usize)], f: F) -> Vec<Option<T>>
+pub(crate) fn run_parallel<T, F>(ranges: &[(usize, usize)], f: F) -> Vec<Option<T>>
 where
     T: Send,
     F: Fn(&(usize, usize)) -> Option<T> + Sync,
@@ -478,7 +478,7 @@ where
     })
 }
 
-fn threads() -> usize {
+pub(crate) fn threads() -> usize {
     thread::available_parallelism().map(|n| n.get()).unwrap_or(4).min(16)
 }
 
