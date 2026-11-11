@@ -37,6 +37,7 @@ mod view;
 mod edit;
 mod results;
 mod tabs;
+mod rect;
 use csv_view::{CsvView, Disp, Effect, SortDone, WM_SORT_DONE};
 use crate::settings::{self, Settings};
 use theme::Theme;
@@ -176,6 +177,10 @@ struct App {
     /// 選択（アンカー, 先端）のバイト位置
     sel: Option<(u64, u64)>,
     dragging: bool,
+    /// 矩形選択
+    rect: Option<rect::RectSel>,
+    /// Alt を矩形選択に使った（離したときにメニューを開かない）
+    alt_used: bool,
     message: String,
     opened_at: Option<Instant>,
     recent: Vec<PathBuf>,
@@ -277,6 +282,8 @@ unsafe fn run_inner() -> std::result::Result<(), (&'static str, windows::core::E
             hit: None,
             sel: None,
             dragging: false,
+            rect: None,
+            alt_used: false,
             message: "Ctrl+O: 開く / Ctrl+N: 新規 / ドラッグ&ドロップでも開けます".into(),
             opened_at: None,
             recent: recent::load(),
@@ -668,7 +675,11 @@ impl App {
                     if self.in_panel(y) {
                         return (DONE, self.panel_click(y));
                     }
-                    self.on_mouse_down(x, y, GetKeyState(VK_SHIFT.0 as i32) < 0);
+                    if GetKeyState(VK_MENU.0 as i32) < 0 && x >= self.gutter_width() && y < self.text_height() {
+                        self.rect_start(x, y);
+                    } else {
+                        self.on_mouse_down(x, y, GetKeyState(VK_SHIFT.0 as i32) < 0);
+                    }
                     (DONE, None)
                 }
                 WM_MBUTTONDOWN => {
@@ -702,6 +713,18 @@ impl App {
                 // Alt+C / Alt+R：検索オプションの切り替え。
                 // DefWindowProc にも渡す（渡さないと Alt を離したときにメニューが開いてしまう）
                 // 検索欄で Alt+Enter：すべて検索して一覧に。置換欄で Alt+A：すべて置換
+                WM_SYSKEYUP if self.alt_used && VIRTUAL_KEY(wparam.0 as u16) == VK_MENU => {
+                    self.alt_used = false;
+                    (DONE, None)
+                }
+                WM_SYSKEYDOWN
+                    if self.prompt.is_none()
+                        && GetKeyState(VK_SHIFT.0 as i32) < 0
+                        && matches!(VIRTUAL_KEY(wparam.0 as u16), VK_LEFT | VK_RIGHT | VK_UP | VK_DOWN) =>
+                {
+                    self.rect_key(VIRTUAL_KEY(wparam.0 as u16));
+                    (DONE, None)
+                }
                 WM_SYSKEYDOWN if VIRTUAL_KEY(wparam.0 as u16) == VK_RETURN && self.prompt == Some(Prompt::Find) => {
                     self.prompt = None;
                     self.last_find = std::mem::take(&mut self.input);
@@ -1001,6 +1024,7 @@ impl App {
                 } else {
                     let c = self.caret();
                     self.sel = Some((c, c));
+                    self.rect = None;
                     self.hit = None;
                 }
                 self.invalidate();
@@ -1354,6 +1378,9 @@ impl App {
     }
 
     fn on_drag(&mut self, x: f32, y: f32) {
+        if self.rect_drag(x, y) {
+            return;
+        }
         let Some(doc) = self.doc.clone() else { return };
         // 画面の外へドラッグしたら自動スクロール
         if y < 0.0 {
@@ -1463,6 +1490,9 @@ impl App {
     }
 
     fn copy(&mut self) {
+        if self.rect_copy() {
+            return;
+        }
         let Some((a, b)) = self.selection() else { return };
         if b - a > COPY_LIMIT {
             self.message = format!("選択範囲が大きすぎます（{}）。コピーできるのは {} までです", human_size(b - a), human_size(COPY_LIMIT));
@@ -1713,6 +1743,16 @@ impl App {
                         let (ua, ub) = self.span_units(doc, line, hs, he, d);
                         self.fill_units(rt, brush, layout, units, ua, ub, x, y, self.theme.matched)?;
                     }
+                }
+            }
+            // 矩形選択
+            if let Some((x1, x2, wide)) = self.rect_span(line.number) {
+                if wide {
+                    brush.SetColor(&self.theme.select);
+                    rt.FillRectangle(&rect(x + x1, y, x + x2, y + self.line_h), brush);
+                } else if self.prompt.is_none() {
+                    brush.SetColor(&self.theme.caret);
+                    rt.FillRectangle(&rect(x + x1 - 0.5, y + 1.0, x + x1 + 1.5, y + self.line_h - 1.0), brush);
                 }
             }
             brush.SetColor(&self.theme.text);

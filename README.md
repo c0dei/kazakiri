@@ -129,6 +129,7 @@ cargo run --release -p kazakiri-cli -- open big.log "ERROR"     # 開く・索�
 |---|---|
 | Ctrl+N / Ctrl+O | 新しいタブ / ファイルを開く（新しいタブで） |
 | Ctrl+Tab / Ctrl+Shift+Tab | 次のタブ / 前のタブ |
+| Alt+ドラッグ / Alt+Shift+矢印 | 矩形選択（コピー・切り取り・削除・貼り付け・各行への同時入力） |
 | Ctrl+W（タブの x、中ボタンでも可） | タブを閉じる |
 | Ctrl+S / Ctrl+Shift+S | 上書き保存 / 名前を付けて保存 |
 | Ctrl+Z / Ctrl+Y | 元に戻す / やり直し（Ctrl+Shift+Z でもやり直し） |
