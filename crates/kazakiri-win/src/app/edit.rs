@@ -15,6 +15,20 @@ use windows::Win32::UI::Input::Ime::*;
 use super::multi::MultiMove;
 use super::*;
 
+/// `WM_IME_SETCONTEXT` の lParam：IME の標準の変換ウィンドウを出す
+pub(super) const ISC_SHOWUICOMPOSITIONWINDOW: u32 = 0x8000_0000;
+/// `WM_IME_COMPOSITION` の lParam：変換中の文字列が変わった
+pub(super) const GCS_COMPSTR_BIT: u32 = 0x0008;
+
+/// IME で変換中の文字
+pub(super) struct Comp {
+    pub units: Vec<u16>,
+    /// 文字ごとの状態（0 入力中、1 変換対象、2 変換済み、3 変換対象（未変換）、4 エラー）
+    pub attrs: Vec<u8>,
+    /// 変換中の文字列の中のカーソル位置（UTF-16 単位）
+    pub cursor: usize,
+}
+
 /// 保存スレッドからの完了通知
 pub(super) const WM_SAVE_DONE: u32 = WM_APP + 2;
 /// 保存後に保留していた操作を実行する
@@ -449,6 +463,8 @@ impl App {
         let x = (self.text_left() + cx) * scale;
         let y = (self.chrome_h() + self.pin_h() + row_y) * scale;
         let pt = POINT { x: x as i32, y: y as i32 };
+        // 変換中の文字の幅（候補ウィンドウが、その下に出るように）
+        let comp_w = self.comp.as_ref().map_or(0, |c| (unsafe { self.text_width(&c.units) }.unwrap_or(0.0) * scale) as i32);
         unsafe {
             let himc = ImmGetContext(self.hwnd);
             if himc.is_invalid() {
@@ -460,7 +476,7 @@ impl App {
                 dwIndex: 0,
                 dwStyle: CFS_EXCLUDE,
                 ptCurrentPos: pt,
-                rcArea: RECT { left: pt.x, top: pt.y, right: pt.x + 1, bottom: pt.y + (self.line_h * scale) as i32 },
+                rcArea: RECT { left: pt.x, top: pt.y, right: pt.x + 1 + comp_w, bottom: pt.y + (self.line_h * scale) as i32 },
             };
             let _ = ImmSetCandidateWindow(himc, &cand);
             // 変換中の文字を本文と同じ大きさにする
@@ -473,6 +489,71 @@ impl App {
     }
 
     /// 確定した文字列をまとめて受け取る（1 文字ずつの WM_CHAR より速く、元に戻すも 1 回）
+    pub(super) fn ime_inline_on(&self) -> bool {
+        self.settings.ime_inline && self.prompt.is_none()
+    }
+
+    /// 変換中の文字列・文字ごとの状態・カーソルを IME から読む
+    pub(super) fn read_composition(&mut self) {
+        unsafe {
+            let himc = ImmGetContext(self.hwnd);
+            if himc.is_invalid() {
+                return;
+            }
+            let bytes = ImmGetCompositionStringW(himc, GCS_COMPSTR, None, 0).max(0) as usize;
+            let mut units = vec![0u16; bytes / 2];
+            if bytes > 0 {
+                ImmGetCompositionStringW(himc, GCS_COMPSTR, Some(units.as_mut_ptr() as *mut _), bytes as u32);
+            }
+            let n_attr = ImmGetCompositionStringW(himc, GCS_COMPATTR, None, 0).max(0) as usize;
+            let mut attrs = vec![0u8; n_attr];
+            if n_attr > 0 {
+                ImmGetCompositionStringW(himc, GCS_COMPATTR, Some(attrs.as_mut_ptr() as *mut _), n_attr as u32);
+            }
+            let cursor = (ImmGetCompositionStringW(himc, GCS_CURSORPOS, None, 0) & 0xFFFF) as usize;
+            let _ = ImmReleaseContext(self.hwnd, himc);
+            self.comp = (!units.is_empty()).then(|| Comp { cursor: cursor.min(units.len()), attrs, units });
+        }
+        self.update_ime_position();
+        self.invalidate();
+    }
+
+    /// 変換中の文字を、カーソルの位置（x, y）に重ねて描く。下線で状態を示し、変換対象は背景を付ける
+    pub(super) unsafe fn draw_composition(&self, rt: &ID2D1RenderTarget, brush: &ID2D1SolidColorBrush, comp: &Comp, x: f32, y: f32) -> Result<()> {
+        unsafe {
+            let w = self.text_width(&comp.units)?;
+            brush.SetColor(&self.theme.bg);
+            rt.FillRectangle(&rect(x, y, x + w, y + self.line_h), brush);
+            // 同じ状態が続く範囲ごとに、背景と下線
+            let mut i = 0;
+            while i < comp.units.len() {
+                let a = comp.attrs.get(i).copied().unwrap_or(0);
+                let mut j = i + 1;
+                while j < comp.units.len() && comp.attrs.get(j).copied().unwrap_or(0) == a {
+                    j += 1;
+                }
+                let (x0, x1) = (x + self.text_width(&comp.units[..i])?, x + self.text_width(&comp.units[..j])?);
+                let target = matches!(a, 1 | 3);
+                if target {
+                    brush.SetColor(&self.theme.select);
+                    rt.FillRectangle(&rect(x0, y, x1, y + self.line_h), brush);
+                }
+                brush.SetColor(&self.theme.text);
+                let t = if target { 2.0 } else { 1.0 };
+                rt.FillRectangle(&rect(x0, y + self.line_h - 1.0 - t, x1, y + self.line_h - 1.0), brush);
+                i = j;
+            }
+            let layout = self.dw.CreateTextLayout(&comp.units, &self.format, 1.0e6, self.line_h)?;
+            brush.SetColor(&self.theme.text);
+            rt.DrawTextLayout(Vector2 { X: x, Y: y }, &layout, brush, D2D1_DRAW_TEXT_OPTIONS_NONE);
+            // 変換中のカーソル
+            let cx = x + self.text_width(&comp.units[..comp.cursor.min(comp.units.len())])?;
+            brush.SetColor(&self.theme.caret);
+            rt.FillRectangle(&rect(cx - 0.5, y + 1.0, cx + 1.5, y + self.line_h - 1.0), brush);
+        }
+        Ok(())
+    }
+
     pub(super) fn ime_result(&mut self, lparam: LPARAM) -> bool {
         if lparam.0 as u32 & GCS_RESULTSTR.0 == 0 || self.prompt.is_some() {
             return false;

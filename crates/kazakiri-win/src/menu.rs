@@ -52,6 +52,7 @@ pub const ID_ZOOM_IN: u32 = 623;
 pub const ID_ZOOM_OUT: u32 = 624;
 pub const ID_ZOOM_RESET: u32 = 625;
 pub const ID_WRAP: u32 = 626;
+pub const ID_IME_INLINE: u32 = 627;
 /// 区切り文字の選択肢（DELIMS の並びと対応）
 pub const ID_DELIM_BASE: u32 = 610;
 pub const DELIMS: [(&str, char); 4] = [("カンマ ( , )", ','), ("タブ", '\t'), ("セミコロン ( ; )", ';'), ("縦棒 ( | )", '|')];
@@ -196,6 +197,7 @@ pub unsafe fn build(km: &Keymap) -> Result<Menus> {
         sep(view)?;
         item(km, view, ID_WHITESPACE, "空白・タブ・改行を表示(&W)\tCtrl+Shift+W")?;
         item(km, view, ID_WRAP, "折り返して表示(&R)")?;
+        item(km, view, ID_IME_INLINE, "IME の変換中の文字をエディタ内に表示(&M)")?;
         item(km, view, ID_LOG_COLORS, "ログレベルの色分け(&L)")?;
         item(km, view, ID_DARK, "ダークテーマ(&K)")?;
         sep(view)?;
@@ -228,6 +230,7 @@ impl Menus {
             CheckMenuItem(self.view, ID_WHITESPACE, check(s.whitespace));
             CheckMenuItem(self.view, ID_LOG_COLORS, check(s.log_colors));
             CheckMenuItem(self.view, ID_WRAP, check(s.wrap));
+            CheckMenuItem(self.view, ID_IME_INLINE, check(s.ime_inline));
             CheckMenuItem(self.search, ID_GREP_BACKUP, check(s.grep_backup));
             CheckMenuItem(self.view, ID_DARK, check(s.dark));
             CheckMenuItem(self.view, ID_CSV, check(csv.is_some()));

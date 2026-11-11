@@ -199,6 +199,8 @@ struct App {
     dlg_scope: Option<(u64, u64)>,
     /// GREP でサブフォルダも探す
     grep_recursive: bool,
+    /// IME で変換中の文字
+    comp: Option<edit::Comp>,
     opts: SearchOptions,
     search: Option<SearchJob>,
     next_job: u64,
@@ -327,6 +329,7 @@ unsafe fn run_inner() -> std::result::Result<(), (&'static str, windows::core::E
             replace_scope: None,
             dlg_scope: None,
             grep_recursive: true,
+            comp: None,
             opts: SearchOptions { case_sensitive: false, regex: false },
             search: None,
             next_job: 1,
@@ -358,6 +361,12 @@ unsafe fn run_inner() -> std::result::Result<(), (&'static str, windows::core::E
         }
         if let Some(first) = app.keymap.problems.first() {
             app.message = format!("keys.ini: {first}（ほか {} 件）", app.keymap.problems.len() - 1);
+        }
+        // 描画の確認用（IME のない環境で、変換中の表示を見る）：KAZAKIRI_TEST_COMP=文字列
+        if let Some(t) = std::env::var_os("KAZAKIRI_TEST_COMP") {
+            let units: Vec<u16> = t.to_string_lossy().encode_utf16().collect();
+            let attrs = (0..units.len()).map(|i| if i < units.len() / 2 { 1 } else { 0 }).collect();
+            app.comp = Some(edit::Comp { cursor: units.len() / 2, attrs, units });
         }
         app.apply_title_theme();
         app.sync_menu_bar();
@@ -701,11 +710,29 @@ impl App {
                     self.clear_discard();
                     (DONE, self.guarded(Pending::Close))
                 }
+                // 変換中の文字を自前で描くので、IME の標準の変換ウィンドウは出さない
+                WM_IME_SETCONTEXT if self.ime_inline_on() => {
+                    let l = LPARAM(lparam.0 & !(edit::ISC_SHOWUICOMPOSITIONWINDOW as isize));
+                    (Some(DefWindowProcW(self.hwnd, msg, wparam, l)), None)
+                }
                 WM_IME_STARTCOMPOSITION => {
                     self.update_ime_position();
-                    (None, None)
+                    if self.ime_inline_on() { (DONE, None) } else { (None, None) }
                 }
-                WM_IME_COMPOSITION if self.ime_result(lparam) => (DONE, None),
+                WM_IME_COMPOSITION if self.ime_result(lparam) => {
+                    self.comp = None;
+                    self.invalidate();
+                    (DONE, None)
+                }
+                WM_IME_COMPOSITION if self.ime_inline_on() && lparam.0 as u32 & edit::GCS_COMPSTR_BIT != 0 => {
+                    self.read_composition();
+                    (DONE, None)
+                }
+                WM_IME_ENDCOMPOSITION if self.ime_inline_on() => {
+                    self.comp = None;
+                    self.invalidate();
+                    (DONE, None)
+                }
                 WM_INITMENUPOPUP => {
                     let forced = self.doc.as_ref().map(|d| d.forced_encoding());
                     self.menus.refresh(self.opts.case_sensitive, self.opts.regex, self.follow, forced, &self.recent);
@@ -1102,6 +1129,12 @@ impl App {
             menu::ID_WHITESPACE => self.toggle_whitespace(),
             menu::ID_LOG_COLORS => self.toggle_log_colors(),
             menu::ID_WRAP => self.toggle_wrap(),
+            menu::ID_IME_INLINE => {
+                self.settings.ime_inline = !self.settings.ime_inline;
+                self.settings.save();
+                self.message = format!("IME の変換中の文字をエディタ内に表示: {}（次の入力から）", on_off(self.settings.ime_inline));
+                self.invalidate();
+            }
             menu::ID_ADD_NEXT => self.add_next_match(),
             menu::ID_DARK => self.set_dark(!self.settings.dark),
             menu::ID_ZOOM_IN => self.zoom(1.0),
@@ -2089,6 +2122,10 @@ impl App {
                     // 折り返しの境目は、次の折り返し行の先頭に出す
                     if ua >= ra && (ua < rb || (last && ua == rb)) {
                         let cx = x + self.text_width(&units[..(ua - ra) as usize])?;
+                        // IME の変換中の文字（あれば、カーソルの位置に重ねて描く）
+                        if let Some(comp) = self.comp.as_ref().filter(|_| self.ime_inline_on()) {
+                            return self.draw_composition(rt, brush, comp, cx, y);
+                        }
                         let mut color = self.theme.caret;
                         if self.overwrite {
                             // 上書きモード：次の 1 文字を覆うブロック（文字が読めるよう半透明）
