@@ -451,11 +451,11 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&c).unwrap(), "nothing here\n");
         // 正規表現のキャプチャ
         let opts = SearchOptions { case_sensitive: true, regex: true };
-        let r = grep_replace(&[a.clone()], r"(\S+)=(\d)", opts, "$2:$1", &prog);
+        let r = grep_replace(std::slice::from_ref(&a), r"(\S+)=(\d)", opts, "$2:$1", &prog);
         assert_eq!(r.replaced, 1);
         assert_eq!(std::fs::read_to_string(&a).unwrap(), "1:花子\nbar 花子\n");
         // 壊れた正規表現は書き換えずに失敗として報告
-        let r = grep_replace(&[a.clone()], "(", opts, "x", &prog);
+        let r = grep_replace(std::slice::from_ref(&a), "(", opts, "x", &prog);
         assert_eq!(r.failed.len(), 1);
         assert_eq!(std::fs::read_to_string(&a).unwrap(), "1:花子\nbar 花子\n");
         let _ = std::fs::remove_dir_all(&dir);
