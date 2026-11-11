@@ -162,7 +162,14 @@ impl App {
             return;
         }
         let sel = self.sel.unwrap_or((0, 0));
-        let (a, b) = (sel.0.min(sel.1), sel.0.max(sel.1));
+        let (a, mut b) = (sel.0.min(sel.1), sel.0.max(sel.1));
+        // 上書きモード：選択がなければ、カーソルの次の 1 文字を置き換える（行末では挿入）
+        if self.overwrite && a == b && kind == EditKind::Typing {
+            let at_line_end = doc.line_of_offset(a).and_then(|l| doc.line_range(l)).is_none_or(|(_, e)| a >= e);
+            if !at_line_end {
+                b = doc.next_char(a);
+            }
+        }
         let kind = if a != b && kind == EditKind::Typing { EditKind::Other } else { kind };
         drop(doc);
         match self.with_editor(|ed| ed.replace(a, b, s, kind, sel)).unwrap() {

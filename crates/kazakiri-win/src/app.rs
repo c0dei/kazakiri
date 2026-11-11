@@ -203,6 +203,8 @@ struct App {
     /// 選択（アンカー, 先端）のバイト位置
     sel: Option<(u64, u64)>,
     dragging: bool,
+    /// 上書きモード（Insert キー）
+    overwrite: bool,
     /// 矩形選択
     rect: Option<rect::RectSel>,
     /// マルチカーソル（ほかのカーソル）
@@ -325,6 +327,7 @@ unsafe fn run_inner() -> std::result::Result<(), (&'static str, windows::core::E
             hit: None,
             sel: None,
             dragging: false,
+            overwrite: false,
             rect: None,
             multi: None,
             custom_menu: false,
@@ -1210,6 +1213,11 @@ impl App {
             VK_HOME => self.move_line_edge(false, shift),
             VK_END => self.move_line_edge(true, shift),
             // 編集
+            VK_INSERT if !ctrl && !shift => {
+                self.overwrite = !self.overwrite;
+                self.message = format!("{}モード", if self.overwrite { "上書き" } else { "挿入" });
+                self.invalidate();
+            }
             VK_RETURN => self.insert_newline(),
             VK_BACK => self.delete_char(false),
             VK_DELETE => self.delete_char(true),
@@ -2083,8 +2091,22 @@ impl App {
                     // 折り返しの境目は、次の折り返し行の先頭に出す
                     if ua >= ra && (ua < rb || (last && ua == rb)) {
                         let cx = x + self.text_width(&units[..(ua - ra) as usize])?;
-                        brush.SetColor(&self.theme.caret);
-                        rt.FillRectangle(&rect(cx - 0.5, y + 1.0, cx + 1.5, y + self.line_h - 1.0), brush);
+                        let mut color = self.theme.caret;
+                        if self.overwrite {
+                            // 上書きモード：次の 1 文字を覆うブロック（文字が読めるよう半透明）
+                            let next = units.get((ua - ra) as usize).copied().unwrap_or(0);
+                            let w = if next == 0 || (ua - ra) as usize >= d.shown.saturating_sub(row.0) {
+                                self.char_w
+                            } else {
+                                self.text_width(&units[(ua - ra) as usize..(ua - ra) as usize + 1 + usize::from((0xD800..0xDC00).contains(&next))]).unwrap_or(self.char_w)
+                            };
+                            color.a = 0.45;
+                            brush.SetColor(&color);
+                            rt.FillRectangle(&rect(cx, y + 1.0, cx + w.max(2.0), y + self.line_h - 1.0), brush);
+                        } else {
+                            brush.SetColor(&color);
+                            rt.FillRectangle(&rect(cx - 0.5, y + 1.0, cx + 1.5, y + self.line_h - 1.0), brush);
+                        }
                     }
                 }
             }
@@ -2241,6 +2263,7 @@ impl App {
                 };
                 let follow = if self.follow { "追従中   " } else { "" };
                 let modified = if self.is_modified() { "変更あり   " } else { "" };
+                let overwrite = if self.overwrite { "上書き   " } else { "" };
                 let enc = if doc.forced_encoding().is_some() { format!("{}（指定）", doc.encoding().name()) } else { doc.encoding().name() };
                 // カーソルの行と列（列は文字数）
                 let c = self.caret();
@@ -2258,7 +2281,7 @@ impl App {
                     Some((l, _)) => format!("{} 行", group(l + 1)),
                     None => format!("{} 行目付近", group(self.top + 1)),
                 };
-                format!("{modified}{follow}{idx}{sel}{pos} / {lines} 行   {enc}   {}   {}", doc.newline_name(), human_size(doc.len()))
+                format!("{overwrite}{modified}{follow}{idx}{sel}{pos} / {lines} 行   {enc}   {}   {}", doc.newline_name(), human_size(doc.len()))
             }
         };
         unsafe {
