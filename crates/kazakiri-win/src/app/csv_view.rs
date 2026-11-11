@@ -349,6 +349,40 @@ impl App {
         self.invalidate();
     }
 
+    /// 外部ソート：`out` に、並べ替えた結果を書き出す（終わったら開く）
+    pub(super) fn start_external_sort(&mut self, out: PathBuf, desc: bool) {
+        let (Some((delim, header)), Some(doc)) = (self.csv.as_ref().map(|v| (v.delim, v.header)), self.doc.clone()) else { return };
+        let Some((col, _, name)) = self.caret_column() else { return };
+        if doc.path().is_some_and(|p| p == out.as_path()) {
+            self.message = "元のファイルとは別の名前で保存してください".into();
+            return self.invalidate();
+        }
+        let opts = SortOptions { column: col, delim, descending: desc, header };
+        self.cancel_jobs();
+        let id = self.next_job;
+        self.next_job += 1;
+        let ctl = Arc::new(SearchControl::default());
+        let done = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let label = format!("「{name}」で並べ替えて保存中");
+        self.rjob = Some(results::ResultsJob { id, started: Instant::now(), what: results::JobKind::FileOp { ctl: ctl.clone(), done: done.clone(), total: doc.len() * 2, label } });
+        let hwnd = self.hwnd.0 as isize;
+        std::thread::spawn(move || {
+            let t = Instant::now();
+            let r = csv::sort_to_file(&doc, opts, &out, csv::RUN_ROWS, &done, &ctl);
+            drop(doc);
+            let result = r.map(|()| format!("並べ替えて保存しました（{:.1} 秒）→ {}", t.elapsed().as_secs_f64(), out.display()));
+            let open = result.is_ok().then_some(out);
+            let msg = Box::into_raw(Box::new(results::JobDone::FileOp { id, result, open }));
+            if unsafe { PostMessageW(Some(HWND(hwnd as *mut _)), results::WM_RESULTS_DONE, WPARAM(0), LPARAM(msg as isize)) }.is_err() {
+                drop(unsafe { Box::from_raw(msg) });
+            }
+        });
+        unsafe {
+            SetTimer(Some(self.hwnd), TIMER_SEARCH, 100, None);
+        }
+        self.invalidate();
+    }
+
     fn after_view_change(&mut self) {
         self.layout_cache.borrow_mut().clear();
         self.x_off = 0.0;
@@ -427,6 +461,12 @@ impl App {
         }
         let Some((col, _, name)) = self.caret_column() else { return };
         let opts = SortOptions { column: col, delim, descending: desc, header };
+        // 行が多すぎてメモリに載らないときは、並べ替えた結果を別のファイルへ書き出す（外部ソート）
+        if doc.line_count().0 > csv::SORT_LIMIT {
+            self.message = "行が多いので、並べ替えた結果を新しいファイルに保存します".into();
+            self.want_sort = Some(desc);
+            return self.invalidate();
+        }
         self.cancel_jobs();
         let id = self.next_job;
         self.next_job += 1;

@@ -5,6 +5,7 @@
 
 use std::cmp::Ordering;
 use std::ops::Range;
+use std::path::{Path, PathBuf};
 
 use crate::document::Document;
 use crate::search::SearchControl;
@@ -311,6 +312,200 @@ pub fn filter_lines(doc: &Document, delim: char, header: bool, f: &Filter, limit
     Ok(out)
 }
 
+/// 外部ソートで 1 回にメモリへ載せる行数
+pub const RUN_ROWS: usize = 2_000_000;
+/// 外部ソートのキーの長さの上限（これより長いキーは先頭だけで比べる）
+const KEY_BYTES_MAX: usize = 8 << 10;
+
+fn write_key(w: &mut impl std::io::Write, k: &Key) -> std::io::Result<()> {
+    match k {
+        Key::Num(v) => {
+            w.write_all(&[0])?;
+            w.write_all(&v.to_le_bytes())
+        }
+        Key::Text(t) => {
+            let mut end = t.len().min(KEY_BYTES_MAX);
+            while !t.is_char_boundary(end) {
+                end -= 1;
+            }
+            w.write_all(&[1])?;
+            w.write_all(&(end as u32).to_le_bytes())?;
+            w.write_all(&t.as_bytes()[..end])
+        }
+    }
+}
+
+/// 並べ替えた部分（run）を 1 件ずつ読む
+struct RunReader {
+    r: std::io::BufReader<std::fs::File>,
+}
+
+impl RunReader {
+    fn next(&mut self) -> std::io::Result<Option<(Key, u64, u64)>> {
+        use std::io::Read;
+        let mut tag = [0u8; 1];
+        if self.r.read(&mut tag)? == 0 {
+            return Ok(None);
+        }
+        let key = if tag[0] == 0 {
+            let mut b = [0u8; 8];
+            self.r.read_exact(&mut b)?;
+            Key::Num(f64::from_le_bytes(b))
+        } else {
+            let mut l = [0u8; 4];
+            self.r.read_exact(&mut l)?;
+            let mut t = vec![0u8; u32::from_le_bytes(l) as usize];
+            self.r.read_exact(&mut t)?;
+            Key::Text(String::from_utf8_lossy(&t).into_owned())
+        };
+        let mut b = [0u8; 16];
+        self.r.read_exact(&mut b)?;
+        Ok(Some((key, u64::from_le_bytes(b[..8].try_into().unwrap()), u64::from_le_bytes(b[8..].try_into().unwrap()))))
+    }
+}
+
+/// マージの待ち行列の要素。`BinaryHeap` は最大が先に出るので、順序を逆にして最小を先に出す
+struct HeapItem {
+    key: Key,
+    run: usize,
+    start: u64,
+    end: u64,
+    descending: bool,
+}
+
+impl PartialEq for HeapItem {
+    fn eq(&self, o: &Self) -> bool {
+        self.cmp(o) == Ordering::Equal
+    }
+}
+impl Eq for HeapItem {}
+impl PartialOrd for HeapItem {
+    fn partial_cmp(&self, o: &Self) -> Option<Ordering> {
+        Some(self.cmp(o))
+    }
+}
+impl Ord for HeapItem {
+    fn cmp(&self, o: &Self) -> Ordering {
+        let k = cmp_key(&self.key, &o.key);
+        let k = if self.descending { k.reverse() } else { k };
+        // 同じキーなら元の順（run の番号が小さい方）を先に（安定にするため）
+        k.then(self.run.cmp(&o.run)).reverse()
+    }
+}
+
+/// 行数が多くても並べ替えられる版：`out` に、並べ替えたファイルを書き出す（元は変えない）。
+/// `run_rows` 行ずつ並べて一時ファイルに書き、最後にマージする。メモリは `run_rows` に比例し、行数には比例しない。
+/// `done` に書いたバイト数（読む分と書く分を合わせて、全体の 2 倍が最大）を足す
+pub fn sort_to_file(doc: &Document, opts: SortOptions, out: &Path, run_rows: usize, done: &std::sync::atomic::AtomicU64, ctl: &SearchControl) -> Result<(), String> {
+    use std::io::{BufWriter, Write};
+    use std::sync::atomic::Ordering as AO;
+    let (count, exact) = doc.line_count();
+    if !exact {
+        return Err("索引の作成中は並べ替えできません".into());
+    }
+    if let Some(n) = first_continuation_line(doc, opts.delim, ctl) {
+        return Err(format!("{} 行目が前の行から続くレコード（引用符の中の改行）なので、並べ替えるとレコードが壊れます。並べ替えは行いません", n + 1));
+    }
+    let last_empty = doc.line_range(count - 1).is_some_and(|(s, e)| s == e);
+    let body_end = if last_empty { count - 1 } else { count };
+    let first = if opts.header { 1.min(body_end) } else { 0 };
+    let run_rows = run_rows.max(1);
+    let name = out.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "sorted".into());
+    let run_path = |i: usize| out.with_file_name(format!(".{name}.kazakiri-sort-run{i}"));
+    let mut runs: Vec<PathBuf> = Vec::new();
+    let cleanup = |runs: &[PathBuf]| {
+        for p in runs {
+            let _ = std::fs::remove_file(p);
+        }
+    };
+    let result = (|| -> Result<(), String> {
+        // 1. 部分ごとに並べて、一時ファイルへ
+        let mut i = first;
+        while i < body_end {
+            let j = (i + run_rows as u64).min(body_end);
+            let mut rows: Vec<(Key, u64, u64)> = Vec::with_capacity((j - i) as usize);
+            for n in i..j {
+                if n % 65536 == 0 && ctl.cancel.load(AO::Relaxed) {
+                    return Err("並べ替えを中止しました".into());
+                }
+                let (s, e) = doc.line_range(n).ok_or("行の位置が分かりません")?;
+                let bytes = doc.read(s, e);
+                let text = doc.decode(&bytes);
+                let fields = split_fields(&text, opts.delim);
+                let key = fields.get(opts.column).map_or(Key::Text(String::new()), |r| key_of(&text[r.clone()]));
+                rows.push((key, s, e));
+                done.fetch_add(e - s, AO::Relaxed);
+            }
+            rows.sort_by(|a, b| {
+                let o = cmp_key(&a.0, &b.0);
+                if opts.descending { o.reverse() } else { o }
+            });
+            let path = run_path(runs.len());
+            let mut w = BufWriter::with_capacity(1 << 20, std::fs::File::create(&path).map_err(|e| e.to_string())?);
+            runs.push(path);
+            for (k, s, e) in &rows {
+                write_key(&mut w, k).and_then(|_| w.write_all(&s.to_le_bytes())).and_then(|_| w.write_all(&e.to_le_bytes())).map_err(|e| e.to_string())?;
+            }
+            w.flush().map_err(|e| e.to_string())?;
+            i = j;
+        }
+        // 2. マージして書き出す
+        let nl = doc.encode(match doc.newline_name() {
+            "CRLF" => "\r\n",
+            "CR" => "\r",
+            _ => "\n",
+        });
+        let temp = out.with_file_name(format!(".{name}.kazakiri-sort"));
+        let mut w = BufWriter::with_capacity(1 << 20, std::fs::File::create(&temp).map_err(|e| e.to_string())?);
+        let bom = doc.read(0, doc.text_start() as u64).into_owned();
+        w.write_all(&bom).map_err(|e| e.to_string())?;
+        let mut written = bom.len() as u64;
+        if first == 1 {
+            let (s, e) = doc.line_range(0).ok_or("見出し行がありません")?;
+            w.write_all(&doc.read(s, e)).and_then(|_| w.write_all(&nl)).map_err(|e| e.to_string())?;
+            written += (e - s) + nl.len() as u64;
+        }
+        let mut readers = Vec::new();
+        for p in &runs {
+            readers.push(RunReader { r: std::io::BufReader::with_capacity(1 << 18, std::fs::File::open(p).map_err(|e| e.to_string())?) });
+        }
+        let mut heap = std::collections::BinaryHeap::new();
+        for (idx, r) in readers.iter_mut().enumerate() {
+            if let Some((key, start, end)) = r.next().map_err(|e| e.to_string())? {
+                heap.push(HeapItem { key, run: idx, start, end, descending: opts.descending });
+            }
+        }
+        let mut n = 0u64;
+        while let Some(item) = heap.pop() {
+            n += 1;
+            if n.is_multiple_of(65536) && ctl.cancel.load(AO::Relaxed) {
+                let _ = std::fs::remove_file(&temp);
+                return Err("並べ替えを中止しました".into());
+            }
+            w.write_all(&doc.read(item.start, item.end)).and_then(|_| w.write_all(&nl)).map_err(|e| e.to_string())?;
+            written += (item.end - item.start) + nl.len() as u64;
+            done.fetch_add(item.end - item.start, AO::Relaxed);
+            if let Some((key, start, end)) = readers[item.run].next().map_err(|e| e.to_string())? {
+                heap.push(HeapItem { key, run: item.run, start, end, descending: opts.descending });
+            }
+        }
+        w.flush().map_err(|e| e.to_string())?;
+        let file = w.into_inner().map_err(|e| e.to_string())?;
+        // 元が改行で終わっていなければ、最後の改行は付けない
+        if !last_empty && written >= nl.len() as u64 && n + u64::from(first == 1) > 0 {
+            file.set_len(written - nl.len() as u64).map_err(|e| e.to_string())?;
+        }
+        file.sync_all().map_err(|e| e.to_string())?;
+        drop(file);
+        std::fs::rename(&temp, out).map_err(|e| {
+            let _ = std::fs::remove_file(&temp);
+            e.to_string()
+        })
+    })();
+    cleanup(&runs);
+    result
+}
+
 /// 列で並べ替えた内容（ファイルの文字コードのバイト列）を作る。
 /// 本文全体（BOM の後ろから末尾まで）をこれで置き換えれば並べ替えになる
 pub fn sort_document(doc: &Document, opts: SortOptions, ctl: &SearchControl) -> Result<Vec<u8>, String> {
@@ -412,6 +607,38 @@ mod tests {
             std::thread::yield_now();
         }
         d
+    }
+
+    #[test]
+    fn external_sort_matches_in_memory_sort() {
+        use std::sync::atomic::AtomicU64;
+        let dir = std::env::temp_dir().join(format!("kazakiri-extsort-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // 乱数っぽい（重複のある）数値と文字列。最後は改行なし
+        let mut text = String::from("id,name,score\r\n");
+        let mut x: u64 = 12345;
+        for i in 0..5000 {
+            x = x.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            text.push_str(&format!("{i},user{},{}\r\n", (x >> 33) % 97, (x >> 40) % 500));
+        }
+        text.push_str("last,zzz,7");
+        let d = ready(text.as_bytes());
+        for (column, descending, header) in [(2usize, false, true), (2, true, true), (1, false, true), (1, true, false), (0, false, true)] {
+            let o = SortOptions { column, delim: ',', descending, header };
+            let want = sort_document(&d, o, &SearchControl::default()).unwrap();
+            let out = dir.join("sorted.csv");
+            sort_to_file(&d, o, &out, 137, &AtomicU64::new(0), &SearchControl::default()).unwrap();
+            let got = std::fs::read(&out).unwrap();
+            assert_eq!(String::from_utf8_lossy(&got), String::from_utf8_lossy(&want), "column {column} desc {descending} header {header}");
+        }
+        // 一時ファイルは残らない
+        let left: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        assert_eq!(left, ["sorted.csv"], "{left:?}");
+        // 引用符の中の改行は断る
+        let d = ready(b"a,b\n1,\"x\ny\"\n2,z\n");
+        assert!(sort_to_file(&d, SortOptions { column: 0, delim: ',', descending: false, header: true }, &dir.join("q.csv"), 10, &AtomicU64::new(0), &SearchControl::default()).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -95,6 +95,8 @@ enum Deferred {
     ShowFind(usize),
     /// 結合するファイルを選んで、出力先を決める
     Join,
+    /// 外部ソートの保存先を選ぶ（降順か）
+    ExternalSort(bool),
 }
 
 struct Gfx {
@@ -194,6 +196,8 @@ struct App {
     comp: Option<edit::Comp>,
     /// 操作の途中で、検索ダイアログ（のタブ）を開きたいとき
     want_dialog: Option<usize>,
+    /// 外部ソートの保存先を選びたいとき（降順か）
+    want_sort: Option<bool>,
     opts: SearchOptions,
     search: Option<SearchJob>,
     next_job: u64,
@@ -321,6 +325,7 @@ unsafe fn run_inner() -> std::result::Result<(), (&'static str, windows::core::E
             grep_recursive: true,
             comp: None,
             want_dialog: None,
+            want_sort: None,
             opts: SearchOptions { case_sensitive: false, regex: false },
             search: None,
             next_job: 1,
@@ -438,7 +443,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
         let Ok(mut guard) = cell.try_borrow_mut() else { return None };
         let app = guard.as_mut()?;
         let (handled, deferred) = unsafe { app.handle(msg, wparam, lparam) };
-        let deferred = deferred.or_else(|| app.want_dialog.take().map(Deferred::ShowFind));
+        let deferred = deferred.or_else(|| app.want_dialog.take().map(Deferred::ShowFind)).or_else(|| app.want_sort.take().map(Deferred::ExternalSort));
         Some((handled, deferred))
     });
     match result {
@@ -487,6 +492,19 @@ unsafe fn run_deferred(hwnd: HWND, d: Deferred) {
             }
         }
         Deferred::ShowFind(tab) => unsafe { find_dialog::show(hwnd, tab) },
+        Deferred::ExternalSort(desc) => {
+            let current = with_app(|app| app.doc.as_ref().and_then(|d| d.path().map(|p| p.to_path_buf()))).flatten();
+            let suggested = current.map(|p| {
+                p.with_file_name(format!(
+                    "{}.sorted.{}",
+                    p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "file".into()),
+                    p.extension().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "csv".into())
+                ))
+            });
+            if let Some(out) = unsafe { edit::save_dialog(hwnd, suggested) } {
+                with_app(|app| app.start_external_sort(out, desc));
+            }
+        }
         Deferred::Join => {
             let paths = unsafe { open_dialog(hwnd) };
             if paths.len() < 2 {
