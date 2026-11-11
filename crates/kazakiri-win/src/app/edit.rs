@@ -431,6 +431,11 @@ impl App {
         } else if line >= self.top + vis {
             self.top = line + 1 - vis;
         }
+        // 長い行（途中までしか読み込まない）の中では、横の位置は合わせない
+        if doc.line_range(line).is_some_and(|(s, e)| e - s > kazakiri_core::document::MAX_LINE_DISPLAY_BYTES as u64) {
+            self.update_scrollbars();
+            return;
+        }
         let x = self.x_of_offset(&doc, pos);
         let (w, _) = self.client_size();
         let view = (w - self.gutter_width() - 8.0 - 20.0).max(self.char_w * 8.0);

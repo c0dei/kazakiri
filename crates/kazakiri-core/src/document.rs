@@ -70,6 +70,8 @@ pub struct Line {
     pub text: String,
     /// 表示上限で切り詰めたか
     pub truncated: bool,
+    /// 長い行の途中から取り出したとき（`line_window`）、行頭からのバイト数。そうでなければ 0
+    pub skipped: u64,
 }
 
 impl Document {
@@ -366,13 +368,40 @@ impl Document {
             }
             let bytes = &data[start as usize..start as usize + take];
             let text = encoding::decode(&self.detected, bytes).into_owned();
-            out.push(Line { number, start, end, text, truncated });
+            out.push(Line { number, start, end, text, truncated, skipped: 0 });
             match next_line_start(data, start as usize, kind) {
                 Some(n) if (n as u64) <= len => start = n as u64,
                 _ => break,
             }
         }
         out
+    }
+
+    /// 長い行の途中（行頭から `from` バイトあたり）から、最大 `max_bytes` バイトを取り出す。
+    /// 戻り値の `start` は取り出した先頭の位置、`end` は取り出した末尾の位置で、`truncated` は後ろにまだ続くか。
+    /// 先頭は文字の境目に合わせる（UTF-8 は継続バイトを飛ばす、UTF-16 は偶数位置。Shift_JIS などは境目が決まらないので、
+    /// 先頭の 1 文字が崩れることがある）
+    pub fn line_window(&self, number: u64, from: u64, max_bytes: usize) -> Option<Line> {
+        let (ls, le) = self.line_range(number)?;
+        let mut s = ls + from.min(le - ls);
+        if self.detected.is_utf16() {
+            s = ls + ((s - ls) & !1);
+        } else if self.detected.encoding == encoding_rs::UTF_8 {
+            while s < le && (self.read(s, s + 1).first().is_some_and(|b| b & 0xC0 == 0x80)) {
+                s += 1;
+            }
+        }
+        let mut e = (s + max_bytes as u64).min(le);
+        if self.detected.is_utf16() {
+            e = s + ((e - s) & !1);
+        } else if self.detected.encoding == encoding_rs::UTF_8 {
+            // 終わりが文字の途中なら、その文字の手前まで
+            while e > s && e < le && self.read(e, e + 1).first().is_some_and(|b| b & 0xC0 == 0x80) {
+                e -= 1;
+            }
+        }
+        let text = self.decode(&self.read(s, e)).into_owned();
+        Some(Line { number, start: s, end: e, text, truncated: e < le, skipped: s - ls })
     }
 
     fn lines_edited(&self, first: u64, count: usize) -> Vec<Line> {
@@ -388,7 +417,7 @@ impl Document {
                 }
             }
             let text = self.decode(&self.read(start, start + take)).into_owned();
-            out.push(Line { number, start, end, text, truncated });
+            out.push(Line { number, start, end, text, truncated, skipped: 0 });
         }
         out
     }
@@ -791,6 +820,40 @@ mod tests {
         assert!(!doc.can_encode("😀"));
         let doc = Document::from_bytes(b"abc".to_vec());
         assert!(doc.can_encode("😀"));
+    }
+
+    #[test]
+    fn line_window_of_a_long_line() {
+        // 1 行が 200KB。UTF-8 の日本語を混ぜて、窓の端が文字の途中にならないことを確かめる
+        let mut text = String::new();
+        for i in 0..20000 {
+            text.push_str(&format!("{i:05}あ"));
+        }
+        text.push('\n');
+        text.push_str("next\n");
+        let d = Document::from_bytes(text.clone().into_bytes());
+        ready(&d);
+        let (ls, le) = d.line_range(0).unwrap();
+        assert!(le - ls > 100_000);
+        let w = d.line_window(0, 100_001, 4000).unwrap();
+        assert!(w.skipped >= 100_001 && w.skipped < 100_004);
+        assert_eq!(w.start, ls + w.skipped);
+        assert!(w.truncated && w.end - w.start <= 4000 && w.end - w.start > 3990);
+        // 窓の文字列は元の文字列の一部（文字化けしない）
+        assert!(text.contains(&w.text) && !w.text.contains('\u{FFFD}'), "{:?}", &w.text[..20]);
+        // 行末まで取り出すと、truncated が外れる
+        let last = d.line_window(0, le - ls - 10, 4000).unwrap();
+        assert!(!last.truncated && last.end == le);
+        // 範囲外の行は None、短い行も取り出せる
+        assert!(d.line_window(9, 0, 10).is_none());
+        assert_eq!(d.line_window(1, 0, 100).unwrap().text, "next");
+        // UTF-16
+        let mut u: Vec<u8> = vec![0xFF, 0xFE];
+        u.extend("あいうえお\n".repeat(3).encode_utf16().flat_map(|c| c.to_le_bytes()));
+        let d = Document::from_bytes(u);
+        ready(&d);
+        let w = d.line_window(0, 3, 4).unwrap();
+        assert_eq!(w.text, "いう");
     }
 
     #[test]
