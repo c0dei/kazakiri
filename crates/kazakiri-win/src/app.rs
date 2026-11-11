@@ -40,6 +40,7 @@ mod tabs;
 mod rect;
 mod dark;
 mod wrap;
+mod multi;
 use csv_view::{CsvView, Disp, Effect, SortDone, WM_SORT_DONE};
 use crate::settings::{self, Settings};
 use theme::Theme;
@@ -191,6 +192,8 @@ struct App {
     dragging: bool,
     /// 矩形選択
     rect: Option<rect::RectSel>,
+    /// マルチカーソル（ほかのカーソル）
+    multi: Option<multi::Multi>,
     /// Alt を矩形選択に使った（離したときにメニューを開かない）
     alt_used: bool,
     /// ドラッグで並べ替え中のタブ（番号, 動かしたか）
@@ -301,6 +304,7 @@ unsafe fn run_inner() -> std::result::Result<(), (&'static str, windows::core::E
             sel: None,
             dragging: false,
             rect: None,
+            multi: None,
             alt_used: false,
             tab_drag: None,
             message: "Ctrl+O: 開く / Ctrl+N: 新規 / ドラッグ&ドロップでも開けます".into(),
@@ -749,6 +753,8 @@ impl App {
                     }
                     if GetKeyState(VK_MENU.0 as i32) < 0 && x >= self.gutter_width() && y < self.text_height() {
                         self.rect_start(x, y);
+                    } else if GetKeyState(VK_CONTROL.0 as i32) < 0 && x >= self.gutter_width() && y < self.text_height() {
+                        self.multi_click(x, y);
                     } else {
                         self.on_mouse_down(x, y, GetKeyState(VK_SHIFT.0 as i32) < 0);
                     }
@@ -1047,6 +1053,7 @@ impl App {
             menu::ID_WHITESPACE => self.toggle_whitespace(),
             menu::ID_LOG_COLORS => self.toggle_log_colors(),
             menu::ID_WRAP => self.toggle_wrap(),
+            menu::ID_ADD_NEXT => self.add_next_match(),
             menu::ID_DARK => self.set_dark(!self.settings.dark),
             menu::ID_ZOOM_IN => self.zoom(1.0),
             menu::ID_ZOOM_OUT => self.zoom(-1.0),
@@ -1129,6 +1136,7 @@ impl App {
                     let c = self.caret();
                     self.sel = Some((c, c));
                     self.rect = None;
+                    self.multi_clear();
                     self.hit = None;
                 }
                 self.invalidate();
@@ -1580,7 +1588,7 @@ impl App {
     }
 
     fn copy(&mut self) {
-        if self.rect_copy() {
+        if self.rect_copy() || self.multi_copy() {
             return;
         }
         let Some((a, b)) = self.selection() else { return };
@@ -1912,6 +1920,16 @@ impl App {
                     }
                 }
             }
+            // マルチカーソル：ほかのカーソルの選択
+            if let Some(doc) = &self.doc {
+                for &(anchor, head) in self.extra_cursors() {
+                    let (a, b) = (anchor.min(head), anchor.max(head));
+                    if a != b && a < line.end.max(line.start + 1) && b > line.start {
+                        let (ua, ub) = local(self.span_units(doc, line, a, b, d));
+                        self.fill_units(rt, brush, layout, units, ua, ub, x, y, self.theme.select)?;
+                    }
+                }
+            }
             // 矩形選択
             if let Some((x1, x2, wide)) = self.rect_span(line.number) {
                 if wide {
@@ -1924,6 +1942,19 @@ impl App {
             }
             brush.SetColor(&self.theme.text);
             rt.DrawTextLayout(Vector2 { X: x, Y: y }, layout, brush, D2D1_DRAW_TEXT_OPTIONS_NONE);
+            // マルチカーソル：ほかのカーソル
+            if let (Some(doc), false) = (&self.doc, self.prompt.is_some()) {
+                for &(_, head) in self.extra_cursors() {
+                    if head >= line.start && head <= line.end {
+                        let (ua, _) = self.span_units(doc, line, head, head, d);
+                        if ua >= ra && (ua < rb || (last && ua == rb)) {
+                            let cx = x + self.text_width(&units[..(ua - ra) as usize])?;
+                            brush.SetColor(&self.theme.caret);
+                            rt.FillRectangle(&rect(cx - 0.5, y + 1.0, cx + 1.5, y + self.line_h - 1.0), brush);
+                        }
+                    }
+                }
+            }
             // カーソル
             if let (Some(doc), Some(_)) = (&self.doc, self.sel) {
                 let c = self.caret();

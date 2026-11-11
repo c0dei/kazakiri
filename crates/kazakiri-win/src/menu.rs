@@ -25,6 +25,7 @@ pub const ID_UNDO: u32 = 202;
 pub const ID_REDO: u32 = 203;
 pub const ID_CUT: u32 = 204;
 pub const ID_PASTE: u32 = 205;
+pub const ID_ADD_NEXT: u32 = 206;
 pub const ID_FIND: u32 = 300;
 pub const ID_FIND_NEXT: u32 = 301;
 pub const ID_FIND_PREV: u32 = 302;
@@ -156,6 +157,8 @@ pub unsafe fn build(km: &Keymap) -> Result<Menus> {
         item(km, edit, ID_COPY, "コピー(&C)\tCtrl+C")?;
         item(km, edit, ID_PASTE, "貼り付け(&P)\tCtrl+V")?;
         item(km, edit, ID_SELECT_ALL, "すべて選択(&A)\tCtrl+A")?;
+        sep(edit)?;
+        item(km, edit, ID_ADD_NEXT, "次の同じ文字列を選択に追加(&D)\tCtrl+D")?;
         popup(bar, edit, "編集(&E)")?;
 
         let search = CreatePopupMenu()?;
