@@ -184,7 +184,7 @@ impl Ctrls {
         self.place(ID_BROWSE, 278, folder_y + 18, 48, 24, grep);
         self.place(ID_FILES, 20, files_y + 18, 306, 24, grep);
         let mut cy = match tab {
-            TAB_FIND => y + 56 - 4,
+            TAB_FIND => y + 4,
             TAB_REPLACE => y + 56,
             _ => files_y + 56,
         };
