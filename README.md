@@ -40,7 +40,7 @@ EmEditor の「大きいファイルが速い」体験を、買い切り不要�
 - 構文の色分け（表示 → 構文の色分け。既定でオン）：拡張子から言語を決め、文字列・数値・キーワード・コメント・タグ・キーに色を付ける。対象は JSON・SQL・XML/HTML・INI/設定ファイル・YAML・C 系（js ts java c cpp cs go rs php など）・# 系（py sh rb ps1 など）。1 行ずつ色を付けるので、数 GB のファイルでも見えている行だけのコストで、複数行にわたる文字列やコメントは追わない。CSV モードと、拡張子で言語が決まらないファイル（ログなど）では、ログレベルの色分けのまま
 - 文字の大きさ：Ctrl++ / Ctrl+- / Ctrl+0（標準に戻す）、Ctrl+ホイール
 - 折り返して表示（表示 → 折り返して表示）：長い行を画面の幅で折り返す。文字単位の折り返しで、スクロールは元の行を単位に行う。オンのあいだは横スクロールバーと矩形選択は使えない（キー割り当て名は `wrap`）
-- 設定は `%APPDATA%\kazakiri\settings.ini` に自動で保存（font, font_size, dark, whitespace, log_colors, tab_width, wrap, grep_backup, ime_inline, syntax, native_menu。テキストエディタで直接編集もできる）
+- 設定は `%APPDATA%\kazakiri\settings.ini` に自動で保存（font, font_size, dark, whitespace, log_colors, tab_width, wrap, grep_backup, ime_inline, syntax, native_menu, mica。テキストエディタで直接編集もできる）
 
 ![空白の表示とログの色分け（ダークテーマ）](docs/screenshot-whitespace.png)
 
