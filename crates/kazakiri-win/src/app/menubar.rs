@@ -62,7 +62,7 @@ impl App {
             for (i, b) in self.bar_items().iter().enumerate() {
                 if self.menu_open == Some(i) {
                     brush.SetColor(&t.panel_head);
-                    rt.FillRectangle(&rect(b.x0, 0.0, b.x1, h), brush);
+                    rt.FillRoundedRectangle(&rrect(b.x0 + 2.0, 3.0, b.x1 - 2.0, h - 3.0, 4.0), brush);
                 }
                 brush.SetColor(&t.text);
                 self.draw_str(rt, brush, &b.label, b.x0 + PAD, (h - self.line_h) / 2.0, b.x1)?;

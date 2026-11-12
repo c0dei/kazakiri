@@ -310,6 +310,7 @@ unsafe fn run_inner() -> std::result::Result<(), (&'static str, windows::core::E
         let (char_w, line_h) = measure(&dw, &format).unwrap_or((fs * 0.5, (fs * 1.4).ceil()));
         let _ = format.SetIncrementalTabStop(char_w * settings.tab_width as f32);
 
+        theme::load_accent();
         let mut app = App {
             hwnd,
             d2d,
@@ -2273,6 +2274,8 @@ impl App {
         unsafe {
             brush.SetColor(&self.theme.status_bg);
             rt.FillRectangle(&rect(0.0, top, w, h), brush);
+            brush.SetColor(&self.theme.panel_head);
+            rt.FillRectangle(&rect(0.0, top, w, top + 1.0), brush);
             brush.SetColor(&self.theme.status_text);
         }
         let left = self.status_left();
@@ -2379,6 +2382,10 @@ fn clipboard_text() -> Option<String> {
 
 fn on_off(b: bool) -> &'static str {
     if b { "オン" } else { "オフ" }
+}
+
+fn rrect(l: f32, t: f32, r: f32, b: f32, radius: f32) -> D2D1_ROUNDED_RECT {
+    D2D1_ROUNDED_RECT { rect: rect(l, t, r, b), radiusX: radius, radiusY: radius }
 }
 
 fn rect(l: f32, t: f32, r: f32, b: f32) -> D2D_RECT_F {

@@ -469,14 +469,17 @@ impl App {
                 }
                 let active = i == self.active;
                 if active {
+                    // 角を丸めたタブ（下は本文とつなげる）と、アクセントカラーの短い印
                     brush.SetColor(&t.bg);
-                    rt.FillRectangle(&rect(x0, 0.0, x1, h), brush);
-                    brush.SetColor(&t.status_bg);
-                    rt.FillRectangle(&rect(x0, 0.0, x1, 2.0), brush);
+                    rt.FillRoundedRectangle(&rrect(x0 + 2.0, 3.0, x1 - 2.0, h + 8.0, 7.0), brush);
+                    rt.FillRectangle(&rect(x0 + 2.0, h - 6.0, x1 - 2.0, h), brush);
+                    brush.SetColor(&theme::accent(self.settings.dark));
+                    rt.FillRoundedRectangle(&rrect((x0 + x1) / 2.0 - 10.0, h - 3.0, (x0 + x1) / 2.0 + 10.0, h, 1.5), brush);
+                } else if i + 1 != self.active {
+                    // タブの境目（選択中のタブのとなりでは描かない）
+                    brush.SetColor(&t.dim);
+                    rt.FillRectangle(&rect(x1 - 1.0, 7.0, x1, h - 7.0), brush);
                 }
-                // タブの境目
-                brush.SetColor(&t.dim);
-                rt.FillRectangle(&rect(x1 - 1.0, 5.0, x1, h - 5.0), brush);
                 brush.SetColor(if active { &t.text } else { &t.gutter_text });
                 self.draw_str(rt, brush, &b.title, x0 + PAD, 4.0, x1 - CLOSE_W)?;
                 brush.SetColor(&t.gutter_text);

@@ -39,8 +39,8 @@ pub(super) static LIGHT: Theme = Theme {
     text: rgb(0x1E, 0x1E, 0x1E),
     gutter_bg: rgb(0xF3, 0xF3, 0xF3),
     gutter_text: rgb(0x8A, 0x8A, 0x8A),
-    status_bg: rgb(0x2B, 0x57, 0x9A),
-    status_text: rgb(0xFF, 0xFF, 0xFF),
+    status_bg: rgb(0xEE, 0xEE, 0xF0),
+    status_text: rgb(0x40, 0x40, 0x46),
     matched: rgb(0xFF, 0xE0, 0x6B),
     select: rgb(0xAD, 0xD6, 0xFF),
     dim: rgb(0xB0, 0xB0, 0xB0),
@@ -67,8 +67,8 @@ pub(super) static DARK: Theme = Theme {
     text: rgb(0xD8, 0xDA, 0xDE),
     gutter_bg: rgb(0x26, 0x28, 0x2C),
     gutter_text: rgb(0x6E, 0x74, 0x7C),
-    status_bg: rgb(0x2D, 0x40, 0x5E),
-    status_text: rgb(0xE8, 0xEA, 0xEE),
+    status_bg: rgb(0x2C, 0x2E, 0x33),
+    status_text: rgb(0xB8, 0xBC, 0xC4),
     matched: rgb(0x7A, 0x63, 0x10),
     select: rgb(0x26, 0x4F, 0x78),
     dim: rgb(0x70, 0x74, 0x7A),
@@ -89,3 +89,26 @@ pub(super) static DARK: Theme = Theme {
     syn_tag: rgb(0xE0, 0x6C, 0x75),
     syn_key: rgb(0x61, 0xAF, 0xEF),
 };
+
+/// Windows のアクセントカラー（0xAARRGGBB。0 ならまだ取っていない）
+static SYS_ACCENT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// システムのアクセントカラーを読む（取れなければ Windows 11 の既定の青）
+pub(super) fn load_accent() {
+    let mut c = 0u32;
+    let mut opaque = windows::core::BOOL(0);
+    let ok = unsafe { windows::Win32::Graphics::Dwm::DwmGetColorizationColor(&mut c, &mut opaque) }.is_ok();
+    SYS_ACCENT.store(if ok { c | 0xFF00_0000 } else { 0 }, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// 選択中のタブの印などに使う色。ダークテーマでは見やすいよう明るくする
+pub(super) fn accent(dark: bool) -> D2D1_COLOR_F {
+    let v = SYS_ACCENT.load(std::sync::atomic::Ordering::Relaxed);
+    let (r, g, b) = if v == 0 { (0x00, 0x67, 0xC0) } else { (((v >> 16) & 0xFF) as u8, ((v >> 8) & 0xFF) as u8, (v & 0xFF) as u8) };
+    if dark {
+        let up = |c: u8| (c as u32 + (255 - c as u32) * 40 / 100) as u8;
+        rgb(up(r), up(g), up(b))
+    } else {
+        rgb(r, g, b)
+    }
+}
