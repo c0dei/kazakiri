@@ -26,11 +26,13 @@ pub struct Settings {
     pub syntax: bool,
     /// ライトテーマのとき、Windows 標準のメニューバーを使う（ダークテーマと見た目が少し違う）。既定は自前のバーに統一
     pub native_menu: bool,
+    /// Windows 11 の Mica（タイトルバーの半透明）。
+    pub mica: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { font: String::new(), font_size: 14.0, dark: false, whitespace: false, log_colors: true, tab_width: 4, wrap: false, grep_backup: true, ime_inline: true, syntax: true, native_menu: false }
+        Settings { font: String::new(), font_size: 14.0, dark: false, whitespace: false, log_colors: true, tab_width: 4, wrap: false, grep_backup: true, ime_inline: true, syntax: true, native_menu: false, mica: true }
     }
 }
 
@@ -73,6 +75,7 @@ impl Settings {
                 "ime_inline" => s.ime_inline = flag(v),
                 "syntax" => s.syntax = flag(v),
                 "native_menu" => s.native_menu = flag(v),
+                "mica" => s.mica = flag(v),
                 "tab_width" => {
                     if let Ok(x) = v.parse::<usize>() {
                         s.tab_width = x.clamp(1, 16);
@@ -87,8 +90,8 @@ impl Settings {
     pub fn to_text(&self) -> String {
         format!(
             "# kazakiri の設定（アプリから変更すると上書きされます）\n\
-             font = {}\nfont_size = {}\ndark = {}\nwhitespace = {}\nlog_colors = {}\ntab_width = {}\nwrap = {}\ngrep_backup = {}\nime_inline = {}\nsyntax = {}\nnative_menu = {}\n",
-            self.font, self.font_size, self.dark, self.whitespace, self.log_colors, self.tab_width, self.wrap, self.grep_backup, self.ime_inline, self.syntax, self.native_menu
+             font = {}\nfont_size = {}\ndark = {}\nwhitespace = {}\nlog_colors = {}\ntab_width = {}\nwrap = {}\ngrep_backup = {}\nime_inline = {}\nsyntax = {}\nnative_menu = {}\nmica = {}\n",
+            self.font, self.font_size, self.dark, self.whitespace, self.log_colors, self.tab_width, self.wrap, self.grep_backup, self.ime_inline, self.syntax, self.native_menu, self.mica
         )
     }
 
@@ -109,7 +112,7 @@ mod tests {
 
     #[test]
     fn roundtrip_and_defaults() {
-        let s = Settings { font: "Consolas".into(), font_size: 16.5, dark: true, whitespace: true, log_colors: false, tab_width: 8, wrap: true, grep_backup: false, ime_inline: false, syntax: false, native_menu: true };
+        let s = Settings { font: "Consolas".into(), font_size: 16.5, dark: true, whitespace: true, log_colors: false, tab_width: 8, wrap: true, grep_backup: false, ime_inline: false, syntax: false, native_menu: true, mica: false };
         assert_eq!(Settings::parse(&s.to_text()), s);
         let broken = Settings::parse("font_size = abc\nunknown = 1\ntab_width = 99\n");
         assert_eq!(broken.font_size, 14.0);

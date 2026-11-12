@@ -1,6 +1,7 @@
 //! 表示の設定：文字の大きさ、テーマ、空白の可視化、ログの色分け。変更は設定ファイルに保存する。
 
-use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE};
+use windows::Win32::Graphics::Dwm::{DwmExtendFrameIntoClientArea, DwmSetWindowAttribute, DWMWA_SYSTEMBACKDROP_TYPE, DWMWA_USE_IMMERSIVE_DARK_MODE};
+use windows::Win32::UI::Controls::MARGINS;
 
 use super::*;
 
@@ -59,6 +60,12 @@ impl App {
         unsafe {
             let _ = DwmSetWindowAttribute(self.hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &v as *const BOOL as *const _, size_of::<BOOL>() as u32);
             super::dark::apply(self.hwnd, self.settings.dark);
+            // Windows 11：タイトルバーを Mica に（DWMWA_SYSTEMBACKDROP_TYPE: 1=なし, 2=Mica）。
+            // Windows 10 などでは属性が無く、失敗しても何も起きない
+            let backdrop: i32 = if self.settings.mica { 2 } else { 1 };
+            let m = MARGINS { cxLeftWidth: -1, cxRightWidth: -1, cyTopHeight: -1, cyBottomHeight: -1 };
+            let _ = DwmExtendFrameIntoClientArea(self.hwnd, &m);
+            let _ = DwmSetWindowAttribute(self.hwnd, DWMWA_SYSTEMBACKDROP_TYPE, &backdrop as *const i32 as *const _, size_of::<i32>() as u32);
         }
     }
 
