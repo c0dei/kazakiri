@@ -22,6 +22,7 @@ const COMMANDS: &[(&str, u32)] = &[
     ("prev_tab", ID_PREV_TAB),
     ("split", ID_SPLIT),
     ("join", ID_JOIN),
+    ("settings", ID_SETTINGS),
     ("exit", ID_EXIT),
     ("undo", ID_UNDO),
     ("redo", ID_REDO),

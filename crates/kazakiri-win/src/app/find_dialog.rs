@@ -68,11 +68,11 @@ thread_local! {
     static CTRLS: RefCell<Option<Ctrls>> = const { RefCell::new(None) };
 }
 
-fn wide(s: &str) -> Vec<u16> {
+pub(super) fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
-fn rgb_ref(c: &D2D1_COLOR_F) -> COLORREF {
+pub(super) fn rgb_ref(c: &D2D1_COLOR_F) -> COLORREF {
     let b = |v: f32| (v * 255.0).round() as u32;
     COLORREF(b(c.r) | (b(c.g) << 8) | (b(c.b) << 16))
 }
@@ -268,7 +268,7 @@ impl Ctrls {
     }
 }
 
-unsafe fn make_child(parent: HWND, class: PCWSTR, text: &str, style: u32, ex: u32, id: i32, font: HFONT) -> HWND {
+pub(super) unsafe fn make_child(parent: HWND, class: PCWSTR, text: &str, style: u32, ex: u32, id: i32, font: HFONT) -> HWND {
     let t = wide(text);
     unsafe {
         let hw = CreateWindowExW(
