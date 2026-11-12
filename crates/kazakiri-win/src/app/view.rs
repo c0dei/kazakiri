@@ -85,3 +85,32 @@ impl App {
         self.invalidate();
     }
 }
+
+impl App {
+    pub(super) fn set_mica(&mut self, on: bool) {
+        self.settings.mica = on;
+        self.apply_title_theme();
+        self.settings.save();
+        self.invalidate();
+    }
+
+    pub(super) fn set_native_menu(&mut self, on: bool) {
+        self.settings.native_menu = on;
+        self.sync_menu_bar();
+        self.settings.save();
+    }
+
+    /// 設定ダイアログの入力欄：フォント名（空なら自動）、大きさ、タブ幅
+    pub(super) fn set_text_settings(&mut self, font: &str, size: f32, tab: usize) {
+        let size = size.clamp(settings::MIN_FONT, settings::MAX_FONT);
+        let tab = tab.clamp(1, 32);
+        if font == self.settings.font && size == self.settings.font_size && tab == self.settings.tab_width {
+            return;
+        }
+        self.settings.font = font.to_string();
+        self.settings.font_size = size;
+        self.settings.tab_width = tab;
+        self.apply_font();
+        self.settings.save();
+    }
+}

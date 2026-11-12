@@ -41,6 +41,7 @@ mod rect;
 mod dark;
 mod menubar;
 mod find_dialog;
+mod settings_dialog;
 mod wrap;
 mod multi;
 use csv_view::{CsvView, Disp, Effect, SortDone, WM_SORT_DONE};
@@ -95,6 +96,7 @@ enum Deferred {
     ShowMenu(usize),
     /// 検索・置換・GREP のダイアログを開く（タブの番号）
     ShowFind(usize),
+    ShowSettings,
     /// 結合するファイルを選んで、出力先を決める
     Join,
     /// 外部ソートの保存先を選ぶ（降順か）
@@ -406,6 +408,10 @@ unsafe fn run_inner() -> std::result::Result<(), (&'static str, windows::core::E
             if dlg != 0 && IsDialogMessageW(HWND(dlg as *mut _), &msg).as_bool() {
                 continue;
             }
+            let sdlg = settings_dialog::SET_DLG.load(Ordering::Relaxed);
+            if sdlg != 0 && IsDialogMessageW(HWND(sdlg as *mut _), &msg).as_bool() {
+                continue;
+            }
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
@@ -518,6 +524,7 @@ unsafe fn run_deferred(hwnd: HWND, d: Deferred) {
             }
         }
         Deferred::ShowFind(tab) => unsafe { find_dialog::show(hwnd, tab) },
+        Deferred::ShowSettings => unsafe { settings_dialog::show(hwnd) },
         Deferred::SaveResults => {
             let suggested = with_app(|app| app.doc.as_ref().and_then(|d| d.path().map(|p| p.with_extension("results.txt")))).flatten();
             if let Some(out) = unsafe { edit::save_dialog(hwnd, suggested.or_else(|| Some(PathBuf::from("results.txt")))) } {
@@ -1115,6 +1122,7 @@ impl App {
     unsafe fn command(&mut self, id: u32) -> Option<Deferred> {
         match id {
             menu::ID_KEYS => self.edit_keys(),
+            menu::ID_SETTINGS => return Some(Deferred::ShowSettings),
             menu::ID_SPLIT => {
                 if self.doc.as_ref().and_then(|d| d.path()).is_none() {
                     self.message = "分割するには、先にファイルとして保存してください".into();
