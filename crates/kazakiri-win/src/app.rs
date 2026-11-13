@@ -42,6 +42,7 @@ mod dark;
 mod menubar;
 mod find_dialog;
 mod bookmarks;
+mod toolbar;
 mod keys_dialog;
 mod lines;
 mod settings_dialog;
@@ -183,6 +184,9 @@ struct App {
     bm_lines: u64,
     /// 直前の編集が行頭から始まったか（ブックマークのずらし方に使う）
     bm_col0: bool,
+    /// ツールバー・機能ボタンの上にあるマウス
+    hover: Option<toolbar::Hover>,
+    tracking_leave: bool,
     line_h: f32,
     char_w: f32,
     /// いま表示している Document（編集のたびに editor から取り直す）
@@ -336,6 +340,8 @@ unsafe fn run_inner() -> std::result::Result<(), (&'static str, windows::core::E
             bookmarks: Default::default(),
             bm_lines: 0,
             bm_col0: false,
+            hover: None,
+            tracking_leave: false,
             line_h,
             char_w,
             doc: None,
@@ -923,9 +929,17 @@ impl App {
                 }
                 WM_LBUTTONDOWN => {
                     let (x, y) = self.mouse_pos(lparam);
+                    // ツールバー・機能ボタン
+                    if let Some(id) = self.hover_at(x, y).and_then(|h| self.hover_command(h)).map(|(id, _)| id) {
+                        self.hover = None;
+                        return (DONE, self.command(id));
+                    }
                     // 自前のメニューバー：項目を押したらポップアップを出す
-                    if y < -self.tab_h() {
+                    if y < -(self.tab_h() + self.tb_h()) {
                         return (DONE, self.bar_item_at(x).map(Deferred::ShowMenu));
+                    }
+                    if y < -self.tab_h() {
+                        return (DONE, None);
                     }
                     if y < 0.0 {
                         let d = self.tab_click(x, false);
@@ -933,7 +947,7 @@ impl App {
                         return (DONE, d);
                     }
                     // ステータスバーの文字コード・改行コード
-                    if y >= self.client_size().1 - self.status_h() {
+                    if y >= self.client_size().1 - self.status_base_h() {
                         return (DONE, self.status_hit(x).map(Deferred::StatusMenu));
                     }
                     // 固定した見出し行
@@ -985,6 +999,16 @@ impl App {
                 WM_LBUTTONUP if self.tab_drag.is_some() => {
                     self.tab_drag = None;
                     let _ = ReleaseCapture();
+                    (DONE, None)
+                }
+                0x02A3 => {
+                    // WM_MOUSELEAVE
+                    self.mouse_left();
+                    (DONE, None)
+                }
+                WM_MOUSEMOVE if !self.dragging && self.tab_drag.is_none() => {
+                    let (x, y) = self.mouse_pos(lparam);
+                    self.update_hover(x, y);
                     (DONE, None)
                 }
                 WM_MOUSEMOVE if self.dragging => {
@@ -1273,6 +1297,20 @@ impl App {
                 self.settings.ime_inline = !self.settings.ime_inline;
                 self.settings.save();
                 self.message = format!("IME の変換中の文字をエディタ内に表示: {}（次の入力から）", on_off(self.settings.ime_inline));
+                self.invalidate();
+            }
+            menu::ID_TOOLBAR | menu::ID_FKEYS => {
+                if id == menu::ID_TOOLBAR {
+                    self.settings.toolbar = !self.settings.toolbar;
+                } else {
+                    self.settings.fkeys = !self.settings.fkeys;
+                }
+                self.settings.save();
+                self.hover = None;
+                self.layout_cache.borrow_mut().clear();
+                self.clamp_top();
+                self.update_scrollbars();
+                self.update_ime_position();
                 self.invalidate();
             }
             menu::ID_ADD_NEXT => self.add_next_match(),
@@ -1836,8 +1874,9 @@ impl App {
         }
     }
 
+    /// ステータスバー（と、あれば機能ボタンの列）の高さ
     fn status_h(&self) -> f32 {
-        self.line_h + 6.0
+        self.status_base_h() + self.fkey_h()
     }
 
     fn text_height(&self) -> f32 {
@@ -2015,7 +2054,11 @@ impl App {
             if self.custom_menu {
                 self.draw_menu_bar(&rt, brush, w)?;
             }
-            rt.SetTransform(&Matrix3x2::translation(0.0, self.menu_h()));
+            if self.tb_h() > 0.0 {
+                rt.SetTransform(&Matrix3x2::translation(0.0, self.menu_h()));
+                self.draw_toolbar(&rt, brush, w)?;
+            }
+            rt.SetTransform(&Matrix3x2::translation(0.0, self.menu_h() + self.tb_h()));
             self.draw_tabs(&rt, brush, w)?;
             rt.SetTransform(&Matrix3x2::translation(0.0, self.chrome_h()));
             let pin = self.pin_h();
@@ -2387,8 +2430,11 @@ impl App {
     }
 
     unsafe fn draw_status(&self, rt: &ID2D1RenderTarget, brush: &ID2D1SolidColorBrush, w: f32, h: f32) -> Result<()> {
-        let top = h - self.status_h();
+        let top = h - self.status_base_h();
         unsafe {
+            if self.fkey_h() > 0.0 {
+                self.draw_fkeys(rt, brush, w, top - self.fkey_h())?;
+            }
             brush.SetColor(&self.theme.status_bg);
             rt.FillRectangle(&rect(0.0, top, w, h), brush);
             brush.SetColor(&self.theme.panel_head);

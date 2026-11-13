@@ -55,6 +55,8 @@ pub const ID_BM_NEXT: u32 = 841;
 pub const ID_BM_PREV: u32 = 842;
 pub const ID_BM_CLEAR: u32 = 843;
 pub const ID_BM_LIST: u32 = 844;
+pub const ID_TOOLBAR: u32 = 846;
+pub const ID_FKEYS: u32 = 847;
 pub const ID_CONV_BASE: u32 = 830;
 pub const ID_COPY: u32 = 200;
 pub const ID_SELECT_ALL: u32 = 201;
@@ -285,6 +287,8 @@ pub unsafe fn build(km: &Keymap) -> Result<Menus> {
         item(km, view, ID_WRAP, "折り返して表示(&R)")?;
         item(km, view, ID_IME_INLINE, "IME の変換中の文字をエディタ内に表示(&M)")?;
         item(km, view, ID_SYNTAX, "構文の色分け（JSON・SQL・XML など）(&Y)")?;
+        item(km, view, ID_TOOLBAR, "ツールバーを表示(&B)")?;
+        item(km, view, ID_FKEYS, "機能ボタンの列を表示(&U)")?;
         item(km, view, ID_LOG_COLORS, "ログレベルの色分け(&L)")?;
         item(km, view, ID_DARK, "ダークテーマ(&K)")?;
         sep(view)?;
@@ -317,6 +321,8 @@ impl Menus {
             CheckMenuItem(self.view, ID_WHITESPACE, check(s.whitespace));
             CheckMenuItem(self.view, ID_LOG_COLORS, check(s.log_colors));
             CheckMenuItem(self.view, ID_SYNTAX, check(s.syntax));
+            CheckMenuItem(self.view, ID_TOOLBAR, check(s.toolbar));
+            CheckMenuItem(self.view, ID_FKEYS, check(s.fkeys));
             CheckMenuItem(self.view, ID_WRAP, check(s.wrap));
             CheckMenuItem(self.view, ID_IME_INLINE, check(s.ime_inline));
             CheckMenuItem(self.search, ID_GREP_BACKUP, check(s.grep_backup));

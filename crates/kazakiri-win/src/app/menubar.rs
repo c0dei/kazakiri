@@ -27,7 +27,7 @@ impl App {
 
     /// タブバーより上の部分（メニューバー＋タブバー）の高さ
     pub(super) fn chrome_h(&self) -> f32 {
-        self.menu_h() + self.tab_h()
+        self.menu_h() + self.tb_h() + self.tab_h()
     }
 
     /// ネイティブのバーから項目を読み取って、並べる
