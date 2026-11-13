@@ -24,7 +24,7 @@ pub struct Settings {
     pub ime_inline: bool,
     /// 拡張子で決まる言語（JSON・SQL・XML など）の色分け
     pub syntax: bool,
-    /// ライトテーマのとき、Windows 標準のメニューバーを使う（ダークテーマと見た目が少し違う）。既定は自前のバーに統一
+    /// ライトテーマのとき、Windows 標準のメニューバーを使う（ダークテーマと見た目が少し違う）。既定は Windows 標準（settings.ini では `menubar = native` / `custom`）
     pub native_menu: bool,
     /// Windows 11 の Mica（タイトルバーの半透明）。
     pub mica: bool,
@@ -32,7 +32,7 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { font: String::new(), font_size: 14.0, dark: false, whitespace: false, log_colors: true, tab_width: 4, wrap: false, grep_backup: true, ime_inline: true, syntax: true, native_menu: false, mica: true }
+        Settings { font: String::new(), font_size: 14.0, dark: false, whitespace: false, log_colors: true, tab_width: 4, wrap: false, grep_backup: true, ime_inline: true, syntax: true, native_menu: true, mica: true }
     }
 }
 
@@ -74,7 +74,8 @@ impl Settings {
                 "grep_backup" => s.grep_backup = flag(v),
                 "ime_inline" => s.ime_inline = flag(v),
                 "syntax" => s.syntax = flag(v),
-                "native_menu" => s.native_menu = flag(v),
+                // 旧キー native_menu は無視（既定を標準に戻したので、以前の保存値を引き継がない）
+                "menubar" => s.native_menu = !v.eq_ignore_ascii_case("custom"),
                 "mica" => s.mica = flag(v),
                 "tab_width" => {
                     if let Ok(x) = v.parse::<usize>() {
@@ -90,8 +91,8 @@ impl Settings {
     pub fn to_text(&self) -> String {
         format!(
             "# kazakiri の設定（アプリから変更すると上書きされます）\n\
-             font = {}\nfont_size = {}\ndark = {}\nwhitespace = {}\nlog_colors = {}\ntab_width = {}\nwrap = {}\ngrep_backup = {}\nime_inline = {}\nsyntax = {}\nnative_menu = {}\nmica = {}\n",
-            self.font, self.font_size, self.dark, self.whitespace, self.log_colors, self.tab_width, self.wrap, self.grep_backup, self.ime_inline, self.syntax, self.native_menu, self.mica
+             font = {}\nfont_size = {}\ndark = {}\nwhitespace = {}\nlog_colors = {}\ntab_width = {}\nwrap = {}\ngrep_backup = {}\nime_inline = {}\nsyntax = {}\nmenubar = {}\nmica = {}\n",
+            self.font, self.font_size, self.dark, self.whitespace, self.log_colors, self.tab_width, self.wrap, self.grep_backup, self.ime_inline, self.syntax, if self.native_menu { "native" } else { "custom" }, self.mica
         )
     }
 
