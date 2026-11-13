@@ -60,12 +60,16 @@ impl App {
         unsafe {
             let _ = DwmSetWindowAttribute(self.hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &v as *const BOOL as *const _, size_of::<BOOL>() as u32);
             // 標準のメニューバーを使うときは、ダークテーマなら暗く塗る（自前のバーは自分で描くので不要）
-            super::dark::set_bar(self.settings.dark && self.settings.native_menu, self.theme);
+            super::dark::set_bar(self.settings.dark && self.settings.native_menu && self.settings.native_dark, self.theme);
             super::dark::apply(self.hwnd, self.settings.dark);
             // Windows 11：タイトルバーを Mica に（DWMWA_SYSTEMBACKDROP_TYPE: 1=なし, 2=Mica）。
             // Windows 10 などでは属性が無く、失敗しても何も起きない
             let backdrop: i32 = if self.settings.mica { 2 } else { 1 };
-            let m = MARGINS { cxLeftWidth: -1, cxRightWidth: -1, cyTopHeight: -1, cyBottomHeight: -1 };
+            // Mica が見えるのはタイトルバーだけでよい。ウィンドウ全体をガラスにすると（-1）、ガラス越しに合成される
+            // 画面の上のほうの文字（自前のメニューバーなど）が見えなくなることがあるので、上端の 1 ピクセルだけ枠を広げる。
+            // Mica をオフのときは、枠を広げない
+            let top = i32::from(self.settings.mica);
+            let m = MARGINS { cxLeftWidth: 0, cxRightWidth: 0, cyTopHeight: top, cyBottomHeight: 0 };
             let _ = DwmExtendFrameIntoClientArea(self.hwnd, &m);
             let r = DwmSetWindowAttribute(self.hwnd, DWMWA_SYSTEMBACKDROP_TYPE, &backdrop as *const i32 as *const _, size_of::<i32>() as u32);
             if let (Err(e), true) = (r, self.settings.mica) {
@@ -95,6 +99,14 @@ impl App {
     pub(super) fn set_mica(&mut self, on: bool) {
         self.settings.mica = on;
         self.apply_title_theme();
+        self.settings.save();
+        self.invalidate();
+    }
+
+    pub(super) fn set_native_dark(&mut self, on: bool) {
+        self.settings.native_dark = on;
+        self.apply_title_theme();
+        self.sync_menu_bar();
         self.settings.save();
         self.invalidate();
     }
