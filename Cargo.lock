@@ -91,14 +91,14 @@ dependencies = [
 
 [[package]]
 name = "kazakiri-cli"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "kazakiri-core",
 ]
 
 [[package]]
 name = "kazakiri-core"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "encoding_rs",
  "memchr",
@@ -108,7 +108,7 @@ dependencies = [
 
 [[package]]
 name = "kazakiri-win"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "embed-resource",
  "encoding_rs",
