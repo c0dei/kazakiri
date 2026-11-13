@@ -90,10 +90,10 @@ impl App {
         Some((b.menu, pt.x, pt.y))
     }
 
-    /// ダークテーマのあいだは自前のバーを使う（ネイティブのバーを外す／戻す）
+    /// 自前のバーを使うとき（`menubar = custom`）は、ネイティブのバーを外す。戻すときは付け直す
     pub(super) fn sync_menu_bar(&mut self) {
-        // ダークテーマは必ず自前（ネイティブは暗くできない）。ライトも、見た目をそろえるため既定は自前
-        let want = self.settings.dark || !self.settings.native_menu;
+        // 標準のバーが既定（ダークテーマでは、WM_UAHDRAWMENU で暗く塗る）。`menubar = custom` のときだけ自前
+        let want = !self.settings.native_menu;
         if want == self.custom_menu {
             return;
         }

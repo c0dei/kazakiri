@@ -19,6 +19,8 @@ pub(super) struct Theme {
     pub panel_bg: D2D1_COLOR_F,
     pub panel_head: D2D1_COLOR_F,
     pub panel_sel: D2D1_COLOR_F,
+    /// CSV の固定した見出し行の背景（本文と区別がつくように）
+    pub header_bg: D2D1_COLOR_F,
     pub panel_file: D2D1_COLOR_F,
     /// 空白・タブ・改行の印
     pub marks: D2D1_COLOR_F,
@@ -49,6 +51,7 @@ pub(super) static LIGHT: Theme = Theme {
     panel_bg: rgb(0xF7, 0xF7, 0xF7),
     panel_head: rgb(0xE4, 0xE8, 0xEE),
     panel_sel: rgb(0xCC, 0xE4, 0xFF),
+    header_bg: rgb(0xD6, 0xE4, 0xF5),
     panel_file: rgb(0x1F, 0x5F, 0xA8),
     marks: rgb(0xB8, 0xC4, 0xD0),
     log_error: rgb(0xD0, 0x1F, 0x1F),
@@ -77,6 +80,7 @@ pub(super) static DARK: Theme = Theme {
     panel_bg: rgb(0x23, 0x25, 0x29),
     panel_head: rgb(0x30, 0x34, 0x3A),
     panel_sel: rgb(0x2A, 0x45, 0x66),
+    header_bg: rgb(0x34, 0x44, 0x5C),
     panel_file: rgb(0x6C, 0xB0, 0xF0),
     marks: rgb(0x4A, 0x52, 0x5C),
     log_error: rgb(0xFF, 0x6B, 0x6B),

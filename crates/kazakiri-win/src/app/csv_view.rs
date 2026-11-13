@@ -441,7 +441,7 @@ impl App {
         let Some(line) = doc.lines(0, 1).into_iter().next() else { return Ok(()) };
         let gutter = self.gutter_width();
         unsafe {
-            brush.SetColor(&self.theme.panel_head);
+            brush.SetColor(&self.theme.header_bg);
             rt.FillRectangle(&rect(0.0, 0.0, w, self.line_h), brush);
             brush.SetColor(&self.theme.gutter_bg);
             rt.FillRectangle(&rect(0.0, 0.0, gutter, self.line_h), brush);
@@ -450,8 +450,8 @@ impl App {
             let digits = group(self.total_lines()).len().max(4);
             self.draw_str(rt, brush, &format!("{:>width$}", 1, width = digits), self.char_w * 0.5, 0.0, gutter)?;
             // 本文の下との境目
-            brush.SetColor(&self.theme.dim);
-            rt.FillRectangle(&rect(gutter, self.line_h - 1.0, w, self.line_h), brush);
+            brush.SetColor(&theme::accent(self.settings.dark));
+            rt.FillRectangle(&rect(gutter, self.line_h - 2.0, w, self.line_h), brush);
             rt.PushAxisAlignedClip(&rect(gutter, 0.0, w, self.line_h), D2D1_ANTIALIAS_MODE_ALIASED);
             let disp = self.display(&line);
             let layout = self.dw.CreateTextLayout(&disp.units, &self.format, 1.0e6, self.line_h)?;
