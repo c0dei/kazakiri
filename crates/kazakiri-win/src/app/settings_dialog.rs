@@ -28,6 +28,7 @@ const EN_KILLFOCUS_CODE: u32 = 0x0200;
 const ID_DARK: i32 = 201;
 const ID_MICA: i32 = 202;
 const ID_NATIVE: i32 = 203;
+const ID_NATIVE_DARK: i32 = 225;
 const ID_FONT: i32 = 204;
 const ID_FONT_PICK: i32 = 205;
 const ID_SIZE: i32 = 206;
@@ -96,6 +97,7 @@ fn sync() {
     set_checked(ID_DARK, s.dark);
     set_checked(ID_MICA, s.mica);
     set_checked(ID_NATIVE, s.native_menu);
+    set_checked(ID_NATIVE_DARK, s.native_dark);
     set_checked(ID_WRAP, s.wrap);
     set_checked(ID_IME, s.ime_inline);
     set_checked(ID_WS, s.whitespace);
@@ -214,6 +216,10 @@ unsafe fn on_command(dlg: HWND, id: i32, code: u32) {
                 let on = SendMessageW(ctl(ID_MICA), BM_GETCHECK, None, None).0 == BST_CHECKED.0 as isize;
                 with_app(|app| app.set_mica(on));
             }
+            ID_NATIVE_DARK => {
+                let on = SendMessageW(ctl(ID_NATIVE_DARK), BM_GETCHECK, None, None).0 == BST_CHECKED.0 as isize;
+                with_app(|app| app.set_native_dark(on));
+            }
             ID_NATIVE => {
                 let on = SendMessageW(ctl(ID_NATIVE), BM_GETCHECK, None, None).0 == BST_CHECKED.0 as isize;
                 with_app(|app| app.set_native_menu(on));
@@ -310,43 +316,44 @@ unsafe fn create(owner: HWND) {
             all.push((id, hw));
         };
         // 見出し（ID は 1 から）
-        for (i, (text, y)) in [("外観", 10), ("編集", 232), ("表示", 344), ("検索・GREP", 502)].iter().enumerate() {
+        for (i, (text, y)) in [("外観", 10), ("編集", 258), ("表示", 370), ("検索・GREP", 528)].iter().enumerate() {
             put(1 + i as i32, w!("STATIC"), text, 0, 0, 16, *y, 200, 18);
         }
         put(ID_DARK, w!("BUTTON"), CHECKS[0].1, check, 0, 28, 32, 420, 22);
         put(ID_MICA, w!("BUTTON"), "Mica（Windows 11 のタイトルバーを半透明に）(&C)", check, 0, 28, 58, 420, 22);
-        put(ID_NATIVE, w!("BUTTON"), "Windows 標準のメニューバーを使う（ダークテーマでは暗く塗る。オフなら自前で描く）(&N)", check, 0, 28, 84, 420, 22);
-        put(10, w!("STATIC"), "本文のフォント（空欄で自動）", 0, 0, 28, 114, 220, 18);
-        put(11, w!("STATIC"), "大きさ (pt)", 0, 0, 340, 114, 100, 18);
-        put(13, w!("STATIC"), "画面（メニュー・タブなど）のフォント（空欄で自動）", 0, 0, 28, 168, 300, 18);
-        put(14, w!("STATIC"), "大きさ (pt)", 0, 0, 340, 168, 100, 18);
-        put(ID_UIFONT, w!("EDIT"), "", edit, WS_EX_CLIENTEDGE.0, 28, 188, 220, 24);
-        put(ID_UIFONT_PICK, w!("BUTTON"), "選択...(&G)", push, 0, 256, 188, 72, 24);
-        put(ID_UISIZE, w!("EDIT"), "", edit | ES_NUMBER as u32, WS_EX_CLIENTEDGE.0, 340, 188, 60, 24);
-        put(ID_FONT, w!("EDIT"), "", edit, WS_EX_CLIENTEDGE.0, 28, 134, 220, 24);
-        put(ID_FONT_PICK, w!("BUTTON"), "選択...(&F)", push, 0, 256, 134, 72, 24);
-        put(ID_SIZE, w!("EDIT"), "", edit | ES_NUMBER as u32, WS_EX_CLIENTEDGE.0, 340, 134, 60, 24);
-        put(ID_WRAP, w!("BUTTON"), CHECKS[1].1, check, 0, 28, 254, 420, 22);
-        put(ID_IME, w!("BUTTON"), CHECKS[2].1, check, 0, 28, 280, 420, 22);
-        put(12, w!("STATIC"), "タブの幅（半角の文字数）", 0, 0, 28, 310, 180, 18);
-        put(ID_TAB, w!("EDIT"), "", edit | ES_NUMBER as u32, WS_EX_CLIENTEDGE.0, 214, 306, 50, 24);
-        put(ID_WS, w!("BUTTON"), CHECKS[3].1, check, 0, 28, 366, 420, 22);
-        put(ID_LOG, w!("BUTTON"), CHECKS[4].1, check, 0, 28, 392, 420, 22);
-        put(ID_SYN, w!("BUTTON"), CHECKS[5].1, check, 0, 28, 418, 420, 22);
-        put(ID_TOOLBAR, w!("BUTTON"), CHECKS[6].1, check, 0, 28, 444, 420, 22);
-        put(ID_FKEYS, w!("BUTTON"), CHECKS[7].1, check, 0, 28, 470, 420, 22);
-        put(ID_BACKUP, w!("BUTTON"), CHECKS[8].1, check, 0, 28, 524, 420, 22);
-        put(ID_KEYS, w!("BUTTON"), "キー割り当て...(&K)", push, 0, 16, 562, 200, 28);
-        put(ID_CLOSE, w!("BUTTON"), "閉じる", BS_DEFPUSHBUTTON as u32 | WS_TABSTOP.0, 0, 366, 562, 90, 28);
+        put(ID_NATIVE_DARK, w!("BUTTON"), "ダークテーマでも標準のメニューバーを使う（実験的。文字が見えないときはオフ）(&E)", check, 0, 28, 110, 420, 22);
+        put(ID_NATIVE, w!("BUTTON"), "Windows 標準のメニューバーを使う（オフなら自前で描く）(&N)", check, 0, 28, 84, 420, 22);
+        put(10, w!("STATIC"), "本文のフォント（空欄で自動）", 0, 0, 28, 140, 220, 18);
+        put(11, w!("STATIC"), "大きさ (pt)", 0, 0, 340, 140, 100, 18);
+        put(13, w!("STATIC"), "画面（メニュー・タブなど）のフォント（空欄で自動）", 0, 0, 28, 194, 300, 18);
+        put(14, w!("STATIC"), "大きさ (pt)", 0, 0, 340, 194, 100, 18);
+        put(ID_UIFONT, w!("EDIT"), "", edit, WS_EX_CLIENTEDGE.0, 28, 214, 220, 24);
+        put(ID_UIFONT_PICK, w!("BUTTON"), "選択...(&G)", push, 0, 256, 214, 72, 24);
+        put(ID_UISIZE, w!("EDIT"), "", edit | ES_NUMBER as u32, WS_EX_CLIENTEDGE.0, 340, 214, 60, 24);
+        put(ID_FONT, w!("EDIT"), "", edit, WS_EX_CLIENTEDGE.0, 28, 160, 220, 24);
+        put(ID_FONT_PICK, w!("BUTTON"), "選択...(&F)", push, 0, 256, 160, 72, 24);
+        put(ID_SIZE, w!("EDIT"), "", edit | ES_NUMBER as u32, WS_EX_CLIENTEDGE.0, 340, 160, 60, 24);
+        put(ID_WRAP, w!("BUTTON"), CHECKS[1].1, check, 0, 28, 280, 420, 22);
+        put(ID_IME, w!("BUTTON"), CHECKS[2].1, check, 0, 28, 306, 420, 22);
+        put(12, w!("STATIC"), "タブの幅（半角の文字数）", 0, 0, 28, 336, 180, 18);
+        put(ID_TAB, w!("EDIT"), "", edit | ES_NUMBER as u32, WS_EX_CLIENTEDGE.0, 214, 332, 50, 24);
+        put(ID_WS, w!("BUTTON"), CHECKS[3].1, check, 0, 28, 392, 420, 22);
+        put(ID_LOG, w!("BUTTON"), CHECKS[4].1, check, 0, 28, 418, 420, 22);
+        put(ID_SYN, w!("BUTTON"), CHECKS[5].1, check, 0, 28, 444, 420, 22);
+        put(ID_TOOLBAR, w!("BUTTON"), CHECKS[6].1, check, 0, 28, 470, 420, 22);
+        put(ID_FKEYS, w!("BUTTON"), CHECKS[7].1, check, 0, 28, 496, 420, 22);
+        put(ID_BACKUP, w!("BUTTON"), CHECKS[8].1, check, 0, 28, 550, 420, 22);
+        put(ID_KEYS, w!("BUTTON"), "キー割り当て...(&K)", push, 0, 16, 588, 200, 28);
+        put(ID_CLOSE, w!("BUTTON"), "閉じる", BS_DEFPUSHBUTTON as u32 | WS_TABSTOP.0, 0, 366, 588, 90, 28);
         let (bg, edit_bg) = (CreateSolidBrush(rgb_ref(&super::theme::DARK.gutter_bg)), CreateSolidBrush(rgb_ref(&super::theme::DARK.bg)));
         BG_BRUSH.store(bg.0 as isize, Ordering::Relaxed);
         EDIT_BRUSH.store(edit_bg.0 as isize, Ordering::Relaxed);
         CTRLS.with(|c| *c.borrow_mut() = Some(Ctrls { all }));
         SET_DLG.store(dlg.0 as isize, Ordering::Relaxed);
-        // クライアント領域を 472 × 604 に
+        // クライアント領域を 472 × 630 に
         let style = WINDOW_STYLE(GetWindowLongW(dlg, GWL_STYLE) as u32);
         let p = |v: i32| (v as f32 * scale).round() as i32;
-        let mut rc = RECT { left: 0, top: 0, right: p(472), bottom: p(604) };
+        let mut rc = RECT { left: 0, top: 0, right: p(472), bottom: p(630) };
         let _ = AdjustWindowRectExForDpi(&mut rc, style, false, WINDOW_EX_STYLE(0), dpi);
         let _ = SetWindowPos(dlg, None, 0, 0, rc.right - rc.left, rc.bottom - rc.top, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
     }

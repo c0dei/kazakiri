@@ -29,6 +29,8 @@ pub struct Settings {
     pub syntax: bool,
     /// ライトテーマのとき、Windows 標準のメニューバーを使う（ダークテーマと見た目が少し違う）。既定は Windows 標準（settings.ini では `menubar = native` / `custom`）
     pub native_menu: bool,
+    /// ダークテーマでも標準のメニューバーを使う（暗く塗るのは非公開メッセージ頼みで、環境によって文字が見えないことがあるため、既定はオフ＝ダークテーマでは自前のバー）
+    pub native_dark: bool,
     /// Windows 11 の Mica（タイトルバーの半透明）。
     pub mica: bool,
     /// ツールバーと機能ボタンの列
@@ -40,7 +42,7 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { font: String::new(), font_size: 14.0, ui_font: String::new(), ui_font_size: 13.0, dark: false, whitespace: false, log_colors: true, tab_width: 4, wrap: false, grep_backup: true, ime_inline: true, syntax: true, native_menu: true, mica: true, toolbar: true, fkeys: true, window: None }
+        Settings { font: String::new(), font_size: 14.0, ui_font: String::new(), ui_font_size: 13.0, dark: false, whitespace: false, log_colors: true, tab_width: 4, wrap: false, grep_backup: true, ime_inline: true, syntax: true, native_menu: true, native_dark: false, mica: true, toolbar: true, fkeys: true, window: None }
     }
 }
 
@@ -89,6 +91,7 @@ impl Settings {
                 "ime_inline" => s.ime_inline = flag(v),
                 "syntax" => s.syntax = flag(v),
                 // 旧キー native_menu は無視（既定を標準に戻したので、以前の保存値を引き継がない）
+                "native_dark_menu" => s.native_dark = flag(v),
                 "menubar" => s.native_menu = !v.eq_ignore_ascii_case("custom"),
                 "mica" => s.mica = flag(v),
                 "window" => {
@@ -113,8 +116,8 @@ impl Settings {
     pub fn to_text(&self) -> String {
         format!(
             "# kazakiri の設定（アプリから変更すると上書きされます）\n\
-             font = {}\nfont_size = {}\nui_font = {}\nui_font_size = {}\ndark = {}\nwhitespace = {}\nlog_colors = {}\ntab_width = {}\nwrap = {}\ngrep_backup = {}\nime_inline = {}\nsyntax = {}\nmenubar = {}\nmica = {}\ntoolbar = {}\nfkeys = {}\n{}",
-            self.font, self.font_size, self.ui_font, self.ui_font_size, self.dark, self.whitespace, self.log_colors, self.tab_width, self.wrap, self.grep_backup, self.ime_inline, self.syntax, if self.native_menu { "native" } else { "custom" }, self.mica, self.toolbar,
+             font = {}\nfont_size = {}\nui_font = {}\nui_font_size = {}\ndark = {}\nwhitespace = {}\nlog_colors = {}\ntab_width = {}\nwrap = {}\ngrep_backup = {}\nime_inline = {}\nsyntax = {}\nmenubar = {}\nnative_dark_menu = {}\nmica = {}\ntoolbar = {}\nfkeys = {}\n{}",
+            self.font, self.font_size, self.ui_font, self.ui_font_size, self.dark, self.whitespace, self.log_colors, self.tab_width, self.wrap, self.grep_backup, self.ime_inline, self.syntax, if self.native_menu { "native" } else { "custom" }, self.native_dark, self.mica, self.toolbar,
             self.fkeys,
             self.window.map_or(String::new(), |(x, y, w, h, m)| format!("window = {x}, {y}, {w}, {h}, {}\n", i32::from(m)))
         )
@@ -137,7 +140,7 @@ mod tests {
 
     #[test]
     fn roundtrip_and_defaults() {
-        let s = Settings { font: "Consolas".into(), font_size: 16.5, ui_font: "Meiryo UI".into(), ui_font_size: 12.0, dark: true, whitespace: true, log_colors: false, tab_width: 8, wrap: true, grep_backup: false, ime_inline: false, syntax: false, native_menu: true, mica: false, toolbar: false, fkeys: false, window: Some((10, 20, 900, 700, true)) };
+        let s = Settings { font: "Consolas".into(), font_size: 16.5, ui_font: "Meiryo UI".into(), ui_font_size: 12.0, dark: true, whitespace: true, log_colors: false, tab_width: 8, wrap: true, grep_backup: false, ime_inline: false, syntax: false, native_menu: true, native_dark: true, mica: false, toolbar: false, fkeys: false, window: Some((10, 20, 900, 700, true)) };
         assert_eq!(Settings::parse(&s.to_text()), s);
         let broken = Settings::parse("font_size = abc\nunknown = 1\ntab_width = 99\n");
         assert_eq!(broken.font_size, 14.0);
