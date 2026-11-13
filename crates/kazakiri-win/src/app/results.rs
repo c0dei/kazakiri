@@ -228,6 +228,41 @@ impl App {
         self.invalidate();
     }
 
+    /// フィルター：検索（検索語・オプションは、いまの設定）に一致した行だけを、新しいタブに出す
+    pub(super) fn start_filter_lines(&mut self) {
+        if self.last_find.is_empty() {
+            self.message = "フィルターする文字列を入力して「検索」を押すか、先に検索語を決めてください".into();
+            self.want_dialog = Some(0);
+            return self.invalidate();
+        }
+        self.filter_pending = true;
+        self.find_all();
+    }
+
+    fn filter_to_tab(&mut self) {
+        let (Some(doc), Some(Results { kind: ResultKind::InDoc { ranges }, .. })) = (self.doc.clone(), self.results.take()) else { return };
+        let mut out = String::new();
+        let mut last = u64::MAX;
+        let mut count = 0u64;
+        for (s, _) in ranges {
+            if let Some(l) = doc.line_of_offset(s).filter(|&l| l != last) {
+                last = l;
+                count += 1;
+                out.push_str(doc.lines(l, 1).first().map_or("", |x| x.text.as_str()));
+                out.push('\n');
+            }
+        }
+        let pattern = self.last_find.clone();
+        self.new_tab();
+        let nl = self.newline_str();
+        let text = if nl == "\n" { out } else { out.replace('\n', nl) };
+        self.type_text(&text, EditKind::Other);
+        self.sel = Some((0, 0));
+        self.top = 0;
+        self.message = format!("フィルター「{pattern}」: {} 行を新しいタブに出しました", group(count));
+        self.invalidate();
+    }
+
     pub(super) fn results_to_tab(&mut self) {
         let Some(out) = self.results_text() else {
             self.message = "結果の一覧がありません".into();
@@ -374,7 +409,11 @@ impl App {
                     let summary = format!("「{query}」 {} 件{more}  {:.2} 秒", group(found.ranges.len() as u64), elapsed.as_secs_f64());
                     self.message = summary.clone();
                     self.results = Some(Results { kind: ResultKind::InDoc { ranges: found.ranges }, sel: 0, top: 0, summary });
-                    self.jump_result(0);
+                    if std::mem::take(&mut self.filter_pending) {
+                        self.filter_to_tab();
+                    } else {
+                        self.jump_result(0);
+                    }
                 }
             }
             JobDone::Replace { found, elapsed, .. } => self.apply_replace_all(found, elapsed),

@@ -67,6 +67,13 @@ pub(super) unsafe fn run_inner() -> std::result::Result<(), (&'static str, windo
             bm_lines: 0,
             bm_col0: false,
             hover: None,
+            filter_pending: false,
+            last_message: String::new(),
+            open_dir: None,
+            diff_ign_edge: false,
+            diff_ign_case: false,
+            split_sync: false,
+            csv_letters: false,
             tip: None,
             dabbrev: None,
             markers: Vec::new(),
@@ -158,6 +165,9 @@ pub(super) unsafe fn run_inner() -> std::result::Result<(), (&'static str, windo
             }
         }
         app.apply_title_theme();
+        if app.settings.tray {
+            app.tray_add();
+        }
         APP.with(|a| *a.borrow_mut() = Some(app));
         DragAcceptFiles(hwnd, true);
         let _ = ShowWindow(hwnd, SW_SHOW);

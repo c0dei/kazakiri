@@ -50,6 +50,9 @@ impl App {
                     self.message = "CSV 表示のあいだは、列をそろえるため等幅フォントにしています".into();
                 }
             }
+            if !self.message.is_empty() && self.message != self.last_message {
+                self.last_message = self.message.clone();
+            }
             self.ensure_gfx()?;
             // スクロールバーの出し入れなどでクライアント領域の大きさが変わっても WM_SIZE が来ないことがあるので、毎回合わせる
             if let Some(g) = &self.gfx {
@@ -430,6 +433,7 @@ impl App {
         );
         match self.prompt {
             Some(Prompt::GotoLine) => format!("行番号へ移動: {}|", self.input),
+            Some(Prompt::Sequence) => format!("連番を挿入（開始値,増分,桁数。例: 1,1,3 → 001, 002…）: {}|  Enter:実行 Esc:取消", self.input),
             Some(Prompt::Split) => format!("ファイルを分割（1 ファイルの行数、またはサイズ。例: 1000000 / 512MB / 2GB）: {}|  Enter:実行 Esc:取消", self.input),
             Some(Prompt::ColumnFilter) => format!("列フィルタ: {}|  例: 3 = ERROR / 2 : 語を含む / 4 >= 100 / 1 ~ 正規表現 / 5 empty", self.input),
             None if self.rjob.is_some() => self.job_status(self.rjob.as_ref().unwrap()),
@@ -475,7 +479,11 @@ impl App {
             Some((l, (s, _))) if c - s <= 1 << 20 => match self.caret_column() {
                 Some((k, n, name)) => {
                     let name = if name.is_empty() { String::new() } else { format!("「{}」", name.chars().take(24).collect::<String>()) };
-                    format!("{} 行, {}/{} 列{name}", group(l + 1), k + 1, n)
+                    if self.csv_letters {
+                        format!("{} 行, 列 {}（{}/{}）{name}", group(l + 1), col_letters(k), k + 1, n)
+                    } else {
+                        format!("{} 行, {}/{} 列{name}", group(l + 1), k + 1, n)
+                    }
                 }
                 None => {
                     let col = doc.decode(&doc.read(s, c)).chars().count() + 1;
@@ -530,4 +538,18 @@ impl App {
         }
         Ok(())
     }
+}
+
+/// 列の番号（0 始まり）を A, B, … Z, AA, AB, … にする
+fn col_letters(mut k: usize) -> String {
+    let mut s = Vec::new();
+    loop {
+        s.push(b'A' + (k % 26) as u8);
+        if k < 26 {
+            break;
+        }
+        k = k / 26 - 1;
+    }
+    s.reverse();
+    String::from_utf8(s).unwrap_or_default()
 }

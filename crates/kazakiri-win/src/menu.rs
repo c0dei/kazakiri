@@ -37,7 +37,7 @@ pub const ID_SORT_LINES_DESC: u32 = 811;
 pub const ID_INSERT_DATE: u32 = 812;
 pub const ID_INSERT_DATETIME: u32 = 813;
 /// 「変換」メニューの項目名（app/lines.rs の CONVS の並びと対応）
-pub const CONV_NAMES: [&str; 12] = [
+pub const CONV_NAMES: [&str; 20] = [
     "大文字にする(&U)",
     "小文字にする(&L)",
     "全角 → 半角（英数字・記号）(&H)",
@@ -50,6 +50,14 @@ pub const CONV_NAMES: [&str; 12] = [
     "行頭の空白 → タブ(&T)",
     "JSON を整形（展開）(&E)",
     "JSON を圧縮（短縮）(&M)",
+    "行頭の空白を削除(&B)",
+    "各単語の頭を大文字にする(&W)",
+    "HTML の文字参照にする（& < > \" '）(&X)",
+    "HTML の文字参照を文字に戻す(&Y)",
+    "Base64 にする(&5)",
+    "Base64 から戻す(&6)",
+    "URL エンコード（%XX）(&Q)",
+    "URL デコード(&D)",
 ];
 /// 「変換」メニューの項目（CONV_NAMES の並びと対応）
 pub const ID_BM_TOGGLE: u32 = 840;
@@ -70,7 +78,57 @@ pub const ID_MARK_BASE: u32 = 860;
 pub const ID_MARK_CLEAR: u32 = 866;
 pub const ID_DIFF: u32 = 870;
 pub const ID_SPLIT_VIEW: u32 = 871;
+pub const ID_FILTER_LINES: u32 = 872;
+pub const ID_INS_ABOVE: u32 = 873;
+pub const ID_INS_BELOW: u32 = 874;
+pub const ID_INS_SEQ: u32 = 875;
+pub const ID_INS_TAB: u32 = 876;
+pub const ID_INS_CRLF: u32 = 877;
+pub const ID_INS_LF: u32 = 878;
+pub const ID_INS_CR: u32 = 879;
+/// 行の並べ替え（app/lines.rs の SORT_KINDS と同じ並び）
+pub const ID_SORTK_BASE: u32 = 880;
+pub const SORT_NAMES: [&str; 10] = [
+    "数値で昇順(&1)",
+    "数値で降順(&2)",
+    "文字数の少ない順(&3)",
+    "文字数の多い順(&4)",
+    "出現回数の少ない順(&5)",
+    "出現回数の多い順(&6)",
+    "IPv4 アドレスで昇順(&7)",
+    "IPv4 アドレスで降順(&8)",
+    "順序を逆にする(&R)",
+    "ランダムに並べ替える(&M)",
+];
+pub const ID_LONGEST: u32 = 890;
+pub const ID_SHORTEST: u32 = 891;
+pub const ID_FREQUENT: u32 = 892;
+pub const ID_BM_CUT: u32 = 893;
+pub const ID_BM_COPY: u32 = 894;
+pub const ID_BM_DELETE: u32 = 895;
+pub const ID_BM_INVERT: u32 = 896;
+pub const ID_BM_EXTRACT: u32 = 897;
+pub const ID_DIFF_IGN_EDGE: u32 = 898;
+pub const ID_DIFF_IGN_CASE: u32 = 899;
+pub const ID_SPLIT_SYNC: u32 = 920;
+pub const ID_CSV_LETTERS: u32 = 921;
 pub const ID_DIFF_TAB_BASE: u32 = 1000;
+pub const ID_MODEBAR: u32 = 922;
+pub const ID_TRAY_ACTIVATE: u32 = 950;
+pub const ID_TRAY_NEW: u32 = 951;
+pub const ID_TRAY_NEW_PASTE: u32 = 952;
+pub const ID_TRAY_NEW_QUOTE: u32 = 953;
+pub const ID_TRAY_OPEN: u32 = 954;
+pub const ID_TRAY_GREP: u32 = 955;
+pub const ID_TRAY_RESTORE: u32 = 956;
+pub const ID_TRAY_SAVE_CLOSE: u32 = 957;
+pub const ID_TRAY_CLOSE_ALL: u32 = 958;
+pub const ID_TRAY_MESSAGE: u32 = 959;
+pub const ID_TRAY_SETTINGS: u32 = 960;
+pub const ID_TRAY_MINIMIZE: u32 = 961;
+pub const ID_TRAY_REMOVE: u32 = 962;
+pub const ID_TRAY_FOLDER_BASE: u32 = 970;
+pub const ID_TRAY_TAB_BASE: u32 = 1100;
 pub const ID_CONV_BASE: u32 = 830;
 pub const ID_COPY: u32 = 200;
 pub const ID_SELECT_ALL: u32 = 201;
@@ -245,10 +303,24 @@ pub unsafe fn build(km: &Keymap) -> Result<Menus> {
         item(km, lines, ID_DEDUPE, "重複した行を削除(&P)")?;
         item(km, lines, ID_SORT_LINES_ASC, "行を昇順に並べ替え(&A)")?;
         item(km, lines, ID_SORT_LINES_DESC, "行を降順に並べ替え(&Z)")?;
+        let sortk = CreatePopupMenu()?;
+        for (i, name) in SORT_NAMES.iter().enumerate() {
+            item(km, sortk, ID_SORTK_BASE + i as u32, name)?;
+        }
+        popup(lines, sortk, "並べ替えの種類(&S)")?;
         popup(edit, lines, "行の操作(&L)")?;
         let insert = CreatePopupMenu()?;
         item(km, insert, ID_INSERT_DATE, "日付(&D)")?;
         item(km, insert, ID_INSERT_DATETIME, "日付と時刻(&T)")?;
+        sep(insert)?;
+        item(km, insert, ID_INS_ABOVE, "上に空行を挿入(&A)\tCtrl+Shift+Enter")?;
+        item(km, insert, ID_INS_BELOW, "下に空行を挿入(&W)\tCtrl+Enter")?;
+        item(km, insert, ID_INS_SEQ, "連番を挿入(&N)...")?;
+        sep(insert)?;
+        item(km, insert, ID_INS_CRLF, "CR+LF(&R)")?;
+        item(km, insert, ID_INS_LF, "LF のみ(&L)")?;
+        item(km, insert, ID_INS_CR, "CR のみ(&Y)")?;
+        item(km, insert, ID_INS_TAB, "タブ(&B)")?;
         popup(edit, insert, "挿入(&I)")?;
         let clips = CreatePopupMenu()?;
         let w = wide("（履歴なし）");
@@ -259,7 +331,7 @@ pub unsafe fn build(km: &Keymap) -> Result<Menus> {
 
         let convert = CreatePopupMenu()?;
         for (i, name) in CONV_NAMES.iter().enumerate() {
-            if i == 2 || i == 4 || i == 8 || i == 10 {
+            if matches!(i, 2 | 4 | 8 | 10 | 12 | 14 | 18) {
                 sep(convert)?;
             }
             item(km, convert, ID_CONV_BASE + i as u32, name)?;
@@ -275,6 +347,10 @@ pub unsafe fn build(km: &Keymap) -> Result<Menus> {
         sep(search)?;
         item(km, search, ID_CASE, "大文字と小文字を区別(&C)\tAlt+C")?;
         item(km, search, ID_REGEX, "正規表現(&R)\tAlt+R")?;
+        item(km, search, ID_LONGEST, "最長の行を検索(&2)")?;
+        item(km, search, ID_SHORTEST, "最短の行（空行を除く）を検索(&3)")?;
+        item(km, search, ID_FREQUENT, "頻出する行を抽出（新しいタブ）(&4)")?;
+        item(km, search, ID_FILTER_LINES, "フィルター（一致した行だけを新しいタブに）(&I)\tCtrl+Shift+L")?;
         sep(search)?;
         // フォルダ内を検索（GREP）
         let grep = CreatePopupMenu()?;
@@ -299,6 +375,12 @@ pub unsafe fn build(km: &Keymap) -> Result<Menus> {
         item(km, bm, ID_BM_PREV, "前のブックマーク(&P)\tShift+F2")?;
         item(km, bm, ID_BM_CLEAR, "すべて解除(&C)\tCtrl+Shift+F2")?;
         item(km, bm, ID_BM_LIST, "一覧(&L)")?;
+        item(km, bm, ID_BM_INVERT, "ブックマークを反転(&I)")?;
+        sep(bm)?;
+        item(km, bm, ID_BM_CUT, "ブックマークした行を切り取り(&X)")?;
+        item(km, bm, ID_BM_COPY, "ブックマークした行をコピー(&O)")?;
+        item(km, bm, ID_BM_DELETE, "ブックマークした行を削除(&D)")?;
+        item(km, bm, ID_BM_EXTRACT, "ブックマークした行を新しいタブに抽出(&E)")?;
         popup(search, bm, "ブックマーク(&M)")?;
         let mk = CreatePopupMenu()?;
         for (i, name) in ["黄", "緑", "青", "ピンク", "オレンジ", "紫"].iter().enumerate() {
@@ -309,12 +391,15 @@ pub unsafe fn build(km: &Keymap) -> Result<Menus> {
         popup(search, mk, "カラーマーカー(&K)")?;
         sep(search)?;
         item(km, search, ID_DIFF, "他のタブと比較（差分表示）(&D)")?;
+        item(km, search, ID_DIFF_IGN_EDGE, "比較で行頭・行末の空白を無視(&G)")?;
+        item(km, search, ID_DIFF_IGN_CASE, "比較で大文字と小文字を区別しない(&I)")?;
         popup(bar, search, "検索(&S)")?;
 
         // CSV / TSV
         let csv = CreatePopupMenu()?;
         item(km, csv, ID_CSV, "CSV/TSV を表として表示(&C)\tCtrl+Shift+C")?;
         item(km, csv, ID_CSV_HEADER, "1 行目は見出し(&H)")?;
+        item(km, csv, ID_CSV_LETTERS, "列の位置を A, B, C… で表示(&L)")?;
         sep(csv)?;
         for (i, (name, _)) in DELIMS.iter().enumerate() {
             item(km, csv, ID_DELIM_BASE + i as u32, &format!("区切り: {name}"))?;
@@ -333,7 +418,9 @@ pub unsafe fn build(km: &Keymap) -> Result<Menus> {
         item(km, view, ID_IME_INLINE, "IME の変換中の文字をエディタ内に表示(&M)")?;
         sep(view)?;
         item(km, view, ID_SPLIT_VIEW, "分割表示（同じファイルを左右に並べて参照）(&P)")?;
+        item(km, view, ID_SPLIT_SYNC, "分割表示で同期スクロール(&Q)")?;
         item(km, view, ID_TOOLBAR, "ツールバーを表示(&B)")?;
+        item(km, view, ID_MODEBAR, "モードバー（CSV の区切りなど）を表示(&D)")?;
         item(km, view, ID_FKEYS, "機能ボタンの列を表示(&U)")?;
         item(km, view, ID_DARK, "ダークテーマ(&K)")?;
         sep(view)?;
@@ -358,16 +445,101 @@ pub unsafe fn build(km: &Keymap) -> Result<Menus> {
     }
 }
 
+/// 本文を右クリックしたときのメニュー（EmEditor を参考にした）。使い終わったら呼び出し側が DestroyMenu する
+pub unsafe fn build_context(km: &Keymap) -> Result<HMENU> {
+    unsafe {
+        let m = CreatePopupMenu()?;
+        item(km, m, ID_MARK_BASE, "カラーマーカーに追加／解除(&M)")?;
+        item(km, m, ID_FILTER_LINES, "フィルター（一致した行だけを新しいタブに）(&F)")?;
+        item(km, m, ID_ADD_NEXT, "次の同じ文字列を選択に追加(&X)\tCtrl+D")?;
+        sep(m)?;
+        item(km, m, ID_UNDO, "元に戻す(&U)\tCtrl+Z")?;
+        item(km, m, ID_REDO, "やり直し(&R)\tCtrl+Y")?;
+        sep(m)?;
+        item(km, m, ID_CUT, "切り取り(&T)\tCtrl+X")?;
+        item(km, m, ID_COPY, "コピー(&C)\tCtrl+C")?;
+        item(km, m, ID_PASTE, "貼り付け(&P)\tCtrl+V")?;
+        item(km, m, ID_SELECT_ALL, "すべて選択(&A)\tCtrl+A")?;
+        sep(m)?;
+        let convert = CreatePopupMenu()?;
+        for (i, name) in CONV_NAMES.iter().enumerate() {
+            if matches!(i, 2 | 4 | 8 | 10 | 12 | 14 | 18) {
+                sep(convert)?;
+            }
+            item(km, convert, ID_CONV_BASE + i as u32, name)?;
+        }
+        popup(m, convert, "選択範囲の変換(&L)")?;
+        let lines = CreatePopupMenu()?;
+        item(km, lines, ID_LINE_DUP, "行を複製(&D)\tCtrl+Shift+D")?;
+        item(km, lines, ID_LINE_DEL, "行を削除(&K)\tCtrl+Shift+K")?;
+        item(km, lines, ID_LINE_UP, "行を上へ移動(&U)")?;
+        item(km, lines, ID_LINE_DOWN, "行を下へ移動(&N)")?;
+        sep(lines)?;
+        item(km, lines, ID_INDENT, "インデント(&I)")?;
+        item(km, lines, ID_UNINDENT, "逆インデント(&O)\tShift+Tab")?;
+        sep(lines)?;
+        item(km, lines, ID_TRIM, "行末の空白を削除(&T)")?;
+        item(km, lines, ID_DEDUPE, "重複した行を削除(&P)")?;
+        item(km, lines, ID_SORT_LINES_ASC, "行を昇順に並べ替え(&A)")?;
+        item(km, lines, ID_SORT_LINES_DESC, "行を降順に並べ替え(&Z)")?;
+        let sortk = CreatePopupMenu()?;
+        for (i, name) in SORT_NAMES.iter().enumerate() {
+            item(km, sortk, ID_SORTK_BASE + i as u32, name)?;
+        }
+        popup(lines, sortk, "並べ替えの種類(&S)")?;
+        popup(m, lines, "行の操作(&N)")?;
+        let bm = CreatePopupMenu()?;
+        item(km, bm, ID_BM_TOGGLE, "設定／解除(&T)\tCtrl+F2")?;
+        item(km, bm, ID_BM_NEXT, "次のブックマーク(&N)\tF2")?;
+        item(km, bm, ID_BM_PREV, "前のブックマーク(&P)\tShift+F2")?;
+        item(km, bm, ID_BM_CLEAR, "すべて解除(&C)\tCtrl+Shift+F2")?;
+        item(km, bm, ID_BM_LIST, "一覧(&L)")?;
+        item(km, bm, ID_BM_INVERT, "ブックマークを反転(&I)")?;
+        sep(bm)?;
+        item(km, bm, ID_BM_CUT, "ブックマークした行を切り取り(&X)")?;
+        item(km, bm, ID_BM_COPY, "ブックマークした行をコピー(&O)")?;
+        item(km, bm, ID_BM_DELETE, "ブックマークした行を削除(&D)")?;
+        item(km, bm, ID_BM_EXTRACT, "ブックマークした行を新しいタブに抽出(&E)")?;
+        popup(m, bm, "ブックマーク(&B)")?;
+        let csv = CreatePopupMenu()?;
+        item(km, csv, ID_CSV, "CSV/TSV を表として表示(&C)")?;
+        item(km, csv, ID_CSV_HEADER, "1 行目は見出し(&H)")?;
+        sep(csv)?;
+        item(km, csv, ID_SORT_ASC, "カーソルの列で昇順に並べ替え(&A)")?;
+        item(km, csv, ID_SORT_DESC, "カーソルの列で降順に並べ替え(&D)")?;
+        item(km, csv, ID_FILTER, "列フィルタ(&F)...")?;
+        popup(m, csv, "CSV(&V)")?;
+        let ins = CreatePopupMenu()?;
+        item(km, ins, ID_INSERT_DATE, "日付(&D)")?;
+        item(km, ins, ID_INSERT_DATETIME, "日付と時刻(&T)")?;
+        item(km, ins, ID_INS_ABOVE, "上に空行を挿入(&A)")?;
+        item(km, ins, ID_INS_BELOW, "下に空行を挿入(&W)")?;
+        item(km, ins, ID_INS_SEQ, "連番を挿入(&N)...")?;
+        popup(m, ins, "挿入(&I)")?;
+        sep(m)?;
+        item(km, m, ID_FIND, "検索(&F)...\tCtrl+F")?;
+        item(km, m, ID_REPLACE, "置換(&H)...\tCtrl+H")?;
+        item(km, m, ID_GOTO, "行へ移動(&G)...\tCtrl+G")?;
+        Ok(m)
+    }
+}
+
 impl Menus {
     /// 表示メニューのチェック状態（`csv` は CSV モードのときの (区切り, 見出しあり)）
-    pub unsafe fn refresh_view(&self, csv: Option<(char, bool)>, split: bool, s: &crate::settings::Settings) {
+    pub unsafe fn refresh_view(&self, csv: Option<(char, bool)>, split: bool, flags: [bool; 4], s: &crate::settings::Settings) {
         unsafe {
             let check = |on: bool| if on { MF_CHECKED.0 } else { MF_UNCHECKED.0 };
             CheckMenuItem(self.view, ID_WHITESPACE, check(s.whitespace));
             CheckMenuItem(self.view, ID_LOG_COLORS, check(s.log_colors));
             CheckMenuItem(self.view, ID_SYNTAX, check(s.syntax));
             CheckMenuItem(self.view, ID_SPLIT_VIEW, check(split));
+            // flags: 比較で空白を無視 / 大文字小文字を無視 / 同期スクロール / 列を A,B,C で表示
+            CheckMenuItem(self.search, ID_DIFF_IGN_EDGE, check(flags[0]));
+            CheckMenuItem(self.search, ID_DIFF_IGN_CASE, check(flags[1]));
+            CheckMenuItem(self.view, ID_SPLIT_SYNC, check(flags[2]));
+            CheckMenuItem(self.csv, ID_CSV_LETTERS, check(flags[3]));
             CheckMenuItem(self.view, ID_TOOLBAR, check(s.toolbar));
+            CheckMenuItem(self.view, ID_MODEBAR, check(s.modebar));
             CheckMenuItem(self.view, ID_FKEYS, check(s.fkeys));
             CheckMenuItem(self.view, ID_WRAP, check(s.wrap));
             CheckMenuItem(self.view, ID_IME_INLINE, check(s.ime_inline));

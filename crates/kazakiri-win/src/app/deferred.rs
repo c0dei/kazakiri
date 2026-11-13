@@ -24,6 +24,25 @@ pub(super) unsafe fn run_deferred(hwnd: HWND, d: Deferred) {
         }
         Deferred::ShowFind(tab) => unsafe { find_dialog::show(hwnd, tab) },
         Deferred::ShowSettings => unsafe { settings_dialog::show(hwnd) },
+        Deferred::ContextMenu => unsafe {
+            if let Some(Ok(menu)) = with_app(|app| menu::build_context(&app.keymap)) {
+                let mut pt = POINT::default();
+                let _ = GetCursorPos(&mut pt);
+                let _ = TrackPopupMenu(menu, TPM_LEFTALIGN | TPM_TOPALIGN, pt.x, pt.y, None, hwnd, None);
+                let _ = DestroyMenu(menu);
+            }
+        },
+        Deferred::TrayMenu(right) => unsafe {
+            if let Some(Some(menu)) = with_app(|app| app.build_tray_menu(right)) {
+                let mut pt = POINT::default();
+                let _ = GetCursorPos(&mut pt);
+                // メニューの外を押したときに閉じるよう、先にウィンドウを前面にする
+                let _ = SetForegroundWindow(hwnd);
+                let _ = TrackPopupMenu(menu, TPM_RIGHTALIGN | TPM_BOTTOMALIGN, pt.x, pt.y, None, hwnd, None);
+                let _ = PostMessageW(Some(hwnd), WM_NULL, WPARAM(0), LPARAM(0));
+                let _ = DestroyMenu(menu);
+            }
+        },
         Deferred::ShowKeys => unsafe { keys_dialog::show(hwnd) },
         Deferred::DiffMenu => unsafe {
             if let Some(Some(menu)) = with_app(|app| app.build_diff_menu()) {
@@ -148,6 +167,37 @@ pub(super) unsafe fn run_deferred(hwnd: HWND, d: Deferred) {
             Pending::CloseTab => {
                 with_app(|app| app.close_active_tab());
             }
+            // すべてのタブを閉じる（未保存なら、タブごとに確認する）
+            Pending::CloseAll => {
+                let more = with_app(|app| {
+                    app.close_active_tab();
+                    app.tabs.len() > 1 || !app.is_blank()
+                })
+                .unwrap_or(false);
+                if more {
+                    if let Some(Some(next)) = with_app(|app| app.guarded(Pending::CloseAll)) {
+                        unsafe { run_deferred(hwnd, next) };
+                    }
+                }
+            }
+            // 未保存のタブを順に保存してから、すべて閉じる
+            Pending::SaveCloseAll => {
+                let next = with_app(|app| {
+                    let i = (0..app.tabs.len()).find(|&i| app.tab_modified(i))?;
+                    app.switch_to(i);
+                    app.pending = Some(Pending::SaveCloseAll);
+                    Some(app.save(None))
+                })
+                .flatten();
+                match next {
+                    Some(d) => {
+                        if let Some(d) = d {
+                            unsafe { run_deferred(hwnd, d) };
+                        }
+                    }
+                    None => unsafe { run_deferred(hwnd, Deferred::Perform(Pending::CloseAll)) },
+                }
+            }
             // 未保存のタブが残っていれば、そのタブを表示して確認する。なければ終了
             Pending::Close => match with_app(|app| app.continue_close()) {
                 Some(Some(next)) => unsafe { run_deferred(hwnd, next) },
@@ -164,6 +214,7 @@ pub(super) unsafe fn run_deferred(hwnd: HWND, d: Deferred) {
 
 /// 「開く」ダイアログ。複数のファイルを選べる
 pub(super) unsafe fn open_dialog(hwnd: HWND) -> Vec<PathBuf> {
+    let initial = with_app(|app| app.open_dir.take()).flatten().map(|d| wide(&d.display().to_string()));
     let mut buf = vec![0u16; 65536];
     let filter = wide("テキストファイル\0*.txt;*.log;*.csv;*.tsv\0すべてのファイル\0*.*\0\0");
     let mut ofn = OPENFILENAMEW {
@@ -173,6 +224,7 @@ pub(super) unsafe fn open_dialog(hwnd: HWND) -> Vec<PathBuf> {
         nFilterIndex: 2,
         lpstrFile: windows::core::PWSTR(buf.as_mut_ptr()),
         nMaxFile: buf.len() as u32,
+        lpstrInitialDir: initial.as_ref().map_or(PCWSTR::null(), |w| PCWSTR(w.as_ptr())),
         Flags: OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER | OFN_ALLOWMULTISELECT,
         ..Default::default()
     };

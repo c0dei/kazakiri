@@ -34,6 +34,27 @@ impl App {
             menu::ID_DIFF => return self.diff_command(),
             menu::ID_SPLIT_VIEW => self.toggle_split_view(),
             id if (menu::ID_DIFF_TAB_BASE..menu::ID_DIFF_TAB_BASE + 64).contains(&id) => self.start_diff((id - menu::ID_DIFF_TAB_BASE) as usize),
+            id if (menu::ID_TRAY_ACTIVATE..=menu::ID_TRAY_REMOVE).contains(&id) || (menu::ID_TRAY_FOLDER_BASE..menu::ID_TRAY_FOLDER_BASE + 10).contains(&id) || (menu::ID_TRAY_TAB_BASE..menu::ID_TRAY_TAB_BASE + 20).contains(&id) => {
+                if let Some(r) = self.command_tray(id) {
+                    return r;
+                }
+            }
+            menu::ID_FILTER_LINES => self.start_filter_lines(),
+            menu::ID_DIFF_IGN_EDGE => self.diff_ign_edge = !self.diff_ign_edge,
+            menu::ID_DIFF_IGN_CASE => self.diff_ign_case = !self.diff_ign_case,
+            menu::ID_SPLIT_SYNC => self.split_sync = !self.split_sync,
+            menu::ID_CSV_LETTERS => {
+                self.csv_letters = !self.csv_letters;
+                self.invalidate();
+            }
+            menu::ID_BM_CUT => self.bookmark_lines(true, true),
+            menu::ID_BM_COPY => self.bookmark_lines(false, false),
+            menu::ID_BM_DELETE => self.bookmark_lines(false, true),
+            menu::ID_BM_INVERT => self.invert_bookmarks(),
+            menu::ID_BM_EXTRACT => self.extract_bookmarks(),
+            menu::ID_LONGEST => self.find_line_by_length(true),
+            menu::ID_SHORTEST => self.find_line_by_length(false),
+            menu::ID_FREQUENT => self.frequent_lines(),
             menu::ID_COMPLETE => self.complete_word(),
             id if (menu::ID_MARK_BASE..menu::ID_MARK_BASE + markers::MARK_COLORS as u32).contains(&id) => self.toggle_marker((id - menu::ID_MARK_BASE) as usize),
             menu::ID_MARK_CLEAR => self.clear_markers(),
@@ -116,11 +137,11 @@ impl App {
                 self.message = format!("IME の変換中の文字をエディタ内に表示: {}（次の入力から）", on_off(self.settings.ime_inline));
                 self.invalidate();
             }
-            menu::ID_TOOLBAR | menu::ID_FKEYS => {
-                if id == menu::ID_TOOLBAR {
-                    self.settings.toolbar = !self.settings.toolbar;
-                } else {
-                    self.settings.fkeys = !self.settings.fkeys;
+            menu::ID_TOOLBAR | menu::ID_FKEYS | menu::ID_MODEBAR => {
+                match id {
+                    menu::ID_TOOLBAR => self.settings.toolbar = !self.settings.toolbar,
+                    menu::ID_MODEBAR => self.settings.modebar = !self.settings.modebar,
+                    _ => self.settings.fkeys = !self.settings.fkeys,
                 }
                 self.settings.save();
                 self.hover = None;
