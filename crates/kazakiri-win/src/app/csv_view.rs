@@ -446,7 +446,9 @@ impl App {
             brush.SetColor(&self.theme.gutter_bg);
             rt.FillRectangle(&rect(0.0, 0.0, gutter, self.line_h), brush);
             brush.SetColor(&self.theme.gutter_text);
-            self.draw_str(rt, brush, "1", self.char_w * 0.5, 0.0, gutter)?;
+            // ほかの行番号と同じ桁数に右揃えする
+            let digits = group(self.total_lines()).len().max(4);
+            self.draw_str(rt, brush, &format!("{:>width$}", 1, width = digits), self.char_w * 0.5, 0.0, gutter)?;
             // 本文の下との境目
             brush.SetColor(&self.theme.dim);
             rt.FillRectangle(&rect(gutter, self.line_h - 1.0, w, self.line_h), brush);
