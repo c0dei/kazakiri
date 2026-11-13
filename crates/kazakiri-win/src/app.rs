@@ -42,6 +42,7 @@ mod dark;
 mod menubar;
 mod find_dialog;
 mod bookmarks;
+mod markers;
 mod complete;
 mod toolbar;
 mod keys_dialog;
@@ -189,6 +190,7 @@ struct App {
     hover: Option<toolbar::Hover>,
     /// 単語補完の途中（続けて押すと次の候補）
     dabbrev: Option<complete::Dab>,
+    markers: Vec<markers::Marker>,
     tracking_leave: bool,
     line_h: f32,
     char_w: f32,
@@ -345,6 +347,7 @@ unsafe fn run_inner() -> std::result::Result<(), (&'static str, windows::core::E
             bm_col0: false,
             hover: None,
             dabbrev: None,
+            markers: Vec::new(),
             tracking_leave: false,
             line_h,
             char_w,
@@ -1234,6 +1237,8 @@ impl App {
             menu::ID_BM_CLEAR => self.clear_bookmarks(),
             menu::ID_BM_LIST => self.list_bookmarks(),
             menu::ID_COMPLETE => self.complete_word(),
+            id if (menu::ID_MARK_BASE..menu::ID_MARK_BASE + markers::MARK_COLORS as u32).contains(&id) => self.toggle_marker((id - menu::ID_MARK_BASE) as usize),
+            menu::ID_MARK_CLEAR => self.clear_markers(),
             id if (menu::ID_CLIP_BASE..menu::ID_CLIP_BASE + menu::CLIP_MAX).contains(&id) => self.paste_history((id - menu::ID_CLIP_BASE) as usize),
             id if self.command_lines(id) => {}
             menu::ID_NEW => self.new_tab(),
@@ -2218,6 +2223,9 @@ impl App {
         let last = row.1 == d.units.len();
         let local = |(ua, ub): (u32, u32)| (ua.clamp(ra, rb) - ra, ub.clamp(ra, rb) - ra);
         unsafe {
+            if !self.markers.is_empty() {
+                self.draw_markers(rt, brush, layout, units, x, y)?;
+            }
             if let Some(doc) = &self.doc {
                 // 選択範囲
                 if let Some((a, b)) = self.selection() {
