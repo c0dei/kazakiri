@@ -23,6 +23,8 @@ const COMMANDS: &[(&str, u32)] = &[
     ("split", ID_SPLIT),
     ("join", ID_JOIN),
     ("settings", ID_SETTINGS),
+    ("diff", ID_DIFF),
+    ("split_view", ID_SPLIT_VIEW),
     ("mark_1", ID_MARK_BASE),
     ("mark_2", ID_MARK_BASE + 1),
     ("mark_3", ID_MARK_BASE + 2),

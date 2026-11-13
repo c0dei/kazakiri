@@ -68,6 +68,9 @@ pub const CLIP_MAX: u32 = 20;
 pub const ID_COMPLETE: u32 = 849;
 pub const ID_MARK_BASE: u32 = 860;
 pub const ID_MARK_CLEAR: u32 = 866;
+pub const ID_DIFF: u32 = 870;
+pub const ID_SPLIT_VIEW: u32 = 871;
+pub const ID_DIFF_TAB_BASE: u32 = 1000;
 pub const ID_CONV_BASE: u32 = 830;
 pub const ID_COPY: u32 = 200;
 pub const ID_SELECT_ALL: u32 = 201;
@@ -294,6 +297,7 @@ pub unsafe fn build(km: &Keymap) -> Result<Menus> {
         sep(mk)?;
         item(km, mk, ID_MARK_CLEAR, "マークをすべて外す(&C)")?;
         popup(search, mk, "カラーマーカー(&K)")?;
+        item(km, search, ID_DIFF, "他のタブと比較（差分表示）(&D)")?;
         popup(bar, search, "検索(&S)")?;
 
         let view = CreatePopupMenu()?;
@@ -312,6 +316,7 @@ pub unsafe fn build(km: &Keymap) -> Result<Menus> {
         item(km, view, ID_WRAP, "折り返して表示(&R)")?;
         item(km, view, ID_IME_INLINE, "IME の変換中の文字をエディタ内に表示(&M)")?;
         item(km, view, ID_SYNTAX, "構文の色分け（JSON・SQL・XML など）(&Y)")?;
+        item(km, view, ID_SPLIT_VIEW, "分割表示（同じファイルを左右に並べて参照）(&P)")?;
         item(km, view, ID_TOOLBAR, "ツールバーを表示(&B)")?;
         item(km, view, ID_FKEYS, "機能ボタンの列を表示(&U)")?;
         item(km, view, ID_LOG_COLORS, "ログレベルの色分け(&L)")?;
