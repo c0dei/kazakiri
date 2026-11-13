@@ -445,6 +445,19 @@ unsafe fn run_inner() -> std::result::Result<(), (&'static str, windows::core::E
             let attrs = (0..units.len()).map(|i| if i < units.len() / 2 { 1 } else { 0 }).collect();
             app.comp = Some(edit::Comp { cursor: units.len() / 2, attrs, units });
         }
+        // 前回のウィンドウの位置と大きさを戻す（どのモニターにも掛からない位置なら、既定の位置のまま）
+        if let Some((x, y, w, h, maximized)) = app.settings.window {
+            let r = RECT { left: x, top: y, right: x + w, bottom: y + h };
+            if !MonitorFromRect(&r, MONITOR_DEFAULTTONULL).is_invalid() {
+                let wp = WINDOWPLACEMENT {
+                    length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
+                    showCmd: if maximized { SW_SHOWMAXIMIZED.0 as u32 } else { SW_SHOWNORMAL.0 as u32 },
+                    rcNormalPosition: r,
+                    ..Default::default()
+                };
+                let _ = SetWindowPlacement(hwnd, &wp);
+            }
+        }
         app.apply_title_theme();
         app.sync_menu_bar();
         APP.with(|a| *a.borrow_mut() = Some(app));
@@ -1158,6 +1171,13 @@ impl App {
                     (DONE, None)
                 }
                 WM_DESTROY => {
+                    // ウィンドウの位置と大きさを覚える（最大化していれば、戻したときの大きさ）
+                    let mut wp = WINDOWPLACEMENT { length: std::mem::size_of::<WINDOWPLACEMENT>() as u32, ..Default::default() };
+                    if GetWindowPlacement(self.hwnd, &mut wp).is_ok() {
+                        let r = wp.rcNormalPosition;
+                        self.settings.window = Some((r.left, r.top, r.right - r.left, r.bottom - r.top, wp.showCmd == SW_SHOWMAXIMIZED.0 as u32));
+                        self.settings.save();
+                    }
                     self.save_session();
                     self.cancel_search();
                     PostQuitMessage(0);
