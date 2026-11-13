@@ -123,7 +123,7 @@ fn sync() {
     }
     // ライトテーマのときだけ、標準のメニューバーを選べる
     unsafe {
-        let _ = EnableWindow(ctl(ID_NATIVE), !s.dark);
+        let _ = EnableWindow(ctl(ID_NATIVE), true);
     }
     set_theme(s.dark);
 }
@@ -315,7 +315,7 @@ unsafe fn create(owner: HWND) {
         }
         put(ID_DARK, w!("BUTTON"), CHECKS[0].1, check, 0, 28, 32, 420, 22);
         put(ID_MICA, w!("BUTTON"), "Mica（Windows 11 のタイトルバーを半透明に）(&C)", check, 0, 28, 58, 420, 22);
-        put(ID_NATIVE, w!("BUTTON"), "Windows 標準のメニューバーを使う（ライトテーマのみ）(&N)", check, 0, 28, 84, 420, 22);
+        put(ID_NATIVE, w!("BUTTON"), "Windows 標準のメニューバーを使う（ダークテーマでは暗く塗る。オフなら自前で描く）(&N)", check, 0, 28, 84, 420, 22);
         put(10, w!("STATIC"), "本文のフォント（空欄で自動）", 0, 0, 28, 114, 220, 18);
         put(11, w!("STATIC"), "大きさ (pt)", 0, 0, 340, 114, 100, 18);
         put(13, w!("STATIC"), "画面（メニュー・タブなど）のフォント（空欄で自動）", 0, 0, 28, 168, 300, 18);

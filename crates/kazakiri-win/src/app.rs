@@ -549,6 +549,10 @@ unsafe fn measure(dw: &IDWriteFactory, format: &IDWriteTextFormat) -> Result<(f3
 }
 
 extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    // 標準のメニューバーを暗く塗るメッセージは、App を借りる前に処理する（描画の最中に同期で届くため）
+    if let Some(r) = unsafe { dark::bar_message(hwnd, msg, wparam, lparam) } {
+        return r;
+    }
     let result = APP.with(|cell| {
         let Ok(mut guard) = cell.try_borrow_mut() else { return None };
         let app = guard.as_mut()?;
@@ -1012,38 +1016,14 @@ impl App {
                 }
                 WM_LBUTTONDOWN => {
                     let (x, y) = self.mouse_pos(lparam);
-                    // ツールバー・機能ボタン
-                    if let Some(id) = self.hover_at(x, y).and_then(|h| self.hover_command(h)).map(|(id, _)| id) {
-                        self.hover = None;
-                        return (DONE, self.command(id));
-                    }
-                    // 自前のメニューバー：項目を押したらポップアップを出す
-                    if y < -(self.tab_h() + self.tb_h()) {
-                        let item = self.bar_item_at(x);
-                        // 開いているメニューの項目をもう一度押した（それで閉じた）ときは、開き直さない
-                        if let (Some(i), Some((last, at))) = (item, self.menu_closed.take()) {
-                            if i == last && at.elapsed() < Duration::from_millis(500) {
-                                return (DONE, None);
-                            }
-                        }
-                        return (DONE, item.map(Deferred::ShowMenu));
-                    }
-                    if y < -self.tab_h() {
-                        return (DONE, None);
+                    // ツールバー・機能ボタン・メニューバー・ステータスバー
+                    if let Some(r) = self.chrome_press(x, y) {
+                        return (DONE, r);
                     }
                     if y < 0.0 {
                         let d = self.tab_click(x, false);
                         self.tab_drag_start(x);
                         return (DONE, d);
-                    }
-                    // ステータスバーの文字コード・改行コード
-                    if y >= self.client_size().1 - self.status_base_h() {
-                        return match self.status_hit(x) {
-                            Some(2) => (DONE, self.command(menu::ID_GOTO)),
-                            Some(4) => (DONE, self.command(menu::ID_OVERWRITE)),
-                            Some(k) => (DONE, Some(Deferred::StatusMenu(k))),
-                            None => (DONE, None),
-                        };
                     }
                     if self.diffview.is_some() {
                         self.diff_focus_at(x);
@@ -1073,6 +1053,10 @@ impl App {
                 }
                 WM_LBUTTONDBLCLK => {
                     let (x, y) = self.mouse_pos(lparam);
+                    // 素早く続けて押したときも、1 回目と同じボタンの操作として扱う（ダブルクリックとして無視しない）
+                    if let Some(r) = self.chrome_press(x, y) {
+                        return (DONE, r);
+                    }
                     if y < -self.tab_h() {
                         return (DONE, None);
                     }
@@ -1487,6 +1471,39 @@ impl App {
     }
 
     // ---- キーボード ----
+
+    /// ツールバー・機能ボタン・自前のメニューバー・ステータスバーを押した。該当すれば Some（中身は実行後の続き）
+    unsafe fn chrome_press(&mut self, x: f32, y: f32) -> Option<Option<Deferred>> {
+        // ツールバー・機能ボタン
+        if let Some(id) = self.hover_at(x, y).and_then(|h| self.hover_command(h)).map(|(id, _)| id) {
+            self.hover = None;
+            return Some(self.command(id));
+        }
+        // 自前のメニューバー：項目を押したらポップアップを出す
+        if y < -(self.tab_h() + self.tb_h()) {
+            let item = self.bar_item_at(x);
+            // 開いているメニューの項目をもう一度押した（それで閉じた）ときは、開き直さない
+            if let (Some(i), Some((last, at))) = (item, self.menu_closed.take()) {
+                if i == last && at.elapsed() < Duration::from_millis(500) {
+                    return Some(None);
+                }
+            }
+            return Some(item.map(Deferred::ShowMenu));
+        }
+        if y < -self.tab_h() {
+            return Some(None);
+        }
+        // ステータスバーの文字コード・改行コード・行桁・タブ幅・挿入／上書き
+        if y >= 0.0 && y >= self.client_size().1 - self.status_base_h() {
+            return Some(match self.status_hit(x) {
+                Some(2) => self.command(menu::ID_GOTO),
+                Some(4) => self.command(menu::ID_OVERWRITE),
+                Some(k) => Some(Deferred::StatusMenu(k)),
+                None => None,
+            });
+        }
+        None
+    }
 
     unsafe fn on_key(&mut self, vk: VIRTUAL_KEY) -> Option<Deferred> {
         let ctrl = unsafe { GetKeyState(VK_CONTROL.0 as i32) } < 0;
