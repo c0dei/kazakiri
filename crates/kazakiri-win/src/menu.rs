@@ -159,7 +159,7 @@ pub unsafe fn build(km: &Keymap) -> Result<Menus> {
         item(km, file, ID_SPLIT, "ファイルを分割(&L)...")?;
         item(km, file, ID_JOIN, "ファイルを結合(&J)...")?;
         item(km, file, ID_SETTINGS, "設定(&P)...")?;
-        item(km, file, ID_KEYS, "キー割り当てを編集(&K)...")?;
+        item(km, file, ID_KEYS, "キー割り当て(&K)...")?;
         item(km, file, ID_EXIT, "終了(&X)")?;
         popup(bar, file, "ファイル(&F)")?;
 

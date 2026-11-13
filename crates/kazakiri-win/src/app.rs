@@ -41,6 +41,7 @@ mod rect;
 mod dark;
 mod menubar;
 mod find_dialog;
+mod keys_dialog;
 mod settings_dialog;
 mod status_menu;
 mod wrap;
@@ -98,6 +99,7 @@ enum Deferred {
     /// 検索・置換・GREP のダイアログを開く（タブの番号）
     ShowFind(usize),
     ShowSettings,
+    ShowKeys,
     /// ステータスバーの文字コード（0）・改行コード（1）のメニュー
     StatusMenu(u8),
     /// いまのファイルを変換して上書き保存してよいか確認する（メニューの ID）
@@ -418,6 +420,10 @@ unsafe fn run_inner() -> std::result::Result<(), (&'static str, windows::core::E
             if sdlg != 0 && IsDialogMessageW(HWND(sdlg as *mut _), &msg).as_bool() {
                 continue;
             }
+            let kdlg = keys_dialog::KEYS_DLG.load(Ordering::Relaxed);
+            if kdlg != 0 && IsDialogMessageW(HWND(kdlg as *mut _), &msg).as_bool() {
+                continue;
+            }
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
@@ -531,6 +537,7 @@ unsafe fn run_deferred(hwnd: HWND, d: Deferred) {
         }
         Deferred::ShowFind(tab) => unsafe { find_dialog::show(hwnd, tab) },
         Deferred::ShowSettings => unsafe { settings_dialog::show(hwnd) },
+        Deferred::ShowKeys => unsafe { keys_dialog::show(hwnd) },
         Deferred::StatusMenu(kind) => unsafe {
             if let Some(Some(menu)) = with_app(|app| app.build_status_menu(kind)) {
                 let mut pt = POINT::default();
@@ -1154,7 +1161,7 @@ impl App {
 
     unsafe fn command(&mut self, id: u32) -> Option<Deferred> {
         match id {
-            menu::ID_KEYS => self.edit_keys(),
+            menu::ID_KEYS => return Some(Deferred::ShowKeys),
             menu::ID_SETTINGS => return Some(Deferred::ShowSettings),
             menu::ID_SPLIT => {
                 if self.doc.as_ref().and_then(|d| d.path()).is_none() {

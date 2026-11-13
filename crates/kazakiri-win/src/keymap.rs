@@ -217,33 +217,8 @@ impl Keymap {
 
     pub fn from_text(text: &str) -> Keymap {
         let mut km = Keymap::default();
-        // コマンド名 → 割り当てのキー（文字列）
-        let mut bindings: Vec<(&str, Vec<String>)> = Vec::new();
-        for (name, _) in COMMANDS {
-            bindings.push((name, DEFAULTS.iter().filter(|(n, _)| n == name).map(|(_, k)| k.to_string()).collect()));
-        }
-        for (no, raw) in text.lines().enumerate() {
-            let line = raw.split('#').next().unwrap_or("").trim();
-            if line.is_empty() {
-                continue;
-            }
-            let Some((name, keys)) = line.split_once('=') else {
-                km.problems.push(format!("{} 行目: 「コマンド名 = キー」の形で書いてください", no + 1));
-                continue;
-            };
-            let name = name.trim().to_ascii_lowercase();
-            let Some(slot) = bindings.iter_mut().find(|(n, _)| *n == name) else {
-                km.problems.push(format!("{} 行目: 知らないコマンド名: {name}", no + 1));
-                continue;
-            };
-            let keys = keys.trim();
-            slot.1 = if keys.eq_ignore_ascii_case("none") || keys.is_empty() {
-                Vec::new()
-            } else {
-                // 「Ctrl++」のカンマ区切りを壊さないよう、カンマだけで分ける
-                keys.split(',').map(|k| k.trim().to_string()).filter(|k| !k.is_empty()).collect()
-            };
-        }
+        let (bindings, problems) = read_bindings(text);
+        km.problems = problems;
         for (name, keys) in bindings {
             let id = COMMANDS.iter().find(|(n, _)| *n == name).map(|&(_, id)| id).unwrap();
             let mut labels = Vec::new();
@@ -289,17 +264,97 @@ fn canonical(k: &str, ctrl: bool, shift: bool) -> String {
     label_of(ctrl, shift, &shown)
 }
 
-/// keys.ini の雛形（既定の割り当てを書き出す）
-pub fn template() -> String {
-    let mut s = String::from(
-        "# kazakiri のキー割り当て\n# 「コマンド名 = キー」。書いたコマンドだけが既定の割り当てを置き換える。保存して再起動すると反映される。\n\
-         # 複数はカンマ区切り（redo = Ctrl+Y, Ctrl+Shift+Z）。外すときは none。\n# 使えるキー: Ctrl+A〜Z, Ctrl+0〜9, F1〜F12, Tab, Enter, Home, End, PageUp, PageDown, 矢印, Insert, Delete, Plus, Minus\n# 文字キーは Ctrl を付ける（Alt は使えない）\n\n",
-    );
+/// keys.ini を読んで、コマンド名ごとのキー（書き方のまま）を求める。問題のある行は一覧で返す
+fn read_bindings(text: &str) -> (Vec<(&'static str, Vec<String>)>, Vec<String>) {
+    let mut problems = Vec::new();
+    let mut bindings: Vec<(&'static str, Vec<String>)> = Vec::new();
     for (name, _) in COMMANDS {
-        let keys: Vec<&str> = DEFAULTS.iter().filter(|(n, _)| n == name).map(|(_, k)| *k).collect();
-        s.push_str(&format!("# {name} = {}\n", if keys.is_empty() { "none".to_string() } else { keys.join(", ") }));
+        bindings.push((name, DEFAULTS.iter().filter(|(n, _)| n == name).map(|(_, k)| k.to_string()).collect()));
+    }
+    for (no, raw) in text.lines().enumerate() {
+        let line = raw.split('#').next().unwrap_or("").trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Some((name, keys)) = line.split_once('=') else {
+            problems.push(format!("{} 行目: 「コマンド名 = キー」の形で書いてください", no + 1));
+            continue;
+        };
+        let name = name.trim().to_ascii_lowercase();
+        let Some(slot) = bindings.iter_mut().find(|(n, _)| *n == name) else {
+            problems.push(format!("{} 行目: 知らないコマンド名: {name}", no + 1));
+            continue;
+        };
+        let keys = keys.trim();
+        slot.1 = if keys.eq_ignore_ascii_case("none") || keys.is_empty() {
+            Vec::new()
+        } else {
+            // 「Ctrl++」のカンマ区切りを壊さないよう、カンマだけで分ける
+            keys.split(',').map(|k| k.trim().to_string()).filter(|k| !k.is_empty()).collect()
+        };
+    }
+    (bindings, problems)
+}
+
+/// キー割り当ての編集用：コマンドごとの名前・ID・いまのキー・既定のキー（書き方は keys.ini と同じ）
+#[derive(Clone, Debug)]
+pub struct Binding {
+    pub name: &'static str,
+    pub id: u32,
+    pub keys: Vec<String>,
+    pub defaults: Vec<String>,
+}
+
+/// 既定の割り当て＋ keys.ini の内容を、編集できる形で返す
+pub fn bindings() -> Vec<Binding> {
+    let text = config_path().and_then(|p| std::fs::read_to_string(p).ok()).unwrap_or_default();
+    read_bindings(&text)
+        .0
+        .into_iter()
+        .map(|(name, keys)| Binding {
+            name,
+            id: COMMANDS.iter().find(|(n, _)| *n == name).map_or(0, |&(_, id)| id),
+            keys,
+            defaults: DEFAULTS.iter().filter(|(n, _)| *n == name).map(|(_, k)| k.to_string()).collect(),
+        })
+        .collect()
+}
+
+/// keys.ini に書く内容（既定と違うコマンドだけ）
+pub fn to_ini(bindings: &[Binding]) -> String {
+    let mut s = String::from("# kazakiri のキー割り当て（設定ダイアログで編集。既定と違うコマンドだけを書く）\n");
+    for b in bindings.iter().filter(|b| b.keys != b.defaults) {
+        s.push_str(&format!("{} = {}\n", b.name, if b.keys.is_empty() { "none".to_string() } else { b.keys.join(", ") }));
     }
     s
+}
+
+/// 一覧に出すキーの書き方（`Ctrl+Plus` → `Ctrl++`）。読めなければそのまま
+pub fn display(key: &str) -> String {
+    match parse_key(key) {
+        Ok((ctrl, shift, _)) => canonical(key, ctrl, shift),
+        Err(_) => key.to_string(),
+    }
+}
+
+/// キー入力（仮想キーコードと修飾キー）から、keys.ini の書き方のキーを作る。使えないキーならエラー
+pub fn key_from_input(vk_code: u16, ctrl: bool, shift: bool) -> Result<String, String> {
+    let name = if (vk::F1..vk::F1 + 12).contains(&vk_code) {
+        format!("F{}", vk_code - vk::F1 + 1)
+    } else if vk_code == vk::OEM_PLUS {
+        "Plus".to_string()
+    } else if vk_code == vk::OEM_MINUS {
+        "Minus".to_string()
+    } else if (0x30..=0x39).contains(&vk_code) || (0x41..=0x5A).contains(&vk_code) {
+        (vk_code as u8 as char).to_string()
+    } else if let Some((n, _)) = NAMED.iter().find(|(_, v)| v.first() == Some(&vk_code)) {
+        n.to_string()
+    } else {
+        return Err("このキーは使えません".into());
+    };
+    let text = label_of(ctrl, shift, &name);
+    parse_key(&text)?;
+    Ok(text)
 }
 
 #[cfg(test)]
@@ -342,11 +397,18 @@ mod tests {
     }
 
     #[test]
-    fn template_parses_to_defaults() {
-        let t = template();
-        let km = Keymap::from_text(&t);
-        assert!(km.problems.is_empty());
-        // コメントなので既定のまま
-        assert_eq!(km.lookup(true, false, b'O' as u16), Some(ID_OPEN));
+    fn editing_roundtrip() {
+        let mut b: Vec<Binding> = read_bindings("find = Ctrl+E\n").0.into_iter().map(|(name, keys)| Binding { name, id: 0, keys, defaults: DEFAULTS.iter().filter(|(n, _)| *n == name).map(|(_, k)| k.to_string()).collect() }).collect();
+        let ini = to_ini(&b);
+        assert!(ini.contains("find = Ctrl+E"));
+        assert!(!ini.contains("open ="));
+        b.iter_mut().find(|x| x.name == "new").unwrap().keys.clear();
+        let km = Keymap::from_text(&to_ini(&b));
+        assert_eq!(km.lookup(true, false, b'N' as u16), None);
+        assert_eq!(km.lookup(true, false, b'E' as u16), Some(ID_FIND));
+        assert_eq!(key_from_input(0x46, true, true).unwrap(), "Ctrl+Shift+F");
+        assert_eq!(key_from_input(0xBB, true, false).unwrap(), "Ctrl+Plus");
+        assert_eq!(display("Ctrl+Plus"), "Ctrl++");
+        assert!(key_from_input(0x46, false, false).is_err());
     }
 }

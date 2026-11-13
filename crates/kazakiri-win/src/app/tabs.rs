@@ -403,28 +403,6 @@ impl App {
         crate::session::save(&paths, active);
     }
 
-    /// keys.ini を（なければ雛形を作って）新しいタブで開く
-    pub(super) fn edit_keys(&mut self) {
-        let Some(path) = crate::keymap::config_path() else {
-            self.message = "設定の保存先（APPDATA）が見つかりません".into();
-            self.invalidate();
-            return;
-        };
-        if !path.exists() {
-            if let Some(dir) = path.parent() {
-                let _ = std::fs::create_dir_all(dir);
-            }
-            if let Err(e) = std::fs::write(&path, crate::keymap::template()) {
-                self.message = format!("keys.ini を作れません: {e}");
-                self.invalidate();
-                return;
-            }
-        }
-        self.open(path, None);
-        self.message = "キー割り当て: 保存して、kazakiri を再起動すると反映されます".into();
-        self.invalidate();
-    }
-
     /// 前回開いていたファイルを開く
     pub(super) fn restore_session(&mut self) {
         let (paths, active) = crate::session::load();
