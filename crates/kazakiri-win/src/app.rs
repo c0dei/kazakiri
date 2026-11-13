@@ -60,6 +60,8 @@ use results::{JobDone, Results, ResultsJob, WM_REPLACE_FOUND, WM_RESULTS_DONE};
 
 const APP_NAME: &str = "kazakiri";
 const FONT_CANDIDATES: [&str; 4] = ["BIZ UDGothic", "BIZ UDゴシック", "MS Gothic", "Consolas"];
+/// 画面の部品（メニュー・タブなど）のフォントの候補
+const UI_FONT_CANDIDATES: [&str; 3] = ["Yu Gothic UI", "Meiryo UI", "Segoe UI"];
 /// 1 行のうち描画する最大 UTF-16 単位数（それ以上は「…」）
 const MAX_RENDER_UNITS: usize = 8192;
 /// クリップボードへコピーできる最大バイト数
@@ -181,6 +183,10 @@ struct App {
     d2d: ID2D1Factory,
     dw: IDWriteFactory,
     format: IDWriteTextFormat,
+    /// 画面の部品（メニュー・タブ・ツールバー・ステータスバー）用のフォントと、その文字の高さ・幅
+    ui_format: IDWriteTextFormat,
+    ui_line_h: f32,
+    ui_char_w: f32,
     gfx: Option<Gfx>,
     menus: Menus,
     keymap: keymap::Keymap,
@@ -191,6 +197,8 @@ struct App {
     bm_col0: bool,
     /// ツールバー・機能ボタンの上にあるマウス
     hover: Option<toolbar::Hover>,
+    /// 直前に閉じたメニューバーの項目と時刻（同じ項目を押して閉じるときに、すぐ開き直さないため）
+    menu_closed: Option<(usize, Instant)>,
     /// 単語補完の途中（続けて押すと次の候補）
     dabbrev: Option<complete::Dab>,
     markers: Vec<markers::Marker>,
@@ -338,11 +346,18 @@ unsafe fn run_inner() -> std::result::Result<(), (&'static str, windows::core::E
         let (char_w, line_h) = measure(&dw, &format).unwrap_or((fs * 0.5, (fs * 1.4).ceil()));
         let _ = format.SetIncrementalTabStop(char_w * settings.tab_width as f32);
 
+        let ui_format = create_ui_format(&dw, &settings.ui_font, settings.ui_font_size).map_err(|e| ("CreateTextFormat", e))?;
+        let ufs = settings.ui_font_size;
+        let (ui_char_w, ui_line_h) = measure(&dw, &ui_format).unwrap_or((ufs * 0.5, (ufs * 1.4).ceil()));
+
         theme::load_accent();
         let mut app = App {
             hwnd,
             d2d,
             dw,
+            ui_format,
+            ui_line_h,
+            ui_char_w,
             format,
             gfx: None,
             menus,
@@ -351,6 +366,7 @@ unsafe fn run_inner() -> std::result::Result<(), (&'static str, windows::core::E
             bm_lines: 0,
             bm_col0: false,
             hover: None,
+            menu_closed: None,
             dabbrev: None,
             markers: Vec::new(),
             diffview: None,
@@ -466,6 +482,14 @@ unsafe fn run_inner() -> std::result::Result<(), (&'static str, windows::core::E
 }
 
 unsafe fn create_format(dw: &IDWriteFactory, font: &str, size: f32) -> Result<IDWriteTextFormat> {
+    unsafe { create_format_from(dw, font, size, &FONT_CANDIDATES) }
+}
+
+unsafe fn create_ui_format(dw: &IDWriteFactory, font: &str, size: f32) -> Result<IDWriteTextFormat> {
+    unsafe { create_format_from(dw, font, size, &UI_FONT_CANDIDATES) }
+}
+
+unsafe fn create_format_from(dw: &IDWriteFactory, font: &str, size: f32, defaults: &[&str]) -> Result<IDWriteTextFormat> {
     unsafe {
         let mut fonts = None;
         dw.GetSystemFontCollection(&mut fonts, false)?;
@@ -474,8 +498,8 @@ unsafe fn create_format(dw: &IDWriteFactory, font: &str, size: f32) -> Result<ID
         // 次に設定ファイルの font
         let user_font = std::env::var("KAZAKIRI_FONT").ok();
         let setting = (!font.is_empty()).then_some(font);
-        let candidates = user_font.iter().map(String::as_str).chain(setting).chain(FONT_CANDIDATES);
-        let mut family = FONT_CANDIDATES[FONT_CANDIDATES.len() - 1];
+        let candidates = user_font.iter().map(String::as_str).chain(setting).chain(defaults.iter().copied());
+        let mut family = defaults[defaults.len() - 1];
         for name in candidates {
             let (mut idx, mut exists) = (0u32, BOOL(0));
             let wname = wide(name);
@@ -644,6 +668,7 @@ unsafe fn run_deferred(hwnd: HWND, d: Deferred) {
             }
             with_app(|app| {
                 app.menu_open = None;
+                app.menu_closed = Some((i, Instant::now()));
                 app.invalidate();
             });
         }
@@ -767,6 +792,22 @@ impl App {
                     (DONE, None)
                 }
                 WM_ERASEBKGND => (Some(LRESULT(1)), None),
+                WM_SETCURSOR if (lparam.0 & 0xFFFF) as u32 == HTCLIENT => {
+                    let mut pt = POINT::default();
+                    let _ = GetCursorPos(&mut pt);
+                    let _ = ScreenToClient(self.hwnd, &mut pt);
+                    let scale = GetDpiForWindow(self.hwnd) as f32 / 96.0;
+                    let (x, y) = (pt.x as f32 / scale, pt.y as f32 / scale - self.chrome_h());
+                    let (cw, ch) = self.client_size();
+                    let _ = cw;
+                    // 本文の中だけ I ビーム。メニュー・ツールバー・タブ・行番号・結果一覧・ステータスバーは矢印、ボタンは手
+                    let in_text = self.diffview.is_none() && y >= 0.0 && x >= self.gutter_width() && y < ch - self.status_h() - self.panel_h();
+                    let id = if self.hover_at(x, y).is_some() { IDC_HAND } else if in_text { IDC_IBEAM } else { IDC_ARROW };
+                    if let Ok(c) = LoadCursorW(None, id) {
+                        SetCursor(Some(c));
+                    }
+                    (Some(LRESULT(1)), None)
+                }
                 WM_SIZE => {
                     if let Some(g) = &self.gfx {
                         let (w, h) = (loword(lparam.0 as usize), hiword(lparam.0 as usize));
@@ -965,7 +1006,14 @@ impl App {
                     }
                     // 自前のメニューバー：項目を押したらポップアップを出す
                     if y < -(self.tab_h() + self.tb_h()) {
-                        return (DONE, self.bar_item_at(x).map(Deferred::ShowMenu));
+                        let item = self.bar_item_at(x);
+                        // 開いているメニューの項目をもう一度押した（それで閉じた）ときは、開き直さない
+                        if let (Some(i), Some((last, at))) = (item, self.menu_closed.take()) {
+                            if i == last && at.elapsed() < Duration::from_millis(500) {
+                                return (DONE, None);
+                            }
+                        }
+                        return (DONE, item.map(Deferred::ShowMenu));
                     }
                     if y < -self.tab_h() {
                         return (DONE, None);
@@ -2105,6 +2153,15 @@ impl App {
     unsafe fn paint(&mut self) -> Result<()> {
         unsafe {
             self.ensure_gfx()?;
+            // スクロールバーの出し入れなどでクライアント領域の大きさが変わっても WM_SIZE が来ないことがあるので、毎回合わせる
+            if let Some(g) = &self.gfx {
+                let mut rc = RECT::default();
+                let _ = GetClientRect(self.hwnd, &mut rc);
+                let sz = g.target.GetPixelSize();
+                if (rc.right as u32, rc.bottom as u32) != (sz.width, sz.height) {
+                    let _ = g.target.Resize(&D2D_SIZE_U { width: rc.right as u32, height: rc.bottom as u32 });
+                }
+            }
             self.ensure_continuation();
             self.clamp_top();
             let (w, h) = self.client_size();
@@ -2422,6 +2479,28 @@ impl App {
         }
     }
 
+    /// 画面の部品用のフォントでの文字列の幅
+    unsafe fn ui_text_width(&self, units: &[u16]) -> Result<f32> {
+        if units.is_empty() {
+            return Ok(0.0);
+        }
+        unsafe {
+            let layout = self.dw.CreateTextLayout(units, &self.ui_format, 1.0e6, self.ui_line_h)?;
+            let mut m = DWRITE_TEXT_METRICS::default();
+            layout.GetMetrics(&mut m)?;
+            Ok(m.widthIncludingTrailingWhitespace)
+        }
+    }
+
+    /// 画面の部品用のフォントで文字列を描く
+    unsafe fn draw_ui_str(&self, rt: &ID2D1RenderTarget, brush: &ID2D1SolidColorBrush, s: &str, x: f32, y: f32, right: f32) -> Result<()> {
+        let units: Vec<u16> = s.encode_utf16().collect();
+        unsafe {
+            rt.DrawText(&units, &self.ui_format, &rect(x, y, right.max(x + 1.0), y + self.ui_line_h), brush, D2D1_DRAW_TEXT_OPTIONS_CLIP, DWRITE_MEASURING_MODE_NATURAL);
+        }
+        Ok(())
+    }
+
     unsafe fn draw_str(&self, rt: &ID2D1RenderTarget, brush: &ID2D1SolidColorBrush, s: &str, x: f32, y: f32, right: f32) -> Result<()> {
         let units: Vec<u16> = s.encode_utf16().collect();
         unsafe {
@@ -2533,14 +2612,14 @@ impl App {
         unsafe {
             // 右側（ファイルの情報）を優先し、左側（メッセージ）は残りの幅で切る
             let units: Vec<u16> = right.encode_utf16().collect();
-            let layout = self.dw.CreateTextLayout(&units, &self.format, w, self.line_h)?;
+            let layout = self.dw.CreateTextLayout(&units, &self.ui_format, w, self.ui_line_h)?;
             let mut m = DWRITE_TEXT_METRICS::default();
             layout.GetMetrics(&mut m)?;
             let rw = m.widthIncludingTrailingWhitespace.min(w * 0.75);
             rt.DrawTextLayout(Vector2 { X: w - rw - 8.0, Y: top + 3.0 }, &layout, brush, D2D1_DRAW_TEXT_OPTIONS_CLIP);
             // 右側と重ならないように切り取る（文字の切り取り指定が効かない環境もあるので領域で切る）
             rt.PushAxisAlignedClip(&rect(0.0, top, (w - rw - 24.0).max(0.0), h), D2D1_ANTIALIAS_MODE_ALIASED);
-            self.draw_str(rt, brush, &left, 8.0, top + 3.0, w - rw - 24.0)?;
+            self.draw_ui_str(rt, brush, &left, 8.0, top + 3.0, w - rw - 24.0)?;
             rt.PopAxisAlignedClip();
         }
         Ok(())

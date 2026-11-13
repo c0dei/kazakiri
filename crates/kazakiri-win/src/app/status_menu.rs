@@ -15,7 +15,7 @@ impl App {
             return None;
         }
         let w = self.client_size().0;
-        let width = |s: &str| unsafe { self.text_width(&s.encode_utf16().collect::<Vec<_>>()) }.unwrap_or(0.0);
+        let width = |s: &str| unsafe { self.ui_text_width(&s.encode_utf16().collect::<Vec<_>>()) }.unwrap_or(0.0);
         let total: String = segs.iter().map(|(s, _)| s.as_str()).collect();
         let mut x0 = w - width(&total).min(w * 0.75) - 8.0;
         for (text, kind) in &segs {

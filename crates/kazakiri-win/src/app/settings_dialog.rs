@@ -31,6 +31,9 @@ const ID_NATIVE: i32 = 203;
 const ID_FONT: i32 = 204;
 const ID_FONT_PICK: i32 = 205;
 const ID_SIZE: i32 = 206;
+const ID_UIFONT: i32 = 207;
+const ID_UIFONT_PICK: i32 = 208;
+const ID_UISIZE: i32 = 209;
 const ID_WRAP: i32 = 210;
 const ID_IME: i32 = 211;
 const ID_TAB: i32 = 212;
@@ -109,6 +112,12 @@ fn sync() {
     if focus != ctl(ID_SIZE) {
         set_text(ID_SIZE, &format!("{}", s.font_size));
     }
+    if focus != ctl(ID_UIFONT) {
+        set_text(ID_UIFONT, &s.ui_font);
+    }
+    if focus != ctl(ID_UISIZE) {
+        set_text(ID_UISIZE, &format!("{}", s.ui_font_size));
+    }
     if focus != ctl(ID_TAB) {
         set_text(ID_TAB, &s.tab_width.to_string());
     }
@@ -144,18 +153,23 @@ fn commit_edits() {
     let font = text_of(ID_FONT).trim().to_string();
     let size = text_of(ID_SIZE).trim().parse::<f32>().ok();
     let tab = text_of(ID_TAB).trim().parse::<usize>().ok();
+    let ui_font = text_of(ID_UIFONT).trim().to_string();
+    let ui_size = text_of(ID_UISIZE).trim().parse::<f32>().ok();
     with_app(|app| {
         let s = &app.settings;
-        app.set_text_settings(&font, size.unwrap_or(s.font_size), tab.unwrap_or(s.tab_width));
+        let (fs, tw, us) = (s.font_size, s.tab_width, s.ui_font_size);
+        app.set_text_settings(&font, size.unwrap_or(fs), tab.unwrap_or(tw));
+        app.set_ui_font(&ui_font, ui_size.unwrap_or(us));
     });
     sync();
 }
 
 /// フォント選択ダイアログ
-unsafe fn pick_font(dlg: HWND) {
+unsafe fn pick_font(dlg: HWND, ui: bool) {
     unsafe {
-        let name = text_of(ID_FONT);
-        let size = text_of(ID_SIZE).trim().parse::<f32>().unwrap_or(14.0);
+        let (id_font, id_size) = if ui { (ID_UIFONT, ID_UISIZE) } else { (ID_FONT, ID_SIZE) };
+        let name = text_of(id_font);
+        let size = text_of(id_size).trim().parse::<f32>().unwrap_or(14.0);
         let mut lf = LOGFONTW { lfHeight: -(size.round() as i32 * 96 / 72), lfCharSet: windows::Win32::Graphics::Gdi::SHIFTJIS_CHARSET, ..Default::default() };
         for (i, c) in name.encode_utf16().take(31).enumerate() {
             lf.lfFaceName[i] = c;
@@ -169,8 +183,8 @@ unsafe fn pick_font(dlg: HWND) {
         };
         if ChooseFontW(&mut cf).as_bool() {
             let n = lf.lfFaceName.iter().position(|&c| c == 0).unwrap_or(32);
-            set_text(ID_FONT, &String::from_utf16_lossy(&lf.lfFaceName[..n]));
-            set_text(ID_SIZE, &format!("{}", (cf.iPointSize / 10).max(1)));
+            set_text(id_font, &String::from_utf16_lossy(&lf.lfFaceName[..n]));
+            set_text(id_size, &format!("{}", (cf.iPointSize / 10).max(1)));
             commit_edits();
         }
     }
@@ -179,7 +193,7 @@ unsafe fn pick_font(dlg: HWND) {
 unsafe fn on_command(dlg: HWND, id: i32, code: u32) {
     unsafe {
         let owner = GetWindow(dlg, GW_OWNER).unwrap_or_default();
-        if matches!(id, ID_FONT | ID_SIZE | ID_TAB) {
+        if matches!(id, ID_FONT | ID_SIZE | ID_TAB | ID_UIFONT | ID_UISIZE) {
             if code == EN_KILLFOCUS_CODE {
                 commit_edits();
             }
@@ -194,7 +208,8 @@ unsafe fn on_command(dlg: HWND, id: i32, code: u32) {
             return;
         }
         match id {
-            ID_FONT_PICK => return pick_font(dlg),
+            ID_FONT_PICK => return pick_font(dlg, false),
+            ID_UIFONT_PICK => return pick_font(dlg, true),
             ID_MICA => {
                 let on = SendMessageW(ctl(ID_MICA), BM_GETCHECK, None, None).0 == BST_CHECKED.0 as isize;
                 with_app(|app| app.set_mica(on));
@@ -295,38 +310,43 @@ unsafe fn create(owner: HWND) {
             all.push((id, hw));
         };
         // 見出し（ID は 1 から）
-        for (i, (text, y)) in [("外観", 10), ("編集", 176), ("表示", 288), ("検索・GREP", 446)].iter().enumerate() {
+        for (i, (text, y)) in [("外観", 10), ("編集", 232), ("表示", 344), ("検索・GREP", 502)].iter().enumerate() {
             put(1 + i as i32, w!("STATIC"), text, 0, 0, 16, *y, 200, 18);
         }
         put(ID_DARK, w!("BUTTON"), CHECKS[0].1, check, 0, 28, 32, 420, 22);
         put(ID_MICA, w!("BUTTON"), "Mica（Windows 11 のタイトルバーを半透明に）(&C)", check, 0, 28, 58, 420, 22);
         put(ID_NATIVE, w!("BUTTON"), "Windows 標準のメニューバーを使う（ライトテーマのみ）(&N)", check, 0, 28, 84, 420, 22);
-        put(10, w!("STATIC"), "フォント（空欄で自動）", 0, 0, 28, 114, 180, 18);
+        put(10, w!("STATIC"), "本文のフォント（空欄で自動）", 0, 0, 28, 114, 220, 18);
         put(11, w!("STATIC"), "大きさ (pt)", 0, 0, 340, 114, 100, 18);
+        put(13, w!("STATIC"), "画面（メニュー・タブなど）のフォント（空欄で自動）", 0, 0, 28, 168, 300, 18);
+        put(14, w!("STATIC"), "大きさ (pt)", 0, 0, 340, 168, 100, 18);
+        put(ID_UIFONT, w!("EDIT"), "", edit, WS_EX_CLIENTEDGE.0, 28, 188, 220, 24);
+        put(ID_UIFONT_PICK, w!("BUTTON"), "選択...(&G)", push, 0, 256, 188, 72, 24);
+        put(ID_UISIZE, w!("EDIT"), "", edit | ES_NUMBER as u32, WS_EX_CLIENTEDGE.0, 340, 188, 60, 24);
         put(ID_FONT, w!("EDIT"), "", edit, WS_EX_CLIENTEDGE.0, 28, 134, 220, 24);
         put(ID_FONT_PICK, w!("BUTTON"), "選択...(&F)", push, 0, 256, 134, 72, 24);
         put(ID_SIZE, w!("EDIT"), "", edit | ES_NUMBER as u32, WS_EX_CLIENTEDGE.0, 340, 134, 60, 24);
-        put(ID_WRAP, w!("BUTTON"), CHECKS[1].1, check, 0, 28, 198, 420, 22);
-        put(ID_IME, w!("BUTTON"), CHECKS[2].1, check, 0, 28, 224, 420, 22);
-        put(12, w!("STATIC"), "タブの幅（半角の文字数）", 0, 0, 28, 254, 180, 18);
-        put(ID_TAB, w!("EDIT"), "", edit | ES_NUMBER as u32, WS_EX_CLIENTEDGE.0, 214, 250, 50, 24);
-        put(ID_WS, w!("BUTTON"), CHECKS[3].1, check, 0, 28, 310, 420, 22);
-        put(ID_LOG, w!("BUTTON"), CHECKS[4].1, check, 0, 28, 336, 420, 22);
-        put(ID_SYN, w!("BUTTON"), CHECKS[5].1, check, 0, 28, 362, 420, 22);
-        put(ID_TOOLBAR, w!("BUTTON"), CHECKS[6].1, check, 0, 28, 388, 420, 22);
-        put(ID_FKEYS, w!("BUTTON"), CHECKS[7].1, check, 0, 28, 414, 420, 22);
-        put(ID_BACKUP, w!("BUTTON"), CHECKS[8].1, check, 0, 28, 468, 420, 22);
-        put(ID_KEYS, w!("BUTTON"), "キー割り当て...(&K)", push, 0, 16, 506, 200, 28);
-        put(ID_CLOSE, w!("BUTTON"), "閉じる", BS_DEFPUSHBUTTON as u32 | WS_TABSTOP.0, 0, 366, 506, 90, 28);
+        put(ID_WRAP, w!("BUTTON"), CHECKS[1].1, check, 0, 28, 254, 420, 22);
+        put(ID_IME, w!("BUTTON"), CHECKS[2].1, check, 0, 28, 280, 420, 22);
+        put(12, w!("STATIC"), "タブの幅（半角の文字数）", 0, 0, 28, 310, 180, 18);
+        put(ID_TAB, w!("EDIT"), "", edit | ES_NUMBER as u32, WS_EX_CLIENTEDGE.0, 214, 306, 50, 24);
+        put(ID_WS, w!("BUTTON"), CHECKS[3].1, check, 0, 28, 366, 420, 22);
+        put(ID_LOG, w!("BUTTON"), CHECKS[4].1, check, 0, 28, 392, 420, 22);
+        put(ID_SYN, w!("BUTTON"), CHECKS[5].1, check, 0, 28, 418, 420, 22);
+        put(ID_TOOLBAR, w!("BUTTON"), CHECKS[6].1, check, 0, 28, 444, 420, 22);
+        put(ID_FKEYS, w!("BUTTON"), CHECKS[7].1, check, 0, 28, 470, 420, 22);
+        put(ID_BACKUP, w!("BUTTON"), CHECKS[8].1, check, 0, 28, 524, 420, 22);
+        put(ID_KEYS, w!("BUTTON"), "キー割り当て...(&K)", push, 0, 16, 562, 200, 28);
+        put(ID_CLOSE, w!("BUTTON"), "閉じる", BS_DEFPUSHBUTTON as u32 | WS_TABSTOP.0, 0, 366, 562, 90, 28);
         let (bg, edit_bg) = (CreateSolidBrush(rgb_ref(&super::theme::DARK.gutter_bg)), CreateSolidBrush(rgb_ref(&super::theme::DARK.bg)));
         BG_BRUSH.store(bg.0 as isize, Ordering::Relaxed);
         EDIT_BRUSH.store(edit_bg.0 as isize, Ordering::Relaxed);
         CTRLS.with(|c| *c.borrow_mut() = Some(Ctrls { all }));
         SET_DLG.store(dlg.0 as isize, Ordering::Relaxed);
-        // クライアント領域を 472 × 548 に
+        // クライアント領域を 472 × 604 に
         let style = WINDOW_STYLE(GetWindowLongW(dlg, GWL_STYLE) as u32);
         let p = |v: i32| (v as f32 * scale).round() as i32;
-        let mut rc = RECT { left: 0, top: 0, right: p(472), bottom: p(548) };
+        let mut rc = RECT { left: 0, top: 0, right: p(472), bottom: p(604) };
         let _ = AdjustWindowRectExForDpi(&mut rc, style, false, WINDOW_EX_STYLE(0), dpi);
         let _ = SetWindowPos(dlg, None, 0, 0, rc.right - rc.left, rc.bottom - rc.top, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
     }

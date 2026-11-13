@@ -300,7 +300,7 @@ impl App {
     // ---- タブバー ----
 
     pub(super) fn tab_h(&self) -> f32 {
-        self.line_h + 8.0
+        self.ui_line_h + 8.0
     }
 
     /// タブの並び（横スクロールを引く前の位置）
@@ -312,7 +312,7 @@ impl App {
                 let title = title_of(doc);
                 let shown = if self.tab_modified(i) { format!("* {title}") } else { title };
                 let units: Vec<u16> = shown.encode_utf16().collect();
-                let tw = unsafe { self.text_width(&units) }.unwrap_or(units.len() as f32 * self.char_w);
+                let tw = unsafe { self.ui_text_width(&units) }.unwrap_or(units.len() as f32 * self.ui_char_w);
                 let w = (PAD + tw + CLOSE_W).max(MIN_W);
                 let b = TabBox { x0: x, x1: x + w, title: shown };
                 x += w;
@@ -475,9 +475,9 @@ impl App {
                     rt.FillRectangle(&rect(x1 - 1.0, 7.0, x1, h - 7.0), brush);
                 }
                 brush.SetColor(if active { &t.text } else { &t.gutter_text });
-                self.draw_str(rt, brush, &b.title, x0 + PAD, 4.0, x1 - CLOSE_W)?;
+                self.draw_ui_str(rt, brush, &b.title, x0 + PAD, 4.0, x1 - CLOSE_W)?;
                 brush.SetColor(&t.gutter_text);
-                self.draw_str(rt, brush, "x", x1 - CLOSE_W + 6.0, 4.0, x1 - 2.0)?;
+                self.draw_ui_str(rt, brush, "x", x1 - CLOSE_W + 6.0, 4.0, x1 - 2.0)?;
             }
         }
         Ok(())
