@@ -2,6 +2,7 @@
 
 pub mod convert;
 pub mod csv;
+pub mod diff;
 pub mod document;
 pub mod encoding;
 pub mod grep;

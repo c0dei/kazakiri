@@ -42,6 +42,7 @@ mod dark;
 mod menubar;
 mod find_dialog;
 mod bookmarks;
+mod diffview;
 mod markers;
 mod complete;
 mod toolbar;
@@ -105,6 +106,8 @@ enum Deferred {
     ShowFind(usize),
     ShowSettings,
     ShowKeys,
+    /// 比較するタブを選ぶメニュー
+    DiffMenu,
     /// ステータスバーの文字コード（0）・改行コード（1）のメニュー
     StatusMenu(u8),
     /// いまのファイルを変換して上書き保存してよいか確認する（メニューの ID）
@@ -191,6 +194,8 @@ struct App {
     /// 単語補完の途中（続けて押すと次の候補）
     dabbrev: Option<complete::Dab>,
     markers: Vec<markers::Marker>,
+    /// 差分表示（左右に並べた比較）
+    diffview: Option<diffview::DiffView>,
     tracking_leave: bool,
     line_h: f32,
     char_w: f32,
@@ -348,6 +353,7 @@ unsafe fn run_inner() -> std::result::Result<(), (&'static str, windows::core::E
             hover: None,
             dabbrev: None,
             markers: Vec::new(),
+            diffview: None,
             tracking_leave: false,
             line_h,
             char_w,
@@ -561,6 +567,14 @@ unsafe fn run_deferred(hwnd: HWND, d: Deferred) {
         Deferred::ShowFind(tab) => unsafe { find_dialog::show(hwnd, tab) },
         Deferred::ShowSettings => unsafe { settings_dialog::show(hwnd) },
         Deferred::ShowKeys => unsafe { keys_dialog::show(hwnd) },
+        Deferred::DiffMenu => unsafe {
+            if let Some(Some(menu)) = with_app(|app| app.build_diff_menu()) {
+                let mut pt = POINT::default();
+                let _ = GetCursorPos(&mut pt);
+                let _ = TrackPopupMenu(menu, TPM_LEFTALIGN | TPM_TOPALIGN, pt.x, pt.y, None, hwnd, None);
+                let _ = DestroyMenu(menu);
+            }
+        },
         Deferred::StatusMenu(kind) => unsafe {
             if let Some(Some(menu)) = with_app(|app| app.build_status_menu(kind)) {
                 let mut pt = POINT::default();
@@ -817,6 +831,11 @@ impl App {
                     self.on_save_done(*done);
                     (DONE, None)
                 }
+                diffview::WM_DIFF_DONE => {
+                    let done = Box::from_raw(lparam.0 as *mut diffview::DiffDone);
+                    self.on_diff_done(*done);
+                    (DONE, None)
+                }
                 WM_RUN_PENDING => (DONE, self.pending.take().map(Deferred::Perform)),
                 csv_view::WM_CONT_DONE => {
                     self.layout_cache.borrow_mut().clear();
@@ -918,7 +937,9 @@ impl App {
                     let mut pt = POINT { x: loword(lparam.0 as usize) as i16 as i32, y: hiword(lparam.0 as usize) as i16 as i32 };
                     let _ = ScreenToClient(self.hwnd, &mut pt);
                     let scale = GetDpiForWindow(self.hwnd) as f32 / 96.0;
-                    if GetKeyState(VK_CONTROL.0 as i32) < 0 {
+                    if self.diffview.is_some() {
+                        self.diff_wheel(pt.x as f32 / scale, -delta * 3 / 120);
+                    } else if GetKeyState(VK_CONTROL.0 as i32) < 0 {
                         // Ctrl+ホイールで文字の大きさ
                         self.zoom(if delta > 0 { 1.0 } else { -1.0 });
                     } else if self.in_panel(pt.y as f32 / scale - self.chrome_h() - self.pin_h()) {
@@ -962,6 +983,10 @@ impl App {
                             Some(k) => (DONE, Some(Deferred::StatusMenu(k))),
                             None => (DONE, None),
                         };
+                    }
+                    if self.diffview.is_some() {
+                        self.diff_focus_at(x);
+                        return (DONE, None);
                     }
                     // 固定した見出し行
                     if y < self.pin_h() {
@@ -1236,6 +1261,9 @@ impl App {
             menu::ID_BM_PREV => self.goto_bookmark(false),
             menu::ID_BM_CLEAR => self.clear_bookmarks(),
             menu::ID_BM_LIST => self.list_bookmarks(),
+            menu::ID_DIFF => return self.diff_command(),
+            menu::ID_SPLIT_VIEW => self.toggle_split_view(),
+            id if (menu::ID_DIFF_TAB_BASE..menu::ID_DIFF_TAB_BASE + 64).contains(&id) => self.start_diff((id - menu::ID_DIFF_TAB_BASE) as usize),
             menu::ID_COMPLETE => self.complete_word(),
             id if (menu::ID_MARK_BASE..menu::ID_MARK_BASE + markers::MARK_COLORS as u32).contains(&id) => self.toggle_marker((id - menu::ID_MARK_BASE) as usize),
             menu::ID_MARK_CLEAR => self.clear_markers(),
@@ -1395,6 +1423,9 @@ impl App {
     unsafe fn on_key(&mut self, vk: VIRTUAL_KEY) -> Option<Deferred> {
         let ctrl = unsafe { GetKeyState(VK_CONTROL.0 as i32) } < 0;
         let shift = unsafe { GetKeyState(VK_SHIFT.0 as i32) } < 0;
+        if self.diff_key(vk, ctrl, shift) {
+            return None;
+        }
         // キー割り当て（keys.ini）。入力欄が開いているときはタブの切り替えだけ効く
         if let Some(id) = self.keymap.lookup(ctrl, shift, vk.0) {
             if self.prompt.is_none() || matches!(id, menu::ID_NEXT_TAB | menu::ID_PREV_TAB) {
@@ -1476,6 +1507,9 @@ impl App {
     }
 
     fn on_char(&mut self, ch: u32) {
+        if self.diffview.is_some() {
+            return;
+        }
         // 制御文字（Enter, BS, Tab, Esc, Ctrl+?）は WM_KEYDOWN 側で処理済み
         if ch < 0x20 || ch == 0x7F {
             return;
@@ -2094,6 +2128,14 @@ impl App {
             let pin = self.pin_h();
             if pin > 0.0 {
                 self.draw_pinned_header(&rt, brush, w)?;
+            }
+            // 差分表示：本文の代わりに左右の比較を描く
+            if self.diffview.is_some() {
+                rt.SetTransform(&Matrix3x2::translation(0.0, self.chrome_h()));
+                self.draw_diffview(&rt, brush, w, h - self.status_h())?;
+                self.draw_status(&rt, brush, w, h)?;
+                rt.SetTransform(&Matrix3x2::identity());
+                return rt.EndDraw(None, None);
             }
             // 本文は固定した見出し行の下から
             rt.SetTransform(&Matrix3x2::translation(0.0, self.chrome_h() + pin));

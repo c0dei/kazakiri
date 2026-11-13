@@ -65,6 +65,15 @@ pub(super) struct TabBox {
 }
 
 impl App {
+    /// タブ `i` のファイル（表示中のタブは App 側にある）
+    pub(super) fn tab_doc(&self, i: usize) -> Option<Arc<Document>> {
+        if i == self.active { self.doc.clone() } else { self.tabs.get(i)?.doc.clone() }
+    }
+
+    pub(super) fn tab_title(&self, i: usize) -> String {
+        title_of(self.tab_doc(i).as_ref())
+    }
+
     // ---- 状態の出し入れ ----
 
     /// 表示中の状態を取り出す（`App` 側は空になる）
@@ -107,6 +116,7 @@ impl App {
 
     /// タブを離れる前の後始末：そのファイルに結び付いた処理や表示をやめる
     fn leave_tab(&mut self) {
+        self.diffview = None;
         self.cancel_search();
         self.search = None;
         // GREP はファイルに結び付かないので続ける
