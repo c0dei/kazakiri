@@ -42,6 +42,7 @@ mod dark;
 mod menubar;
 mod find_dialog;
 mod keys_dialog;
+mod lines;
 mod settings_dialog;
 mod status_menu;
 mod wrap;
@@ -1182,6 +1183,7 @@ impl App {
             {
                 return Some(Deferred::ConfirmConvertHere(id));
             }
+            id if self.command_lines(id) => {}
             menu::ID_NEW => self.new_tab(),
             menu::ID_CLOSE_TAB => return self.guarded(Pending::CloseTab),
             menu::ID_NEXT_TAB => self.cycle_tab(true),
@@ -1384,7 +1386,8 @@ impl App {
             VK_RETURN => self.insert_newline(),
             VK_BACK => self.delete_char(false),
             VK_DELETE => self.delete_char(true),
-            VK_TAB if !ctrl => self.type_text("\t", EditKind::Typing),
+            VK_TAB if !ctrl && !self.tab_key(shift) => self.type_text("\t", EditKind::Typing),
+            VK_TAB if !ctrl => {}
             _ => {}
         }
         None
