@@ -189,6 +189,10 @@ struct App {
     ui_format: IDWriteTextFormat,
     ui_line_h: f32,
     ui_char_w: f32,
+    /// 設定した本文のフォントが等幅でない（CSV 表示のあいだは、列がそろうよう等幅フォントに替える）
+    font_prop: bool,
+    /// 等幅フォントに替えている最中
+    font_overridden: bool,
     gfx: Option<Gfx>,
     menus: Menus,
     keymap: keymap::Keymap,
@@ -349,6 +353,7 @@ unsafe fn run_inner() -> std::result::Result<(), (&'static str, windows::core::E
         let fs = settings.font_size;
         let (char_w, line_h) = measure(&dw, &format).unwrap_or((fs * 0.5, (fs * 1.4).ceil()));
         let _ = format.SetIncrementalTabStop(char_w * settings.tab_width as f32);
+        let font_prop = is_proportional(&dw, &format);
 
         let ui_format = create_ui_format(&dw, &settings.ui_font, settings.ui_font_size).map_err(|e| ("CreateTextFormat", e))?;
         let ufs = settings.ui_font_size;
@@ -362,6 +367,8 @@ unsafe fn run_inner() -> std::result::Result<(), (&'static str, windows::core::E
             ui_format,
             ui_line_h,
             ui_char_w,
+            font_prop,
+            font_overridden: false,
             format,
             gfx: None,
             menus,
@@ -539,6 +546,21 @@ unsafe fn create_format_from(dw: &IDWriteFactory, font: &str, size: f32, default
         )?;
         format.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)?;
         Ok(format)
+    }
+}
+
+/// 等幅でないフォントか（細い文字と太い文字の幅が違う）
+unsafe fn is_proportional(dw: &IDWriteFactory, format: &IDWriteTextFormat) -> bool {
+    unsafe {
+        let width = |s: &str| -> f32 {
+            let u: Vec<u16> = s.encode_utf16().collect();
+            let Ok(layout) = dw.CreateTextLayout(&u, format, 10000.0, 1000.0) else { return 0.0 };
+            let mut m = DWRITE_TEXT_METRICS::default();
+            let _ = layout.GetMetrics(&mut m);
+            m.width
+        };
+        let (i, w) = (width("iiiiiiiiii"), width("WWWWWWWWWW"));
+        i > 0.0 && (w - i).abs() > i * 0.1
     }
 }
 
@@ -2200,6 +2222,13 @@ impl App {
 
     unsafe fn paint(&mut self) -> Result<()> {
         unsafe {
+            // CSV 表示のあいだ、等幅でないフォントは、列がそろうよう等幅フォントに替える（CSV でなくなれば戻す）
+            if (self.font_prop && self.csv.is_some()) != self.font_overridden {
+                self.apply_font();
+                if self.font_overridden {
+                    self.message = "CSV 表示のあいだは、列をそろえるため等幅フォントにしています".into();
+                }
+            }
             self.ensure_gfx()?;
             // スクロールバーの出し入れなどでクライアント領域の大きさが変わっても WM_SIZE が来ないことがあるので、毎回合わせる
             if let Some(g) = &self.gfx {
