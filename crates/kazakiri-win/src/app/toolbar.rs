@@ -146,8 +146,12 @@ impl App {
         let hv = self.hover_at(x, y);
         if hv != self.hover {
             self.hover = hv;
-            if let Some((_, tip)) = hv.and_then(|h| self.hover_command(h)).filter(|_| matches!(hv, Some(Hover::Tool(_)))) {
-                self.message = tip.to_string();
+            self.hide_tip();
+            // ツールバーのボタンの上なら、少し待ってから説明を出す
+            if matches!(hv, Some(Hover::Tool(_))) {
+                unsafe {
+                    SetTimer(Some(self.hwnd), TIMER_TIP, 450, None);
+                }
             }
             self.invalidate();
         }
@@ -162,12 +166,54 @@ impl App {
 
     pub(super) fn mouse_left(&mut self) {
         self.tracking_leave = false;
+        self.hide_tip();
         if self.hover.take().is_some() {
             self.invalidate();
         }
     }
 
+    /// 説明（ツールチップ）を消す
+    pub(super) fn hide_tip(&mut self) {
+        unsafe {
+            let _ = KillTimer(Some(self.hwnd), TIMER_TIP);
+        }
+        if self.tip.take().is_some() {
+            self.invalidate();
+        }
+    }
+
+    /// 待ち時間が過ぎても、まだ同じボタンの上なら説明を出す
+    pub(super) fn show_tip(&mut self) {
+        let Some(Hover::Tool(i)) = self.hover else { return };
+        let Some((_, x0, _)) = self.tool_boxes().into_iter().find(|b| b.2 == i) else { return };
+        if let Some((_, _, tip)) = BUTTONS.get(i).copied().flatten() {
+            self.tip = Some((tip.to_string(), x0));
+            self.invalidate();
+        }
+    }
+
     // ---- 描画 ----
+
+    /// 説明（ツールチップ）：ボタンの下に小さな枠で出す。窓の座標で描く
+    pub(super) unsafe fn draw_tip(&self, rt: &ID2D1RenderTarget, brush: &ID2D1SolidColorBrush, w: f32) -> Result<()> {
+        let Some((text, x0)) = &self.tip else { return Ok(()) };
+        let t = self.theme;
+        let units: Vec<u16> = text.encode_utf16().collect();
+        unsafe {
+            let tw = self.ui_text_width(&units)?;
+            let (bw, bh) = (tw + 16.0, self.ui_line_h + 8.0);
+            let x = x0.min((w - bw - 4.0).max(0.0));
+            let y = self.menu_h() + self.tb_h() + 4.0;
+            brush.SetColor(&t.dim);
+            rt.FillRoundedRectangle(&rrect(x, y, x + bw, y + bh, 4.0), brush);
+            brush.SetColor(&t.panel_bg);
+            rt.FillRoundedRectangle(&rrect(x + 1.0, y + 1.0, x + bw - 1.0, y + bh - 1.0, 3.5), brush);
+            brush.SetColor(&t.text);
+            self.draw_ui_str(rt, brush, text, x + 8.0, y + 4.0, x + bw)?;
+        }
+        Ok(())
+    }
+
 
     pub(super) unsafe fn draw_toolbar(&self, rt: &ID2D1RenderTarget, brush: &ID2D1SolidColorBrush, w: f32) -> Result<()> {
         let h = self.tb_h();
