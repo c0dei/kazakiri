@@ -203,7 +203,7 @@ impl App {
             let tw = self.ui_text_width(&units)?;
             let (bw, bh) = (tw + 16.0, self.ui_line_h + 8.0);
             let x = x0.min((w - bw - 4.0).max(0.0));
-            let y = self.menu_h() + self.tb_h() + 4.0;
+            let y = self.tb_h() + 4.0;
             brush.SetColor(&t.dim);
             rt.FillRoundedRectangle(&rrect(x, y, x + bw, y + bh, 4.0), brush);
             brush.SetColor(&t.panel_bg);

@@ -68,7 +68,6 @@ pub(super) unsafe fn run_inner() -> std::result::Result<(), (&'static str, windo
             bm_col0: false,
             hover: None,
             tip: None,
-            menu_closed: None,
             dabbrev: None,
             markers: Vec::new(),
             diffview: None,
@@ -118,8 +117,6 @@ pub(super) unsafe fn run_inner() -> std::result::Result<(), (&'static str, windo
             overwrite: false,
             rect: None,
             multi: None,
-            custom_menu: false,
-            menu_open: None,
             alt_used: false,
             tab_drag: None,
             message: "Ctrl+O: 開く / Ctrl+N: 新規 / ドラッグ&ドロップでも開けます".into(),
@@ -161,7 +158,6 @@ pub(super) unsafe fn run_inner() -> std::result::Result<(), (&'static str, windo
             }
         }
         app.apply_title_theme();
-        app.sync_menu_bar();
         APP.with(|a| *a.borrow_mut() = Some(app));
         DragAcceptFiles(hwnd, true);
         let _ = ShowWindow(hwnd, SW_SHOW);

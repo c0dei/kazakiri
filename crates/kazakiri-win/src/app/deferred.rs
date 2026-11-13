@@ -93,19 +93,6 @@ pub(super) unsafe fn run_deferred(hwnd: HWND, d: Deferred) {
                 with_app(|app| app.start_join(paths, out));
             }
         }
-        Deferred::ShowMenu(i) => {
-            if let Some(Some((menu, x, y))) = with_app(|app| app.bar_popup(i)) {
-                unsafe {
-                    // メニューを閉じるまで戻らない。選んだ項目は WM_COMMAND で届く
-                    let _ = TrackPopupMenu(menu, TPM_LEFTALIGN | TPM_TOPALIGN, x, y, None, hwnd, None);
-                }
-            }
-            with_app(|app| {
-                app.menu_open = None;
-                app.menu_closed = Some((i, Instant::now()));
-                app.invalidate();
-            });
-        }
         Deferred::ConfirmGrepReplace(question) => {
             let text = wide(&question);
             let r = unsafe { MessageBoxW(Some(hwnd), PCWSTR(text.as_ptr()), w!("GREP 置換"), MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) };

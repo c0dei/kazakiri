@@ -63,7 +63,6 @@ mod results;
 mod tabs;
 mod rect;
 mod dark;
-mod menubar;
 mod find_dialog;
 mod bookmarks;
 mod diffview;
@@ -128,8 +127,6 @@ enum Deferred {
     Perform(Pending),
     /// GREP 置換の最終確認（文章）
     ConfirmGrepReplace(String),
-    /// 自前のメニューバーの項目のポップアップを出す
-    ShowMenu(usize),
     /// 検索・置換・GREP のダイアログを開く（タブの番号）
     ShowFind(usize),
     ShowSettings,
@@ -231,8 +228,6 @@ struct App {
     hover: Option<toolbar::Hover>,
     /// 出している説明（ツールチップ）：文字、左の位置（x）
     tip: Option<(String, f32)>,
-    /// 直前に閉じたメニューバーの項目と時刻（同じ項目を押して閉じるときに、すぐ開き直さないため）
-    menu_closed: Option<(usize, Instant)>,
     /// 単語補完の途中（続けて押すと次の候補）
     dabbrev: Option<complete::Dab>,
     markers: Vec<markers::Marker>,
@@ -309,10 +304,6 @@ struct App {
     rect: Option<rect::RectSel>,
     /// マルチカーソル（ほかのカーソル）
     multi: Option<multi::Multi>,
-    /// ダークテーマのとき、自分で描くメニューバーを使っている
-    custom_menu: bool,
-    /// 開いているメニューバーの項目
-    menu_open: Option<usize>,
     /// Alt を矩形選択に使った（離したときにメニューを開かない）
     alt_used: bool,
     /// ドラッグで並べ替え中のタブ（番号, 動かしたか）
@@ -717,10 +708,6 @@ impl App {
                     (None, self.command(id))
                 }
                 WM_SYSCHAR if matches!(char::from_u32(wparam.0 as u32), Some('c' | 'C' | 'r' | 'R')) => (DONE, None),
-                WM_SYSKEYDOWN if self.custom_menu && self.prompt.is_none() && self.bar_mnemonic_key(wparam).is_some() => {
-                    (DONE, self.bar_mnemonic_key(wparam).map(Deferred::ShowMenu))
-                }
-                WM_SYSCHAR if self.custom_menu && self.bar_mnemonic_key(wparam).is_some() => (DONE, None),
                 // Ctrl+Space（単語補完）は文字として入れない
                 WM_CHAR if wparam.0 == 0x20 && GetKeyState(VK_CONTROL.0 as i32) < 0 => (DONE, None),
                 WM_CHAR => {
