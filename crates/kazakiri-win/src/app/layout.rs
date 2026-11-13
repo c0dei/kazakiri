@@ -124,6 +124,11 @@ impl App {
     }
 
     /// ステータスバー（と、あれば機能ボタンの列）の高さ
+    /// タブバーより上の部分（ツールバー＋タブバー）の高さ。メニューバーは標準のものなので、ここには含まれない
+    pub(super) fn chrome_h(&self) -> f32 {
+        self.tb_h() + self.tab_h()
+    }
+
     pub(super) fn status_h(&self) -> f32 {
         self.status_base_h() + self.fkey_h()
     }

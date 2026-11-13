@@ -53,7 +53,6 @@ impl App {
         // ブラシを作り直す
         self.gfx = None;
         self.apply_title_theme();
-        self.sync_menu_bar();
         self.settings.save();
         self.message = format!("ダークテーマ: {}", on_off(dark));
         self.invalidate();
@@ -64,8 +63,8 @@ impl App {
         let v = BOOL::from(self.settings.dark);
         unsafe {
             let _ = DwmSetWindowAttribute(self.hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &v as *const BOOL as *const _, size_of::<BOOL>() as u32);
-            // 標準のメニューバーを使うときは、ダークテーマなら暗く塗る（自前のバーは自分で描くので不要）
-            super::dark::set_bar(self.settings.dark && self.settings.native_menu && self.settings.native_dark, self.theme);
+            // 標準のメニューバーは、ダークテーマなら暗く塗る（非公開メッセージ。dark.rs）
+            super::dark::set_bar(self.settings.dark, self.theme);
             super::dark::apply(self.hwnd, self.settings.dark);
             // Windows 11：タイトルバーを Mica に（DWMWA_SYSTEMBACKDROP_TYPE: 1=なし, 2=Mica）。
             // Windows 10 などでは属性が無く、失敗しても何も起きない
@@ -106,20 +105,6 @@ impl App {
         self.apply_title_theme();
         self.settings.save();
         self.invalidate();
-    }
-
-    pub(super) fn set_native_dark(&mut self, on: bool) {
-        self.settings.native_dark = on;
-        self.apply_title_theme();
-        self.sync_menu_bar();
-        self.settings.save();
-        self.invalidate();
-    }
-
-    pub(super) fn set_native_menu(&mut self, on: bool) {
-        self.settings.native_menu = on;
-        self.sync_menu_bar();
-        self.settings.save();
     }
 
     /// 設定ダイアログの入力欄：フォント名（空なら自動）、大きさ、タブ幅

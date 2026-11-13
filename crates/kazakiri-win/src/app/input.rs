@@ -11,17 +11,6 @@ impl App {
             self.hide_tip();
             return Some(self.command(id));
         }
-        // 自前のメニューバー：項目を押したらポップアップを出す
-        if y < -(self.tab_h() + self.tb_h()) {
-            let item = self.bar_item_at(x);
-            // 開いているメニューの項目をもう一度押した（それで閉じた）ときは、開き直さない
-            if let (Some(i), Some((last, at))) = (item, self.menu_closed.take()) {
-                if i == last && at.elapsed() < Duration::from_millis(500) {
-                    return Some(None);
-                }
-            }
-            return Some(item.map(Deferred::ShowMenu));
-        }
         if y < -self.tab_h() {
             return Some(None);
         }

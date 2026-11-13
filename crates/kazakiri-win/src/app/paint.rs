@@ -70,14 +70,11 @@ impl App {
             rt.Clear(Some(&self.theme.bg));
 
             // メニューバー（ダークテーマのとき）とタブバーを描き、それより下は丸ごと下へずらして描く
-            if self.custom_menu {
-                self.draw_menu_bar(&rt, brush, w)?;
-            }
             if self.tb_h() > 0.0 {
-                rt.SetTransform(&Matrix3x2::translation(0.0, self.menu_h()));
+                rt.SetTransform(&Matrix3x2::identity());
                 self.draw_toolbar(&rt, brush, w)?;
             }
-            rt.SetTransform(&Matrix3x2::translation(0.0, self.menu_h() + self.tb_h()));
+            rt.SetTransform(&Matrix3x2::translation(0.0, self.tb_h()));
             self.draw_tabs(&rt, brush, w)?;
             rt.SetTransform(&Matrix3x2::translation(0.0, self.chrome_h()));
             let pin = self.pin_h();

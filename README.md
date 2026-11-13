@@ -34,7 +34,7 @@ EmEditor の「大きいファイルが速い」体験を、買い切り不要�
 - タブを閉じる・終了する・文字コードを変えて開き直すときに、未保存の変更を確認
 
 ### 表示の設定
-- ダークテーマ（表示メニュー。タイトルバー・スクロールバー・ポップアップメニュー・メニューバーも暗くなる。ダークテーマのメニューバーは、既定では自前で描く。標準のバーを非公開メッセージ WM_UAHDRAWMENU で暗く塗る方式も実験的に用意してある（設定ダイアログの「ダークテーマでも標準のメニューバーを使う」、`settings.ini` の `native_dark_menu = true`。実機で確認でき次第、既定にして、自前のバーはなくす予定）。Alt+F などの操作は同じ）
+- ダークテーマ（表示メニュー。タイトルバー・スクロールバー・ポップアップメニュー・メニューバーも暗くなる。メニューバーは Windows 標準のものを、非公開メッセージ WM_UAHDRAWMENU で暗く塗る）
 - 空白・タブ・改行の表示（Ctrl+Shift+W）：空白は `･`、全角空白は `□`、タブは `>` と桁送り、改行は CRLF が `¶`・LF が `↓`・CR が `←`、ファイルの終わりは `[EOF]`
 - ログレベルの色分け：ERROR / FATAL は赤、WARN は橙、DEBUG / TRACE は灰（単語として現れたものだけ。既定でオン）
 - 構文の色分け（表示 → 構文の色分け。既定でオン）：拡張子から言語を決め、文字列・数値・キーワード・コメント・タグ・キーに色を付ける。対象は JSON・SQL・XML/HTML・INI/設定ファイル・YAML・C 系（js ts java c cpp cs go rs php など）・# 系（py sh rb ps1 など）。1 行ずつ色を付けるので、数 GB のファイルでも見えている行だけのコストで、複数行にわたる文字列やコメントは追わない。CSV モードと、拡張子で言語が決まらないファイル（ログなど）では、ログレベルの色分けのまま
@@ -54,7 +54,7 @@ EmEditor の「大きいファイルが速い」体験を、買い切り不要�
 - 本文のフォントが等幅でない場合（Noto Sans JP など）、CSV/TSV の表示のあいだだけ、列がそろうよう既定の等幅フォント（BIZ UDゴシック → MS ゴシック → Consolas）に自動で替える。CSV でなくなれば元のフォントに戻る
 - フォントは 2 系統：本文（font / font_size）と、画面の部品＝メニュー・タブ・ツールバー・ステータスバー（ui_font / ui_font_size。既定は Yu Gothic UI → Meiryo UI → Segoe UI）。設定ダイアログで別々に変えられる
 - 設定ダイアログ（ファイル → 設定）で、外観・編集・表示の主な項目を画面から変えられる（Mica のオン／オフ、フォント、タブ幅など）
-- 設定は `%APPDATA%\kazakiri\settings.ini` に自動で保存（font, font_size, dark, whitespace, log_colors, tab_width, wrap, grep_backup, ime_inline, syntax, menubar, mica, toolbar, fkeys, ui_font, ui_font_size。テキストエディタで直接編集もできる）
+- 設定は `%APPDATA%\kazakiri\settings.ini` に自動で保存（font, font_size, dark, whitespace, log_colors, tab_width, wrap, grep_backup, ime_inline, syntax, mica, toolbar, fkeys, ui_font, ui_font_size, window。テキストエディタで直接編集もできる）
 
 ![空白の表示とログの色分け（ダークテーマ）](docs/screenshot-whitespace.png)
 
