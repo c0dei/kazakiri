@@ -22,7 +22,7 @@ pub(super) struct BarItem {
 impl App {
     /// 自前のメニューバーの高さ（使っていなければ 0）
     pub(super) fn menu_h(&self) -> f32 {
-        if self.custom_menu { self.line_h + 8.0 } else { 0.0 }
+        if self.custom_menu { self.ui_line_h + 8.0 } else { 0.0 }
     }
 
     /// タブバーより上の部分（メニューバー＋タブバー）の高さ
@@ -45,7 +45,7 @@ impl App {
                 let mnemonic = raw.split_once('&').and_then(|(_, r)| r.chars().next());
                 let label = raw.replace('&', "");
                 let units: Vec<u16> = label.encode_utf16().collect();
-                let w = self.text_width(&units).unwrap_or(units.len() as f32 * self.char_w) + PAD * 2.0;
+                let w = self.ui_text_width(&units).unwrap_or(units.len() as f32 * self.ui_char_w) + PAD * 2.0;
                 out.push(BarItem { label, menu, x0: x, x1: x + w, mnemonic });
                 x += w;
             }
@@ -65,7 +65,7 @@ impl App {
                     rt.FillRoundedRectangle(&rrect(b.x0 + 2.0, 3.0, b.x1 - 2.0, h - 3.0, 4.0), brush);
                 }
                 brush.SetColor(&t.text);
-                self.draw_str(rt, brush, &b.label, b.x0 + PAD, (h - self.line_h) / 2.0, b.x1)?;
+                self.draw_ui_str(rt, brush, &b.label, b.x0 + PAD, (h - self.ui_line_h) / 2.0, b.x1)?;
             }
         }
         Ok(())

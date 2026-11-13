@@ -117,3 +117,28 @@ impl App {
         self.settings.save();
     }
 }
+
+impl App {
+    /// 画面の部品（メニュー・タブ・ツールバー・ステータスバー）のフォントを作り直す
+    pub(super) fn set_ui_font(&mut self, font: &str, size: f32) {
+        let size = size.clamp(settings::MIN_FONT, 40.0);
+        if font == self.settings.ui_font && size == self.settings.ui_font_size {
+            return;
+        }
+        let Ok(format) = (unsafe { create_ui_format(&self.dw, font, size) }) else {
+            self.message = "フォントを作れませんでした".into();
+            return self.invalidate();
+        };
+        let (char_w, line_h) = unsafe { measure(&self.dw, &format) }.unwrap_or((size * 0.5, (size * 1.4).ceil()));
+        self.settings.ui_font = font.to_string();
+        self.settings.ui_font_size = size;
+        self.ui_format = format;
+        self.ui_char_w = char_w;
+        self.ui_line_h = line_h;
+        self.layout_cache.borrow_mut().clear();
+        self.update_scrollbars();
+        self.update_ime_position();
+        self.settings.save();
+        self.invalidate();
+    }
+}

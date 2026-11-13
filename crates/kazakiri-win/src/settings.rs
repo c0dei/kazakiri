@@ -9,6 +9,9 @@ pub struct Settings {
     /// フォント名（空なら BIZ UDゴシック → MS ゴシック → Consolas の順に探す）
     pub font: String,
     pub font_size: f32,
+    /// メニュー・タブ・ツールバー・ステータスバーなど、画面の部品のフォント（空なら Yu Gothic UI → Meiryo UI → Segoe UI）
+    pub ui_font: String,
+    pub ui_font_size: f32,
     pub dark: bool,
     /// 空白・タブ・改行を表示する
     pub whitespace: bool,
@@ -35,7 +38,7 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { font: String::new(), font_size: 14.0, dark: false, whitespace: false, log_colors: true, tab_width: 4, wrap: false, grep_backup: true, ime_inline: true, syntax: true, native_menu: true, mica: true, toolbar: true, fkeys: true }
+        Settings { font: String::new(), font_size: 14.0, ui_font: String::new(), ui_font_size: 13.0, dark: false, whitespace: false, log_colors: true, tab_width: 4, wrap: false, grep_backup: true, ime_inline: true, syntax: true, native_menu: true, mica: true, toolbar: true, fkeys: true }
     }
 }
 
@@ -70,6 +73,12 @@ impl Settings {
                         s.font_size = x.clamp(MIN_FONT, MAX_FONT);
                     }
                 }
+                "ui_font" => s.ui_font = v.to_string(),
+                "ui_font_size" => {
+                    if let Ok(x) = v.parse::<f32>() {
+                        s.ui_font_size = x.clamp(MIN_FONT, 40.0);
+                    }
+                }
                 "dark" => s.dark = flag(v),
                 "whitespace" => s.whitespace = flag(v),
                 "log_colors" => s.log_colors = flag(v),
@@ -96,8 +105,8 @@ impl Settings {
     pub fn to_text(&self) -> String {
         format!(
             "# kazakiri の設定（アプリから変更すると上書きされます）\n\
-             font = {}\nfont_size = {}\ndark = {}\nwhitespace = {}\nlog_colors = {}\ntab_width = {}\nwrap = {}\ngrep_backup = {}\nime_inline = {}\nsyntax = {}\nmenubar = {}\nmica = {}\ntoolbar = {}\nfkeys = {}\n",
-            self.font, self.font_size, self.dark, self.whitespace, self.log_colors, self.tab_width, self.wrap, self.grep_backup, self.ime_inline, self.syntax, if self.native_menu { "native" } else { "custom" }, self.mica, self.toolbar, self.fkeys
+             font = {}\nfont_size = {}\nui_font = {}\nui_font_size = {}\ndark = {}\nwhitespace = {}\nlog_colors = {}\ntab_width = {}\nwrap = {}\ngrep_backup = {}\nime_inline = {}\nsyntax = {}\nmenubar = {}\nmica = {}\ntoolbar = {}\nfkeys = {}\n",
+            self.font, self.font_size, self.ui_font, self.ui_font_size, self.dark, self.whitespace, self.log_colors, self.tab_width, self.wrap, self.grep_backup, self.ime_inline, self.syntax, if self.native_menu { "native" } else { "custom" }, self.mica, self.toolbar, self.fkeys
         )
     }
 
@@ -118,7 +127,7 @@ mod tests {
 
     #[test]
     fn roundtrip_and_defaults() {
-        let s = Settings { font: "Consolas".into(), font_size: 16.5, dark: true, whitespace: true, log_colors: false, tab_width: 8, wrap: true, grep_backup: false, ime_inline: false, syntax: false, native_menu: true, mica: false, toolbar: false, fkeys: false };
+        let s = Settings { font: "Consolas".into(), font_size: 16.5, ui_font: "Meiryo UI".into(), ui_font_size: 12.0, dark: true, whitespace: true, log_colors: false, tab_width: 8, wrap: true, grep_backup: false, ime_inline: false, syntax: false, native_menu: true, mica: false, toolbar: false, fkeys: false };
         assert_eq!(Settings::parse(&s.to_text()), s);
         let broken = Settings::parse("font_size = abc\nunknown = 1\ntab_width = 99\n");
         assert_eq!(broken.font_size, 14.0);

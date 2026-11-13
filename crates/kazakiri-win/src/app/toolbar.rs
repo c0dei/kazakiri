@@ -86,11 +86,11 @@ impl App {
     }
 
     pub(super) fn status_base_h(&self) -> f32 {
-        self.line_h + 6.0
+        self.ui_line_h + 6.0
     }
 
     pub(super) fn fkey_h(&self) -> f32 {
-        if self.settings.fkeys { self.line_h + 8.0 } else { 0.0 }
+        if self.settings.fkeys { self.ui_line_h + 8.0 } else { 0.0 }
     }
 
     /// ボタンの位置。(x0, x1, ボタンの番号)
@@ -213,7 +213,7 @@ impl App {
                 }
                 brush.SetColor(&t.text);
                 rt.PushAxisAlignedClip(&rect(x0 + 2.0, top, x0 + cell - 2.0, top + h), D2D1_ANTIALIAS_MODE_ALIASED);
-                self.draw_str(rt, brush, label, x0 + 8.0, top + 4.0, x0 + cell - 4.0)?;
+                self.draw_ui_str(rt, brush, label, x0 + 8.0, top + 4.0, x0 + cell - 4.0)?;
                 rt.PopAxisAlignedClip();
             }
         }
