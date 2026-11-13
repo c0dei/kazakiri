@@ -12,7 +12,7 @@ use super::*;
 const REGION_MAX: u64 = 64 << 20;
 
 /// 「変換」メニューの項目の変換（ID は ID_CONV_BASE から、menu::CONV_NAMES と同じ並びで）
-const CONVS: [Conv; 10] = [
+const CONVS: [Conv; 12] = [
     Conv::Upper,
     Conv::Lower,
     Conv::ZenToHanAscii,
@@ -23,6 +23,8 @@ const CONVS: [Conv; 10] = [
     Conv::KataToHira,
     Conv::TabToSpace(0),
     Conv::SpaceToTab(0),
+    Conv::JsonPretty(2),
+    Conv::JsonMinify,
 ];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -246,7 +248,10 @@ impl App {
                     c => c,
                 };
                 let label = name.split('(').next().unwrap_or(name).to_string() + "を実行しました";
-                self.transform(&label, Scope::SelOrAll, After::Auto, &move |t, _| textops::convert(t, conv));
+                self.transform(&label, Scope::SelOrAll, After::Auto, &move |t, e| {
+                    let r = textops::convert(t, conv);
+                    if matches!(conv, Conv::JsonPretty(_)) && e != "\n" { r.replace('\n', e) } else { r }
+                });
             }
             _ => return false,
         }

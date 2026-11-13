@@ -266,6 +266,7 @@ impl App {
 
     pub(super) fn paste(&mut self) {
         let Some(text) = clipboard_text_full() else { return };
+        clipboard::remember(&text);
         // 改行をファイルの改行コードにそろえる
         let unified = text.replace("\r\n", "\n").replace('\r', "\n");
         let nl = self.newline_str();
