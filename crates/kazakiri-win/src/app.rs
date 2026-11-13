@@ -69,6 +69,8 @@ const COPY_LIMIT: u64 = 256 << 20;
 const TIMER_INDEX: usize = 1;
 const TIMER_SEARCH: usize = 2;
 const TIMER_FOLLOW: usize = 3;
+/// ツールバーのボタンの上にマウスを置いてから、説明（ツールチップ）を出すまでの待ち
+const TIMER_TIP: usize = 4;
 /// 長い行の横スクロールで取り出す窓の大きさの上限（バイト）。描画の上限（8192 UTF-16 単位）に収まる大きさ
 const LONG_LINE_WINDOW: usize = 8000;
 /// 検索スレッドからの完了通知
@@ -197,6 +199,8 @@ struct App {
     bm_col0: bool,
     /// ツールバー・機能ボタンの上にあるマウス
     hover: Option<toolbar::Hover>,
+    /// 出している説明（ツールチップ）：文字、左の位置（x）
+    tip: Option<(String, f32)>,
     /// 直前に閉じたメニューバーの項目と時刻（同じ項目を押して閉じるときに、すぐ開き直さないため）
     menu_closed: Option<(usize, Instant)>,
     /// 単語補完の途中（続けて押すと次の候補）
@@ -366,6 +370,7 @@ unsafe fn run_inner() -> std::result::Result<(), (&'static str, windows::core::E
             bm_lines: 0,
             bm_col0: false,
             hover: None,
+            tip: None,
             menu_closed: None,
             dabbrev: None,
             markers: Vec::new(),
@@ -862,6 +867,11 @@ impl App {
                     }
                     self.update_scrollbars();
                     self.invalidate();
+                    (DONE, None)
+                }
+                WM_TIMER if wparam.0 == TIMER_TIP => {
+                    let _ = KillTimer(Some(self.hwnd), TIMER_TIP);
+                    self.show_tip();
                     (DONE, None)
                 }
                 WM_TIMER if wparam.0 == TIMER_FOLLOW => {
@@ -1477,6 +1487,7 @@ impl App {
         // ツールバー・機能ボタン
         if let Some(id) = self.hover_at(x, y).and_then(|h| self.hover_command(h)).map(|(id, _)| id) {
             self.hover = None;
+            self.hide_tip();
             return Some(self.command(id));
         }
         // 自前のメニューバー：項目を押したらポップアップを出す
@@ -2342,6 +2353,7 @@ impl App {
             self.draw_panel(&rt, brush, w, text_h + pin)?;
             self.draw_status(&rt, brush, w, h)?;
             rt.SetTransform(&Matrix3x2::identity());
+            self.draw_tip(&rt, brush, w)?;
             rt.EndDraw(None, None)
         }
     }
