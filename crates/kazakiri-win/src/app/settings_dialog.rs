@@ -37,6 +37,8 @@ const ID_TAB: i32 = 212;
 const ID_WS: i32 = 220;
 const ID_LOG: i32 = 221;
 const ID_SYN: i32 = 222;
+const ID_TOOLBAR: i32 = 223;
+const ID_FKEYS: i32 = 224;
 const ID_BACKUP: i32 = 230;
 const ID_KEYS: i32 = 240;
 const ID_CLOSE: i32 = 241;
@@ -49,6 +51,8 @@ const CHECKS: &[(i32, &str, u32)] = &[
     (ID_WS, "空白・タブ・改行を表示(&S)", menu::ID_WHITESPACE),
     (ID_LOG, "ログの ERROR / WARN などに色を付ける(&L)", menu::ID_LOG_COLORS),
     (ID_SYN, "構文の色分け（JSON・SQL・XML など）(&X)", menu::ID_SYNTAX),
+    (ID_TOOLBAR, "ツールバーを表示(&B)", menu::ID_TOOLBAR),
+    (ID_FKEYS, "機能ボタンの列を表示（ステータスバーの上）(&U)", menu::ID_FKEYS),
     (ID_BACKUP, "GREP 置換の前にバックアップ (.bak) を作る(&B)", menu::ID_GREP_BACKUP),
 ];
 
@@ -94,6 +98,8 @@ fn sync() {
     set_checked(ID_WS, s.whitespace);
     set_checked(ID_LOG, s.log_colors);
     set_checked(ID_SYN, s.syntax);
+    set_checked(ID_TOOLBAR, s.toolbar);
+    set_checked(ID_FKEYS, s.fkeys);
     set_checked(ID_BACKUP, s.grep_backup);
     // 編集中の欄は触らない
     let focus = unsafe { GetFocus() };
@@ -289,7 +295,7 @@ unsafe fn create(owner: HWND) {
             all.push((id, hw));
         };
         // 見出し（ID は 1 から）
-        for (i, (text, y)) in [("外観", 10), ("編集", 176), ("表示", 288), ("検索・GREP", 394)].iter().enumerate() {
+        for (i, (text, y)) in [("外観", 10), ("編集", 176), ("表示", 288), ("検索・GREP", 446)].iter().enumerate() {
             put(1 + i as i32, w!("STATIC"), text, 0, 0, 16, *y, 200, 18);
         }
         put(ID_DARK, w!("BUTTON"), CHECKS[0].1, check, 0, 28, 32, 420, 22);
@@ -307,18 +313,20 @@ unsafe fn create(owner: HWND) {
         put(ID_WS, w!("BUTTON"), CHECKS[3].1, check, 0, 28, 310, 420, 22);
         put(ID_LOG, w!("BUTTON"), CHECKS[4].1, check, 0, 28, 336, 420, 22);
         put(ID_SYN, w!("BUTTON"), CHECKS[5].1, check, 0, 28, 362, 420, 22);
-        put(ID_BACKUP, w!("BUTTON"), CHECKS[6].1, check, 0, 28, 416, 420, 22);
-        put(ID_KEYS, w!("BUTTON"), "キー割り当て...(&K)", push, 0, 16, 454, 200, 28);
-        put(ID_CLOSE, w!("BUTTON"), "閉じる", BS_DEFPUSHBUTTON as u32 | WS_TABSTOP.0, 0, 366, 454, 90, 28);
+        put(ID_TOOLBAR, w!("BUTTON"), CHECKS[6].1, check, 0, 28, 388, 420, 22);
+        put(ID_FKEYS, w!("BUTTON"), CHECKS[7].1, check, 0, 28, 414, 420, 22);
+        put(ID_BACKUP, w!("BUTTON"), CHECKS[8].1, check, 0, 28, 468, 420, 22);
+        put(ID_KEYS, w!("BUTTON"), "キー割り当て...(&K)", push, 0, 16, 506, 200, 28);
+        put(ID_CLOSE, w!("BUTTON"), "閉じる", BS_DEFPUSHBUTTON as u32 | WS_TABSTOP.0, 0, 366, 506, 90, 28);
         let (bg, edit_bg) = (CreateSolidBrush(rgb_ref(&super::theme::DARK.gutter_bg)), CreateSolidBrush(rgb_ref(&super::theme::DARK.bg)));
         BG_BRUSH.store(bg.0 as isize, Ordering::Relaxed);
         EDIT_BRUSH.store(edit_bg.0 as isize, Ordering::Relaxed);
         CTRLS.with(|c| *c.borrow_mut() = Some(Ctrls { all }));
         SET_DLG.store(dlg.0 as isize, Ordering::Relaxed);
-        // クライアント領域を 472 × 496 に
+        // クライアント領域を 472 × 548 に
         let style = WINDOW_STYLE(GetWindowLongW(dlg, GWL_STYLE) as u32);
         let p = |v: i32| (v as f32 * scale).round() as i32;
-        let mut rc = RECT { left: 0, top: 0, right: p(472), bottom: p(496) };
+        let mut rc = RECT { left: 0, top: 0, right: p(472), bottom: p(548) };
         let _ = AdjustWindowRectExForDpi(&mut rc, style, false, WINDOW_EX_STYLE(0), dpi);
         let _ = SetWindowPos(dlg, None, 0, 0, rc.right - rc.left, rc.bottom - rc.top, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
     }
