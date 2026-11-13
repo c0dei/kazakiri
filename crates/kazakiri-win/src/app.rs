@@ -528,7 +528,7 @@ impl App {
                     let forced = self.doc.as_ref().map(|d| d.forced_encoding());
                     self.menus.refresh(self.opts.case_sensitive, self.opts.regex, self.follow, forced, &self.recent);
                     self.menus.refresh_clips(&clipboard::history());
-                    self.menus.refresh_view(self.csv.as_ref().map(|v| (v.delim, v.header)), &self.settings);
+                    self.menus.refresh_view(self.csv.as_ref().map(|v| (v.delim, v.header)), self.is_split_view(), &self.settings);
                     (DONE, None)
                 }
                 WM_COMMAND => (DONE, self.command(loword(wparam.0))),

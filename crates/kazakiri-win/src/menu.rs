@@ -360,12 +360,13 @@ pub unsafe fn build(km: &Keymap) -> Result<Menus> {
 
 impl Menus {
     /// 表示メニューのチェック状態（`csv` は CSV モードのときの (区切り, 見出しあり)）
-    pub unsafe fn refresh_view(&self, csv: Option<(char, bool)>, s: &crate::settings::Settings) {
+    pub unsafe fn refresh_view(&self, csv: Option<(char, bool)>, split: bool, s: &crate::settings::Settings) {
         unsafe {
             let check = |on: bool| if on { MF_CHECKED.0 } else { MF_UNCHECKED.0 };
             CheckMenuItem(self.view, ID_WHITESPACE, check(s.whitespace));
             CheckMenuItem(self.view, ID_LOG_COLORS, check(s.log_colors));
             CheckMenuItem(self.view, ID_SYNTAX, check(s.syntax));
+            CheckMenuItem(self.view, ID_SPLIT_VIEW, check(split));
             CheckMenuItem(self.view, ID_TOOLBAR, check(s.toolbar));
             CheckMenuItem(self.view, ID_FKEYS, check(s.fkeys));
             CheckMenuItem(self.view, ID_WRAP, check(s.wrap));
