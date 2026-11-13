@@ -50,6 +50,11 @@ pub const CONV_NAMES: [&str; 10] = [
     "行頭の空白 → タブ(&T)",
 ];
 /// 「変換」メニューの項目（CONV_NAMES の並びと対応）
+pub const ID_BM_TOGGLE: u32 = 840;
+pub const ID_BM_NEXT: u32 = 841;
+pub const ID_BM_PREV: u32 = 842;
+pub const ID_BM_CLEAR: u32 = 843;
+pub const ID_BM_LIST: u32 = 844;
 pub const ID_CONV_BASE: u32 = 830;
 pub const ID_COPY: u32 = 200;
 pub const ID_SELECT_ALL: u32 = 201;
@@ -255,6 +260,13 @@ pub unsafe fn build(km: &Keymap) -> Result<Menus> {
         item(km, search, ID_REGEX, "正規表現(&R)\tAlt+R")?;
         sep(search)?;
         item(km, search, ID_GOTO, "行へ移動(&G)...\tCtrl+G")?;
+        let bm = CreatePopupMenu()?;
+        item(km, bm, ID_BM_TOGGLE, "設定／解除(&T)\tCtrl+F2")?;
+        item(km, bm, ID_BM_NEXT, "次のブックマーク(&N)\tF2")?;
+        item(km, bm, ID_BM_PREV, "前のブックマーク(&P)\tShift+F2")?;
+        item(km, bm, ID_BM_CLEAR, "すべて解除(&C)\tCtrl+Shift+F2")?;
+        item(km, bm, ID_BM_LIST, "一覧(&L)")?;
+        popup(search, bm, "ブックマーク(&M)")?;
         popup(bar, search, "検索(&S)")?;
 
         let view = CreatePopupMenu()?;

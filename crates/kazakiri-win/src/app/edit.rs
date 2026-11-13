@@ -115,6 +115,11 @@ impl App {
     /// エディタを操作する。表示用の Document の参照をいったん手放すので、
     /// 編集はピース列を複製せずにその場で行える
     pub(super) fn with_editor<R>(&mut self, f: impl FnOnce(&mut Editor) -> R) -> Option<R> {
+        // ブックマークをずらす目安：編集が行頭から始まったか
+        if !self.bookmarks.is_empty() {
+            let at = self.sel.map_or(0, |(a, b)| a.min(b));
+            self.bm_col0 = self.doc.as_ref().and_then(|d| d.line_of_offset(at).and_then(|l| d.line_range(l))).is_some_and(|(s, _)| s == at);
+        }
         self.doc = None;
         let r = self.editor.as_mut().map(f);
         self.doc = self.editor.as_ref().map(|e| e.doc().clone());
@@ -124,6 +129,7 @@ impl App {
     pub(super) fn after_edit(&mut self) {
         let Some(ed) = &self.editor else { return };
         self.doc = Some(ed.doc().clone());
+        self.adjust_bookmarks();
         self.hit = None;
         // ファイル内の検索結果は位置がずれるので閉じる（GREP の結果は残す）
         if matches!(self.results.as_ref().map(|r| &r.kind), Some(super::results::ResultKind::InDoc { .. })) {
