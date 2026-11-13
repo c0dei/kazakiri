@@ -56,6 +56,7 @@ pub(super) unsafe fn run_inner() -> std::result::Result<(), (&'static str, windo
             ui_format,
             ui_line_h,
             ui_char_w,
+            ui_width_cache: RefCell::new(HashMap::new()),
             font_prop,
             font_overridden: false,
             format,

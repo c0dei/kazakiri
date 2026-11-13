@@ -154,6 +154,9 @@ pub struct Menus {
     pub encoding: HMENU,
     pub recent: HMENU,
     pub view: HMENU,
+    pub csv: HMENU,
+    /// 検索 → GREP のサブメニュー
+    pub grep: HMENU,
     /// 編集 → クリップボード履歴
     pub clips: HMENU,
 }
@@ -270,19 +273,26 @@ pub unsafe fn build(km: &Keymap) -> Result<Menus> {
         item(km, search, ID_FIND_ALL, "すべて検索して一覧(&L)\t検索欄で Alt+Enter")?;
         item(km, search, ID_REPLACE, "置換(&H)...\tCtrl+H")?;
         sep(search)?;
-        item(km, search, ID_GREP, "フォルダ内を検索 (GREP)(&G)...\tCtrl+Shift+F")?;
-        item(km, search, ID_GREP_REPLACE, "GREP の結果を置換(&E)...")?;
-        item(km, search, ID_GREP_BACKUP, "GREP 置換の前にバックアップ (.bak) を作る(&B)")?;
-        item(km, search, ID_NEXT_RESULT, "次の結果(&X)\tF8")?;
-        item(km, search, ID_PREV_RESULT, "前の結果(&V)\tShift+F8")?;
-        item(km, search, ID_RESULTS_TAB, "結果の一覧を新しいタブに出す(&T)")?;
-        item(km, search, ID_RESULTS_SAVE, "結果の一覧をファイルに保存(&Z)...")?;
-        item(km, search, ID_CLOSE_RESULTS, "結果一覧を閉じる\tEsc")?;
-        sep(search)?;
         item(km, search, ID_CASE, "大文字と小文字を区別(&C)\tAlt+C")?;
         item(km, search, ID_REGEX, "正規表現(&R)\tAlt+R")?;
         sep(search)?;
-        item(km, search, ID_GOTO, "行へ移動(&G)...\tCtrl+G")?;
+        // フォルダ内を検索（GREP）
+        let grep = CreatePopupMenu()?;
+        item(km, grep, ID_GREP, "フォルダ内を検索(&G)...\tCtrl+Shift+F")?;
+        item(km, grep, ID_GREP_REPLACE, "結果を置換(&R)...")?;
+        item(km, grep, ID_GREP_BACKUP, "置換の前にバックアップ (.bak) を作る(&B)")?;
+        popup(search, grep, "GREP（フォルダ内を検索）(&E)")?;
+        // 検索結果の一覧
+        let results = CreatePopupMenu()?;
+        item(km, results, ID_NEXT_RESULT, "次の結果(&N)\tF8")?;
+        item(km, results, ID_PREV_RESULT, "前の結果(&P)\tShift+F8")?;
+        sep(results)?;
+        item(km, results, ID_RESULTS_TAB, "新しいタブに出す(&T)")?;
+        item(km, results, ID_RESULTS_SAVE, "ファイルに保存(&S)...")?;
+        item(km, results, ID_CLOSE_RESULTS, "閉じる(&C)\tEsc")?;
+        popup(search, results, "検索結果(&X)")?;
+        sep(search)?;
+        item(km, search, ID_GOTO, "行へ移動(&J)...\tCtrl+G")?;
         let bm = CreatePopupMenu()?;
         item(km, bm, ID_BM_TOGGLE, "設定／解除(&T)\tCtrl+F2")?;
         item(km, bm, ID_BM_NEXT, "次のブックマーク(&N)\tF2")?;
@@ -297,29 +307,34 @@ pub unsafe fn build(km: &Keymap) -> Result<Menus> {
         sep(mk)?;
         item(km, mk, ID_MARK_CLEAR, "マークをすべて外す(&C)")?;
         popup(search, mk, "カラーマーカー(&K)")?;
+        sep(search)?;
         item(km, search, ID_DIFF, "他のタブと比較（差分表示）(&D)")?;
         popup(bar, search, "検索(&S)")?;
 
-        let view = CreatePopupMenu()?;
-        item(km, view, ID_CSV, "CSV/TSV モード(&C)\tCtrl+Shift+C")?;
-        sep(view)?;
+        // CSV / TSV
+        let csv = CreatePopupMenu()?;
+        item(km, csv, ID_CSV, "CSV/TSV を表として表示(&C)\tCtrl+Shift+C")?;
+        item(km, csv, ID_CSV_HEADER, "1 行目は見出し(&H)")?;
+        sep(csv)?;
         for (i, (name, _)) in DELIMS.iter().enumerate() {
-            item(km, view, ID_DELIM_BASE + i as u32, &format!("区切り: {name}"))?;
+            item(km, csv, ID_DELIM_BASE + i as u32, &format!("区切り: {name}"))?;
         }
-        item(km, view, ID_CSV_HEADER, "1 行目は見出し(&H)")?;
-        sep(view)?;
-        item(km, view, ID_SORT_ASC, "カーソルの列で昇順に並べ替え(&A)")?;
-        item(km, view, ID_SORT_DESC, "カーソルの列で降順に並べ替え(&D)")?;
-        item(km, view, ID_FILTER, "列フィルタ(&F)...")?;
-        sep(view)?;
+        sep(csv)?;
+        item(km, csv, ID_SORT_ASC, "カーソルの列で昇順に並べ替え(&A)")?;
+        item(km, csv, ID_SORT_DESC, "カーソルの列で降順に並べ替え(&D)")?;
+        item(km, csv, ID_FILTER, "列フィルタ(&F)...")?;
+        popup(bar, csv, "CSV(&D)")?;
+
+        let view = CreatePopupMenu()?;
         item(km, view, ID_WHITESPACE, "空白・タブ・改行を表示(&W)\tCtrl+Shift+W")?;
         item(km, view, ID_WRAP, "折り返して表示(&R)")?;
-        item(km, view, ID_IME_INLINE, "IME の変換中の文字をエディタ内に表示(&M)")?;
         item(km, view, ID_SYNTAX, "構文の色分け（JSON・SQL・XML など）(&Y)")?;
+        item(km, view, ID_LOG_COLORS, "ログレベルの色分け(&L)")?;
+        item(km, view, ID_IME_INLINE, "IME の変換中の文字をエディタ内に表示(&M)")?;
+        sep(view)?;
         item(km, view, ID_SPLIT_VIEW, "分割表示（同じファイルを左右に並べて参照）(&P)")?;
         item(km, view, ID_TOOLBAR, "ツールバーを表示(&B)")?;
         item(km, view, ID_FKEYS, "機能ボタンの列を表示(&U)")?;
-        item(km, view, ID_LOG_COLORS, "ログレベルの色分け(&L)")?;
         item(km, view, ID_DARK, "ダークテーマ(&K)")?;
         sep(view)?;
         item(km, view, ID_ZOOM_IN, "拡大(&I)\tCtrl++")?;
@@ -327,7 +342,7 @@ pub unsafe fn build(km: &Keymap) -> Result<Menus> {
         item(km, view, ID_ZOOM_RESET, "標準の大きさ(&0)\tCtrl+0")?;
         sep(view)?;
         item(km, view, ID_NEXT_TAB, "次のタブ(&N)\tCtrl+Tab")?;
-        item(km, view, ID_PREV_TAB, "前のタブ(&P)\tCtrl+Shift+Tab")?;
+        item(km, view, ID_PREV_TAB, "前のタブ(&T)\tCtrl+Shift+Tab")?;
         popup(bar, view, "表示(&V)")?;
 
         let encoding = CreatePopupMenu()?;
@@ -339,7 +354,7 @@ pub unsafe fn build(km: &Keymap) -> Result<Menus> {
         }
         popup(bar, encoding, "エンコード(&N)")?;
 
-        Ok(Menus { bar, file, search, encoding, recent, view, clips })
+        Ok(Menus { bar, file, search, encoding, recent, view, csv, grep, clips })
     }
 }
 
@@ -355,17 +370,17 @@ impl Menus {
             CheckMenuItem(self.view, ID_FKEYS, check(s.fkeys));
             CheckMenuItem(self.view, ID_WRAP, check(s.wrap));
             CheckMenuItem(self.view, ID_IME_INLINE, check(s.ime_inline));
-            CheckMenuItem(self.search, ID_GREP_BACKUP, check(s.grep_backup));
+            CheckMenuItem(self.grep, ID_GREP_BACKUP, check(s.grep_backup));
             CheckMenuItem(self.view, ID_DARK, check(s.dark));
-            CheckMenuItem(self.view, ID_CSV, check(csv.is_some()));
+            CheckMenuItem(self.csv, ID_CSV, check(csv.is_some()));
             for (i, (_, d)) in DELIMS.iter().enumerate() {
                 let id = ID_DELIM_BASE + i as u32;
-                CheckMenuItem(self.view, id, check(csv.is_some_and(|(cd, _)| cd == *d)));
+                CheckMenuItem(self.csv, id, check(csv.is_some_and(|(cd, _)| cd == *d)));
             }
-            CheckMenuItem(self.view, ID_CSV_HEADER, check(csv.is_some_and(|(_, h)| h)));
+            CheckMenuItem(self.csv, ID_CSV_HEADER, check(csv.is_some_and(|(_, h)| h)));
             let en = if csv.is_some() { MF_ENABLED } else { MF_GRAYED };
             for id in [ID_CSV_HEADER, ID_SORT_ASC, ID_SORT_DESC] {
-                let _ = EnableMenuItem(self.view, id, en);
+                let _ = EnableMenuItem(self.csv, id, en);
             }
         }
     }
