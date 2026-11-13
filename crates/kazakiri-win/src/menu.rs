@@ -66,6 +66,8 @@ pub const TAB_WIDTHS: [usize; 4] = [2, 3, 4, 8];
 pub const ID_CLIP_BASE: u32 = 900;
 pub const CLIP_MAX: u32 = 20;
 pub const ID_COMPLETE: u32 = 849;
+pub const ID_MARK_BASE: u32 = 860;
+pub const ID_MARK_CLEAR: u32 = 866;
 pub const ID_CONV_BASE: u32 = 830;
 pub const ID_COPY: u32 = 200;
 pub const ID_SELECT_ALL: u32 = 201;
@@ -285,6 +287,13 @@ pub unsafe fn build(km: &Keymap) -> Result<Menus> {
         item(km, bm, ID_BM_CLEAR, "すべて解除(&C)\tCtrl+Shift+F2")?;
         item(km, bm, ID_BM_LIST, "一覧(&L)")?;
         popup(search, bm, "ブックマーク(&M)")?;
+        let mk = CreatePopupMenu()?;
+        for (i, name) in ["黄", "緑", "青", "ピンク", "オレンジ", "紫"].iter().enumerate() {
+            item(km, mk, ID_MARK_BASE + i as u32, &format!("選んだ文字列を{name}でマーク(&{})", i + 1))?;
+        }
+        sep(mk)?;
+        item(km, mk, ID_MARK_CLEAR, "マークをすべて外す(&C)")?;
+        popup(search, mk, "カラーマーカー(&K)")?;
         popup(bar, search, "検索(&S)")?;
 
         let view = CreatePopupMenu()?;
