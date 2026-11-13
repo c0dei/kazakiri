@@ -378,17 +378,27 @@ impl App {
         }
     }
 
-    /// 画面の部品用のフォントでの文字列の幅
+    /// 画面の部品用のフォントでの文字列の幅（同じ文字列は覚えておく。メニュー・タブ・ステータスバーを描くたびに測り直さない）
     pub(super) unsafe fn ui_text_width(&self, units: &[u16]) -> Result<f32> {
         if units.is_empty() {
             return Ok(0.0);
         }
-        unsafe {
+        if let Some(&w) = self.ui_width_cache.borrow().get(units) {
+            return Ok(w);
+        }
+        let w = unsafe {
             let layout = self.dw.CreateTextLayout(units, &self.ui_format, 1.0e6, self.ui_line_h)?;
             let mut m = DWRITE_TEXT_METRICS::default();
             layout.GetMetrics(&mut m)?;
-            Ok(m.widthIncludingTrailingWhitespace)
+            m.widthIncludingTrailingWhitespace
+        };
+        let mut cache = self.ui_width_cache.borrow_mut();
+        // 増えすぎないよう、一定数を超えたら捨てる（ステータスバーの数字などで少しずつ増えるため）
+        if cache.len() > 2048 {
+            cache.clear();
         }
+        cache.insert(units.to_vec(), w);
+        Ok(w)
     }
 
     /// 画面の部品用のフォントで文字列を描く

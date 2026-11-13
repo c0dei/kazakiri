@@ -213,6 +213,8 @@ struct App {
     ui_format: IDWriteTextFormat,
     ui_line_h: f32,
     ui_char_w: f32,
+    /// 画面の部品用フォントでの文字列の幅（フォントを変えたら捨てる）
+    ui_width_cache: RefCell<HashMap<Vec<u16>, f32>>,
     /// 設定した本文のフォントが等幅でない（CSV 表示のあいだは、列がそろうよう等幅フォントに替える）
     font_prop: bool,
     /// 等幅フォントに替えている最中

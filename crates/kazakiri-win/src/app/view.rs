@@ -152,6 +152,7 @@ impl App {
         self.settings.ui_font = font.to_string();
         self.settings.ui_font_size = size;
         self.ui_format = format;
+        self.ui_width_cache.borrow_mut().clear();
         self.ui_char_w = char_w;
         self.ui_line_h = line_h;
         self.layout_cache.borrow_mut().clear();
