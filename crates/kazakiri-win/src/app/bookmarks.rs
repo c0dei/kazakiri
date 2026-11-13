@@ -101,3 +101,109 @@ impl App {
         self.bookmarks = moved;
     }
 }
+
+impl App {
+    /// ブックマークした行の範囲（行の先頭から、改行を含めて次の行の先頭まで）
+    fn bookmark_ranges(&self, doc: &Document) -> Vec<(u64, u64)> {
+        self.bookmarks
+            .iter()
+            .filter_map(|&l| {
+                let (s, _) = doc.line_range(l)?;
+                let e = doc.line_range(l + 1).map_or(doc.len(), |(ns, _)| ns);
+                Some((s, e))
+            })
+            .collect()
+    }
+
+    /// ブックマークした行のコピー（`delete` なら、そのあと削除。`cut` はコピーも兼ねる）
+    pub(super) fn bookmark_lines(&mut self, copy: bool, delete: bool) {
+        let Some(doc) = self.doc.clone() else { return };
+        let ranges = self.bookmark_ranges(&doc);
+        if ranges.is_empty() {
+            self.message = "ブックマークがありません（Ctrl+F2 で設定）".into();
+            return self.invalidate();
+        }
+        let total: u64 = ranges.iter().map(|(a, b)| b - a).sum();
+        if (copy || !delete) && total > COPY_LIMIT {
+            self.message = format!("ブックマークした行が大きすぎます（{}）", human_size(total));
+            return self.invalidate();
+        }
+        if copy || !delete {
+            let mut text = String::new();
+            for &(a, b) in &ranges {
+                text.push_str(&doc.decode(&doc.read(a, b)));
+            }
+            if !text.ends_with(['\n', '\r']) {
+                text.push_str(self.newline_str());
+            }
+            if let Err(e) = clipboard::set_text(self.hwnd, &text) {
+                self.message = format!("コピーに失敗しました: {e}");
+                return self.invalidate();
+            }
+        }
+        if !delete {
+            self.message = format!("ブックマークした {} 行をコピーしました", group(ranges.len() as u64));
+            return self.invalidate();
+        }
+        if !self.check_editable() {
+            return;
+        }
+        let sel = self.sel.unwrap_or((0, 0));
+        let n = ranges.len();
+        drop(doc);
+        match self.with_editor(|ed| ed.replace_all(&ranges, &[Vec::new()], sel)).unwrap() {
+            Ok(_) => {
+                self.bookmarks.clear();
+                let at = ranges[0].0;
+                self.sel = Some((at, at));
+                self.goal_x = None;
+                self.message = format!("ブックマークした {} 行を{}しました", group(n as u64), if copy { "切り取り" } else { "削除" });
+                self.after_edit();
+            }
+            Err(e) => {
+                self.message = e.to_string();
+                self.invalidate();
+            }
+        }
+    }
+
+    /// ブックマークした行だけを、新しいタブに出す
+    pub(super) fn extract_bookmarks(&mut self) {
+        let Some(doc) = self.doc.clone() else { return };
+        let ranges = self.bookmark_ranges(&doc);
+        if ranges.is_empty() {
+            self.message = "ブックマークがありません（Ctrl+F2 で設定）".into();
+            return self.invalidate();
+        }
+        let mut text = String::new();
+        for &(a, b) in &ranges {
+            text.push_str(&doc.decode(&doc.read(a, b)));
+            if !text.ends_with(['\n', '\r']) {
+                text.push_str(self.newline_str());
+            }
+        }
+        let n = ranges.len();
+        self.new_tab();
+        self.type_text(&text, EditKind::Other);
+        self.sel = Some((0, 0));
+        self.top = 0;
+        self.message = format!("ブックマークした {} 行を新しいタブに出しました", group(n as u64));
+        self.invalidate();
+    }
+
+    /// ブックマークの有無を、すべての行で反転する
+    pub(super) fn invert_bookmarks(&mut self) {
+        let Some(doc) = self.doc.as_ref() else { return };
+        let (n, exact) = doc.line_count();
+        if !exact || n > 5_000_000 {
+            self.message = "行数が多い（または索引の作成中）ため、反転できません（500 万行まで）".into();
+            return self.invalidate();
+        }
+        self.bm_lines = n;
+        // 最後の空行（ファイル末尾の改行のあと）には付けない
+        let last = if doc.line_range(n - 1).is_some_and(|(s, e)| s == e) { n - 1 } else { n };
+        self.bookmarks = (0..last).filter(|l| !self.bookmarks.contains(l)).collect();
+        self.message = format!("ブックマークを反転しました（{} 件）", group(self.bookmarks.len() as u64));
+        self.invalidate();
+    }
+}

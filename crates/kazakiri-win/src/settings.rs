@@ -30,7 +30,11 @@ pub struct Settings {
     /// Windows 11 の Mica（タイトルバーの半透明）。
     pub mica: bool,
     /// ツールバーと機能ボタンの列
+    /// 通知領域（タスクトレイ）にアイコンを出す（クリックで新規作成・開くなどのメニュー）
+    pub tray: bool,
     pub toolbar: bool,
+    /// ツールバーの下の、CSV の区切りなどのボタンの行
+    pub modebar: bool,
     pub fkeys: bool,
     /// 前回のウィンドウの位置と大きさ（x, y, 幅, 高さ, 最大化）。終了時に保存して、次の起動で戻す
     pub window: Option<(i32, i32, i32, i32, bool)>,
@@ -38,7 +42,7 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { font: String::new(), font_size: 14.0, ui_font: String::new(), ui_font_size: 13.0, dark: false, whitespace: false, log_colors: true, tab_width: 4, wrap: false, grep_backup: true, ime_inline: true, syntax: true, mica: true, toolbar: true, fkeys: true, window: None }
+        Settings { font: String::new(), font_size: 14.0, ui_font: String::new(), ui_font_size: 13.0, dark: false, whitespace: false, log_colors: true, tab_width: 4, wrap: false, grep_backup: true, ime_inline: true, syntax: true, mica: true, tray: true, toolbar: true, modebar: true, fkeys: true, window: None }
     }
 }
 
@@ -94,7 +98,9 @@ impl Settings {
                         s.window = Some((n[0], n[1], n[2], n[3], n[4] != 0));
                     }
                 }
+                "tray" => s.tray = flag(v),
                 "toolbar" => s.toolbar = flag(v),
+                "modebar" => s.modebar = flag(v),
                 "fkeys" => s.fkeys = flag(v),
                 "tab_width" => {
                     if let Ok(x) = v.parse::<usize>() {
@@ -110,8 +116,8 @@ impl Settings {
     pub fn to_text(&self) -> String {
         format!(
             "# kazakiri の設定（アプリから変更すると上書きされます）\n\
-             font = {}\nfont_size = {}\nui_font = {}\nui_font_size = {}\ndark = {}\nwhitespace = {}\nlog_colors = {}\ntab_width = {}\nwrap = {}\ngrep_backup = {}\nime_inline = {}\nsyntax = {}\nmica = {}\ntoolbar = {}\nfkeys = {}\n{}",
-            self.font, self.font_size, self.ui_font, self.ui_font_size, self.dark, self.whitespace, self.log_colors, self.tab_width, self.wrap, self.grep_backup, self.ime_inline, self.syntax, self.mica, self.toolbar,
+             font = {}\nfont_size = {}\nui_font = {}\nui_font_size = {}\ndark = {}\nwhitespace = {}\nlog_colors = {}\ntab_width = {}\nwrap = {}\ngrep_backup = {}\nime_inline = {}\nsyntax = {}\nmica = {}\ntray = {}\ntoolbar = {}\nmodebar = {}\nfkeys = {}\n{}",
+            self.font, self.font_size, self.ui_font, self.ui_font_size, self.dark, self.whitespace, self.log_colors, self.tab_width, self.wrap, self.grep_backup, self.ime_inline, self.syntax, self.mica, self.tray, self.toolbar, self.modebar,
             self.fkeys,
             self.window.map_or(String::new(), |(x, y, w, h, m)| format!("window = {x}, {y}, {w}, {h}, {}\n", i32::from(m)))
         )
@@ -134,7 +140,7 @@ mod tests {
 
     #[test]
     fn roundtrip_and_defaults() {
-        let s = Settings { font: "Consolas".into(), font_size: 16.5, ui_font: "Meiryo UI".into(), ui_font_size: 12.0, dark: true, whitespace: true, log_colors: false, tab_width: 8, wrap: true, grep_backup: false, ime_inline: false, syntax: false, mica: false, toolbar: false, fkeys: false, window: Some((10, 20, 900, 700, true)) };
+        let s = Settings { font: "Consolas".into(), font_size: 16.5, ui_font: "Meiryo UI".into(), ui_font_size: 12.0, dark: true, whitespace: true, log_colors: false, tab_width: 8, wrap: true, grep_backup: false, ime_inline: false, syntax: false, mica: false, tray: false, toolbar: false, modebar: false, fkeys: false, window: Some((10, 20, 900, 700, true)) };
         assert_eq!(Settings::parse(&s.to_text()), s);
         let broken = Settings::parse("font_size = abc\nunknown = 1\ntab_width = 99\n");
         assert_eq!(broken.font_size, 14.0);

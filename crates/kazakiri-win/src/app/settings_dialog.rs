@@ -27,6 +27,8 @@ const EN_KILLFOCUS_CODE: u32 = 0x0200;
 
 const ID_DARK: i32 = 201;
 const ID_MICA: i32 = 202;
+const ID_TRAY: i32 = 226;
+const ID_MODEBAR: i32 = 227;
 const ID_FONT: i32 = 204;
 const ID_FONT_PICK: i32 = 205;
 const ID_SIZE: i32 = 206;
@@ -54,6 +56,7 @@ const CHECKS: &[(i32, &str, u32)] = &[
     (ID_LOG, "ログの ERROR / WARN などに色を付ける(&L)", menu::ID_LOG_COLORS),
     (ID_SYN, "構文の色分け（JSON・SQL・XML など）(&X)", menu::ID_SYNTAX),
     (ID_TOOLBAR, "ツールバーを表示(&B)", menu::ID_TOOLBAR),
+    (ID_MODEBAR, "モードバー（CSV の区切りなどのボタンの行）を表示(&E)", menu::ID_MODEBAR),
     (ID_FKEYS, "機能ボタンの列を表示（ステータスバーの上）(&U)", menu::ID_FKEYS),
     (ID_BACKUP, "GREP 置換の前にバックアップ (.bak) を作る(&B)", menu::ID_GREP_BACKUP),
 ];
@@ -101,6 +104,8 @@ fn sync() {
     set_checked(ID_SYN, s.syntax);
     set_checked(ID_TOOLBAR, s.toolbar);
     set_checked(ID_FKEYS, s.fkeys);
+    set_checked(ID_TRAY, s.tray);
+    set_checked(ID_MODEBAR, s.modebar);
     set_checked(ID_BACKUP, s.grep_backup);
     // 編集中の欄は触らない
     let focus = unsafe { GetFocus() };
@@ -204,6 +209,10 @@ unsafe fn on_command(dlg: HWND, id: i32, code: u32) {
         match id {
             ID_FONT_PICK => return pick_font(dlg, false),
             ID_UIFONT_PICK => return pick_font(dlg, true),
+            ID_TRAY => {
+                let on = SendMessageW(ctl(ID_TRAY), BM_GETCHECK, None, None).0 == BST_CHECKED.0 as isize;
+                with_app(|app| app.set_tray(on));
+            }
             ID_MICA => {
                 let on = SendMessageW(ctl(ID_MICA), BM_GETCHECK, None, None).0 == BST_CHECKED.0 as isize;
                 with_app(|app| app.set_mica(on));
@@ -300,7 +309,7 @@ unsafe fn create(owner: HWND) {
             all.push((id, hw));
         };
         // 見出し（ID は 1 から）
-        for (i, (text, y)) in [("外観", 10), ("編集", 206), ("表示", 318), ("検索・GREP", 476)].iter().enumerate() {
+        for (i, (text, y)) in [("外観", 10), ("編集", 206), ("表示", 318), ("検索・GREP", 528)].iter().enumerate() {
             put(1 + i as i32, w!("STATIC"), text, 0, 0, 16, *y, 200, 18);
         }
         put(ID_DARK, w!("BUTTON"), CHECKS[0].1, check, 0, 28, 32, 420, 22);
@@ -323,19 +332,21 @@ unsafe fn create(owner: HWND) {
         put(ID_LOG, w!("BUTTON"), CHECKS[4].1, check, 0, 28, 366, 420, 22);
         put(ID_SYN, w!("BUTTON"), CHECKS[5].1, check, 0, 28, 392, 420, 22);
         put(ID_TOOLBAR, w!("BUTTON"), CHECKS[6].1, check, 0, 28, 418, 420, 22);
-        put(ID_FKEYS, w!("BUTTON"), CHECKS[7].1, check, 0, 28, 444, 420, 22);
-        put(ID_BACKUP, w!("BUTTON"), CHECKS[8].1, check, 0, 28, 498, 420, 22);
-        put(ID_KEYS, w!("BUTTON"), "キー割り当て...(&K)", push, 0, 16, 536, 200, 28);
-        put(ID_CLOSE, w!("BUTTON"), "閉じる", BS_DEFPUSHBUTTON as u32 | WS_TABSTOP.0, 0, 366, 536, 90, 28);
+        put(ID_FKEYS, w!("BUTTON"), CHECKS[8].1, check, 0, 28, 444, 420, 22);
+        put(ID_MODEBAR, w!("BUTTON"), "モードバー（CSV の区切りなどのボタンの行）を表示(&E)", check, 0, 28, 470, 420, 22);
+        put(ID_TRAY, w!("BUTTON"), "通知領域（タスクトレイ）にアイコンを表示（クリックで新規作成・開くなど）(&T)", check, 0, 28, 496, 420, 22);
+        put(ID_BACKUP, w!("BUTTON"), CHECKS[9].1, check, 0, 28, 550, 420, 22);
+        put(ID_KEYS, w!("BUTTON"), "キー割り当て...(&K)", push, 0, 16, 588, 200, 28);
+        put(ID_CLOSE, w!("BUTTON"), "閉じる", BS_DEFPUSHBUTTON as u32 | WS_TABSTOP.0, 0, 366, 588, 90, 28);
         let (bg, edit_bg) = (CreateSolidBrush(rgb_ref(&super::theme::DARK.gutter_bg)), CreateSolidBrush(rgb_ref(&super::theme::DARK.bg)));
         BG_BRUSH.store(bg.0 as isize, Ordering::Relaxed);
         EDIT_BRUSH.store(edit_bg.0 as isize, Ordering::Relaxed);
         CTRLS.with(|c| *c.borrow_mut() = Some(Ctrls { all }));
         SET_DLG.store(dlg.0 as isize, Ordering::Relaxed);
-        // クライアント領域を 472 × 578 に
+        // クライアント領域を 472 × 630 に
         let style = WINDOW_STYLE(GetWindowLongW(dlg, GWL_STYLE) as u32);
         let p = |v: i32| (v as f32 * scale).round() as i32;
-        let mut rc = RECT { left: 0, top: 0, right: p(472), bottom: p(578) };
+        let mut rc = RECT { left: 0, top: 0, right: p(472), bottom: p(630) };
         let _ = AdjustWindowRectExForDpi(&mut rc, style, false, WINDOW_EX_STYLE(0), dpi);
         let _ = SetWindowPos(dlg, None, 0, 0, rc.right - rc.left, rc.bottom - rc.top, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
     }

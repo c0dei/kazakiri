@@ -61,6 +61,10 @@ pub(super) enum Pending {
     CloseTab,
     /// アプリを終了する（未保存のタブを順に確認する）
     Close,
+    /// すべてのタブを閉じる（アプリは終了しない）
+    CloseAll,
+    /// 未保存のタブをすべて保存してから、すべてのタブを閉じる
+    SaveCloseAll,
 }
 
 impl App {
@@ -717,7 +721,7 @@ impl App {
     /// 未保存の変更があれば確認してから行う
     pub(super) fn guarded(&mut self, action: Pending) -> Option<Deferred> {
         // 表示中の内容を捨てる操作だけ確認する（開く・新規は別のタブになるので確認しない）
-        let discards = matches!(action, Pending::Reopen(_) | Pending::CloseTab | Pending::Close);
+        let discards = matches!(action, Pending::Reopen(_) | Pending::CloseTab | Pending::Close | Pending::CloseAll);
         if discards && self.is_modified() {
             Some(Deferred::Confirm(action))
         } else {

@@ -25,6 +25,20 @@ pub enum Conv {
     JsonPretty(usize),
     /// JSON を 1 行に圧縮する
     JsonMinify,
+    /// 各行の先頭の空白・タブを取る
+    TrimLeading,
+    /// 各単語の頭を大文字にする
+    Capitalize,
+    /// `& < > " '` を HTML の文字参照にする
+    HtmlEscape,
+    /// HTML の文字参照（`&amp;` `&#65;` `&#x41;` など）を文字に戻す
+    HtmlUnescape,
+    /// UTF-8 のバイト列を Base64 にする
+    Base64Encode,
+    Base64Decode,
+    /// UTF-8 のバイト列をパーセントエンコードする（URL 用）
+    UrlEncode,
+    UrlDecode,
 }
 
 const HAN: &str = "｡｢｣､･ｦｧｨｩｪｫｬｭｮｯｰｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝ";
@@ -70,6 +84,14 @@ pub fn convert(s: &str, conv: Conv) -> String {
         Conv::SpaceToTab(w) => map_lines_raw(s, |line| space_to_tab(line, w.max(1))),
         Conv::JsonPretty(n) => json_pretty(s, n),
         Conv::JsonMinify => json_minify(s),
+        Conv::TrimLeading => map_lines_raw(s, |l| l.trim_start_matches([' ', '\t', '\u{3000}']).to_string()),
+        Conv::Capitalize => capitalize(s),
+        Conv::HtmlEscape => html_escape(s),
+        Conv::HtmlUnescape => html_unescape(s),
+        Conv::Base64Encode => base64_encode(s.as_bytes()),
+        Conv::Base64Decode => base64_decode(s).unwrap_or_else(|| s.to_string()),
+        Conv::UrlEncode => url_encode(s),
+        Conv::UrlDecode => url_decode(s),
     }
 }
 
@@ -184,6 +206,148 @@ fn space_to_tab(line: &str, w: usize) -> String {
         rest = &rest[c.len_utf8()..];
     }
     format!("{}{}{}", "\t".repeat(col / w), " ".repeat(col % w), rest)
+}
+
+fn capitalize(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut start = true;
+    for c in s.chars() {
+        if c.is_alphabetic() {
+            if start {
+                out.extend(c.to_uppercase());
+            } else {
+                out.extend(c.to_lowercase());
+            }
+            start = false;
+        } else {
+            out.push(c);
+            start = !(c.is_alphanumeric() || c == '\'' || c == '_');
+        }
+    }
+    out
+}
+
+fn html_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+fn html_unescape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(i) = rest.find('&') {
+        out.push_str(&rest[..i]);
+        rest = &rest[i..];
+        let Some(end) = rest.find(';').filter(|&e| e <= 10) else {
+            out.push('&');
+            rest = &rest[1..];
+            continue;
+        };
+        let name = &rest[1..end];
+        let ch = match name {
+            "amp" => Some('&'),
+            "lt" => Some('<'),
+            "gt" => Some('>'),
+            "quot" => Some('"'),
+            "apos" => Some('\''),
+            "nbsp" => Some('\u{a0}'),
+            n if n.starts_with("#x") || n.starts_with("#X") => u32::from_str_radix(&n[2..], 16).ok().and_then(char::from_u32),
+            n if n.starts_with('#') => n[1..].parse::<u32>().ok().and_then(char::from_u32),
+            _ => None,
+        };
+        match ch {
+            Some(c) => {
+                out.push(c);
+                rest = &rest[end + 1..];
+            }
+            None => {
+                out.push('&');
+                rest = &rest[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+pub fn base64_encode(data: &[u8]) -> String {
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for chunk in data.chunks(3) {
+        let n = (chunk[0] as u32) << 16 | (*chunk.get(1).unwrap_or(&0) as u32) << 8 | *chunk.get(2).unwrap_or(&0) as u32;
+        out.push(B64[(n >> 18) as usize & 63] as char);
+        out.push(B64[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 { B64[(n >> 6) as usize & 63] as char } else { '=' });
+        out.push(if chunk.len() > 2 { B64[n as usize & 63] as char } else { '=' });
+    }
+    out
+}
+
+/// Base64（改行・空白は無視）を UTF-8 の文字列に戻す。できなければ None
+pub fn base64_decode(s: &str) -> Option<String> {
+    let mut bits = 0u32;
+    let mut n = 0;
+    let mut out = Vec::with_capacity(s.len() / 4 * 3);
+    for c in s.bytes() {
+        let v = match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' | b'-' => 62,
+            b'/' | b'_' => 63,
+            b'=' | b' ' | b'\r' | b'\n' | b'\t' => continue,
+            _ => return None,
+        };
+        bits = bits << 6 | v as u32;
+        n += 6;
+        if n >= 8 {
+            n -= 8;
+            out.push((bits >> n) as u8);
+            bits &= (1 << n) - 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+fn url_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() * 3);
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+fn url_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() {
+            if let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
+                out.push(v);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(if b[i] == b'+' { b' ' } else { b[i] });
+        i += 1;
+    }
+    String::from_utf8(out).unwrap_or_else(|_| s.to_string())
 }
 
 /// JSON を整形する（字句だけを見るので、壊れた JSON でもそのまま整える）。改行は `\n`
@@ -382,6 +546,107 @@ pub fn sort(text: &str, eol: &str, desc: bool) -> String {
     join_lines(&lines, eol, ends)
 }
 
+/// 行の並べ替えの基準
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SortKey {
+    /// 先頭の数値（数値でない行は最後）
+    Number,
+    /// 文字数
+    Length,
+    /// 同じ行の出現回数（同じ回数の中は、もとの順）
+    Frequency,
+    /// 行の中の最初の IPv4 アドレス（なければ最後）
+    Ip,
+    /// 行の順序を逆にする
+    Reverse,
+    /// ランダムに並べ替える
+    Random,
+}
+
+fn leading_number(l: &str) -> Option<f64> {
+    let t = l.trim_start();
+    let end = t.char_indices().take_while(|&(i, c)| c.is_ascii_digit() || c == '.' || (i == 0 && (c == '-' || c == '+'))).last().map_or(0, |(i, c)| i + c.len_utf8());
+    t[..end].parse::<f64>().ok()
+}
+
+fn first_ipv4(l: &str) -> Option<u32> {
+    let b = l.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i].is_ascii_digit() {
+            let mut j = i;
+            while j < b.len() && (b[j].is_ascii_digit() || b[j] == b'.') {
+                j += 1;
+            }
+            let parts: Vec<&str> = l[i..j].split('.').collect();
+            if parts.len() == 4 {
+                let n: Option<Vec<u8>> = parts.iter().map(|p| p.parse::<u8>().ok()).collect();
+                if let Some(n) = n {
+                    return Some(u32::from_be_bytes([n[0], n[1], n[2], n[3]]));
+                }
+            }
+            i = j;
+        } else {
+            i += 1;
+        }
+    }
+    None
+}
+
+/// 行を `key` の基準で並べ替える。`desc` は降順（`Frequency` は多い順）
+pub fn sort_by(text: &str, eol: &str, key: SortKey, desc: bool, seed: u64) -> String {
+    let (mut lines, ends) = split_lines(text, eol);
+    match key {
+        SortKey::Number => {
+            lines.sort_by(|a, b| {
+                let (x, y) = (leading_number(a), leading_number(b));
+                match (x, y) {
+                    (Some(x), Some(y)) => {
+                        let o = x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal);
+                        if desc { o.reverse() } else { o }
+                    }
+                    (Some(_), None) => std::cmp::Ordering::Less,
+                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                    (None, None) => std::cmp::Ordering::Equal,
+                }
+            });
+        }
+        SortKey::Length => lines.sort_by_key(|l| {
+            let n = l.chars().count();
+            if desc { usize::MAX - n } else { n }
+        }),
+        SortKey::Frequency => {
+            let mut count: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+            for l in &lines {
+                *count.entry(*l).or_default() += 1;
+            }
+            lines.sort_by_key(|l| {
+                let n = count[l];
+                if desc { usize::MAX - n } else { n }
+            });
+        }
+        SortKey::Ip => lines.sort_by(|a, b| match (first_ipv4(a), first_ipv4(b)) {
+            (Some(x), Some(y)) => {
+                if desc { y.cmp(&x) } else { x.cmp(&y) }
+            }
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => std::cmp::Ordering::Equal,
+        }),
+        SortKey::Reverse => lines.reverse(),
+        SortKey::Random => {
+            let mut x = seed | 1;
+            for i in (1..lines.len()).rev() {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                lines.swap(i, (x % (i as u64 + 1)) as usize);
+            }
+        }
+    }
+    join_lines(&lines, eol, ends)
+}
+
 /// 先頭の `n` 行を、残りの行の後ろへ回す（`up` のとき。選択した行を上へ動かす＝直前の 1 行を後ろへ）。
 /// `up`: 先頭の 1 行（となり）を末尾へ。`!up`: 末尾の 1 行（となり）を先頭へ
 pub fn rotate_neighbor(text: &str, eol: &str, up: bool) -> String {
@@ -434,6 +699,31 @@ mod tests {
         let text = "foo foobar fooz bar foo";
         // 末尾の foo を補完：近い順
         assert_eq!(complete_candidates(text, 23, "foo"), vec!["fooz".to_string(), "foobar".to_string()]);
+    }
+
+    #[test]
+    fn sorts_and_encodings() {
+        assert_eq!(sort_by("10 b\n2 a\nx\n-1 c\n", "\n", SortKey::Number, false, 1), "-1 c\n2 a\n10 b\nx\n");
+        assert_eq!(sort_by("10 b\n2 a\nx\n", "\n", SortKey::Number, true, 1), "10 b\n2 a\nx\n");
+        assert_eq!(sort_by("ccc\na\nbb\n", "\n", SortKey::Length, false, 1), "a\nbb\nccc\n");
+        assert_eq!(sort_by("ccc\na\nbb\n", "\n", SortKey::Length, true, 1), "ccc\nbb\na\n");
+        assert_eq!(sort_by("a\nb\na\nc\nb\na\n", "\n", SortKey::Frequency, true, 1), "a\na\na\nb\nb\nc\n");
+        assert_eq!(sort_by("host 10.0.0.10\nhost 10.0.0.2\nnone\n9.1.1.1 x\n", "\n", SortKey::Ip, false, 1), "9.1.1.1 x\nhost 10.0.0.2\nhost 10.0.0.10\nnone\n");
+        assert_eq!(sort_by("1\n2\n3\n", "\n", SortKey::Reverse, false, 1), "3\n2\n1\n");
+        let r = sort_by("1\n2\n3\n4\n5\n", "\n", SortKey::Random, false, 12345);
+        let mut v: Vec<&str> = r.lines().collect();
+        v.sort();
+        assert_eq!(v, vec!["1", "2", "3", "4", "5"]);
+        assert_eq!(convert("hello wORLD it's", Conv::Capitalize), "Hello World It's");
+        assert_eq!(convert("  a\n\tb c  \n", Conv::TrimLeading), "a\nb c  \n");
+        assert_eq!(convert("<a href=\"x\">&</a>", Conv::HtmlEscape), "&lt;a href=&quot;x&quot;&gt;&amp;&lt;/a&gt;");
+        assert_eq!(convert("&lt;b&gt; &amp; &#65;&#x42; &unknown; &", Conv::HtmlUnescape), "<b> & AB &unknown; &");
+        assert_eq!(base64_encode("Man".as_bytes()), "TWFu");
+        assert_eq!(base64_encode("Ma".as_bytes()), "TWE=");
+        assert_eq!(convert("日本語 abc", Conv::Base64Decode), "日本語 abc"); // Base64 でなければそのまま
+        assert_eq!(convert(&convert("日本語 abc", Conv::Base64Encode), Conv::Base64Decode), "日本語 abc");
+        assert_eq!(convert("a b/日", Conv::UrlEncode), "a%20b%2F%E6%97%A5");
+        assert_eq!(convert("a%20b%2F%E6%97%A5+x", Conv::UrlDecode), "a b/日 x");
     }
 
     #[test]

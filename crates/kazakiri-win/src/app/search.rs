@@ -146,6 +146,7 @@ impl App {
             Prompt::GotoLine => String::new(),
             Prompt::ColumnFilter => self.last_filter.clone(),
             Prompt::Split => "1000000".into(),
+            Prompt::Sequence => "1,1,0".into(),
         };
         self.invalidate();
     }
@@ -168,6 +169,10 @@ impl App {
             Some(Prompt::Split) => {
                 let spec = std::mem::take(&mut self.input);
                 self.start_split(&spec);
+            }
+            Some(Prompt::Sequence) => {
+                let spec = std::mem::take(&mut self.input);
+                self.insert_sequence(&spec);
             }
             Some(Prompt::GotoLine) => {
                 let input = std::mem::take(&mut self.input);

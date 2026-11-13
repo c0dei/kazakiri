@@ -31,8 +31,22 @@ pub enum Kind {
 /// 違いの数の上限（これを超えたら諦める）
 pub const MAX_D: usize = 20_000;
 
+/// 比較のオプション
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Opts {
+    /// 行頭・行末の空白（スペース・タブ・全角スペース）を無視する
+    pub ignore_edge_space: bool,
+    /// 大文字と小文字を区別しない
+    pub ignore_case: bool,
+}
+
 /// 1 行ごとのハッシュ（行末の CR は無視して、CRLF と LF の違いは差分にしない）
 pub fn line_hashes(doc: &Document) -> Vec<u64> {
+    line_hashes_with(doc, Opts::default())
+}
+
+/// オプションを反映した、1 行ごとのハッシュ
+pub fn line_hashes_with(doc: &Document, opts: Opts) -> Vec<u64> {
     let n = doc.line_count().0;
     let mut out = Vec::with_capacity(n as usize);
     for l in 0..n {
@@ -40,7 +54,17 @@ pub fn line_hashes(doc: &Document) -> Vec<u64> {
         let bytes = doc.read(s, e);
         let bytes = bytes.strip_suffix(b"\r").unwrap_or(&bytes);
         let mut h = std::collections::hash_map::DefaultHasher::new();
-        bytes.hash(&mut h);
+        if opts == Opts::default() {
+            bytes.hash(&mut h);
+        } else {
+            let text = doc.decode(bytes);
+            let t = if opts.ignore_edge_space { text.trim_matches([' ', '\t', '\u{3000}']) } else { &text };
+            if opts.ignore_case {
+                t.to_lowercase().hash(&mut h);
+            } else {
+                t.hash(&mut h);
+            }
+        }
         out.push(h.finish());
     }
     // 最後が改行で終わるファイルの、最後の空行は行に数えない
@@ -206,6 +230,17 @@ mod tests {
         assert_eq!(kinds(&r), "=-=+=");
         let same: Vec<(u64, u64)> = r.iter().filter(|x| x.kind == Kind::Same).map(|x| (x.a.unwrap(), x.b.unwrap())).collect();
         assert_eq!(same, vec![(0, 0), (2, 1), (3, 3)]);
+    }
+
+    #[test]
+    fn options_ignore_space_and_case() {
+        let a = Document::from_bytes(b"Alpha\n  beta \nGAMMA\n".to_vec());
+        let b = Document::from_bytes(b"alpha\nbeta\ngamma\n".to_vec());
+        let plain = diff(&line_hashes(&a), &line_hashes(&b)).unwrap();
+        assert!(plain.iter().any(|r| r.kind != Kind::Same));
+        let opts = Opts { ignore_edge_space: true, ignore_case: true };
+        let ign = diff(&line_hashes_with(&a, opts), &line_hashes_with(&b, opts)).unwrap();
+        assert!(ign.iter().all(|r| r.kind == Kind::Same));
     }
 
     #[test]

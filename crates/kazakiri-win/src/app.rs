@@ -52,6 +52,7 @@ mod files;
 mod fonts;
 mod input;
 mod layout;
+mod linestats;
 mod paint;
 mod search;
 mod startup;
@@ -69,6 +70,7 @@ mod diffview;
 mod markers;
 mod complete;
 mod toolbar;
+mod tray;
 mod keys_dialog;
 mod lines;
 mod settings_dialog;
@@ -115,6 +117,8 @@ enum Prompt {
     ColumnFilter,
     /// ファイルの分割（行数 または サイズ）
     Split,
+    /// 連番の挿入（開始値,増分,桁数）
+    Sequence,
 }
 
 /// 借用中に実行できない処理（モーダルダイアログはメッセージを再入させる）
@@ -130,6 +134,10 @@ enum Deferred {
     /// 検索・置換・GREP のダイアログを開く（タブの番号）
     ShowFind(usize),
     ShowSettings,
+    /// 本文の右クリックメニュー
+    ContextMenu,
+    /// トレイアイコンのメニュー（true なら右クリック用）
+    TrayMenu(bool),
     ShowKeys,
     /// 比較するタブを選ぶメニュー
     DiffMenu,
@@ -226,8 +234,19 @@ struct App {
     bm_col0: bool,
     /// ツールバー・機能ボタンの上にあるマウス
     hover: Option<toolbar::Hover>,
+    /// 「フィルター」で、検索が終わったら該当行だけを新しいタブに出す
+    filter_pending: bool,
+    /// 最後に表示したメッセージ（トレイの「最後のメッセージを表示」用）
+    last_message: String,
+    /// 「最近使ったフォルダー」から開くとき、開くダイアログの初めのフォルダー
+    open_dir: Option<PathBuf>,
+    /// 比較のオプション（行頭・行末の空白を無視／大文字小文字を無視）と、分割表示の同期スクロール、CSV の列を A,B,C で表示
+    diff_ign_edge: bool,
+    diff_ign_case: bool,
+    split_sync: bool,
+    csv_letters: bool,
     /// 出している説明（ツールチップ）：文字、左の位置（x）
-    tip: Option<(String, f32)>,
+    tip: Option<(String, f32, bool)>,
     /// 単語補完の途中（続けて押すと次の候補）
     dabbrev: Option<complete::Dab>,
     markers: Vec<markers::Marker>,
@@ -402,6 +421,38 @@ impl App {
                     }
                     (Some(LRESULT(1)), None)
                 }
+                WM_RBUTTONDOWN => {
+                    let (x, y) = self.mouse_pos(lparam);
+                    if self.diffview.is_none() && y >= 0.0 && y < self.text_height() && x >= self.gutter_width() {
+                        // 選択の外を右クリックしたら、そこへカーソルを移す（選択の中なら、そのまま）
+                        let inside = self.doc.clone().and_then(|d| {
+                            let off = self.offset_at(&d, x, y)?;
+                            self.selection().map(|(a, b)| off >= a && off <= b)
+                        });
+                        if inside != Some(true) {
+                            self.on_mouse_down(x, y, false);
+                            self.dragging = false;
+                            let _ = ReleaseCapture();
+                        }
+                    }
+                    (DONE, None)
+                }
+                WM_CONTEXTMENU => {
+                    let mut pt = POINT { x: loword(lparam.0 as usize) as i16 as i32, y: hiword(lparam.0 as usize) as i16 as i32 };
+                    let _ = ScreenToClient(self.hwnd, &mut pt);
+                    let scale = GetDpiForWindow(self.hwnd) as f32 / 96.0;
+                    let (x, y) = (pt.x as f32 / scale, pt.y as f32 / scale - self.chrome_h());
+                    if self.diffview.is_none() && y >= 0.0 && y < self.text_height() && x >= self.gutter_width() {
+                        (DONE, Some(Deferred::ContextMenu))
+                    } else {
+                        (None, None)
+                    }
+                }
+                tray::WM_TRAY => match (lparam.0 & 0xFFFF) as u32 {
+                    WM_LBUTTONUP => (DONE, Some(Deferred::TrayMenu(false))),
+                    WM_RBUTTONUP | WM_CONTEXTMENU => (DONE, Some(Deferred::TrayMenu(true))),
+                    _ => (DONE, None),
+                },
                 WM_SIZE => {
                     if let Some(g) = &self.gfx {
                         let (w, h) = (loword(lparam.0 as usize), hiword(lparam.0 as usize));
@@ -528,7 +579,7 @@ impl App {
                     let forced = self.doc.as_ref().map(|d| d.forced_encoding());
                     self.menus.refresh(self.opts.case_sensitive, self.opts.regex, self.follow, forced, &self.recent);
                     self.menus.refresh_clips(&clipboard::history());
-                    self.menus.refresh_view(self.csv.as_ref().map(|v| (v.delim, v.header)), self.is_split_view(), &self.settings);
+                    self.menus.refresh_view(self.csv.as_ref().map(|v| (v.delim, v.header)), self.is_split_view(), [self.diff_ign_edge, self.diff_ign_case, self.split_sync, self.csv_letters], &self.settings);
                     (DONE, None)
                 }
                 WM_COMMAND => (DONE, self.command(loword(wparam.0))),
@@ -733,6 +784,7 @@ impl App {
                     (DONE, None)
                 }
                 WM_DESTROY => {
+                    self.tray_remove();
                     // ウィンドウの位置と大きさを覚える（最大化していれば、戻したときの大きさ）
                     let mut wp = WINDOWPLACEMENT { length: std::mem::size_of::<WINDOWPLACEMENT>() as u32, ..Default::default() };
                     if GetWindowPlacement(self.hwnd, &mut wp).is_ok() {

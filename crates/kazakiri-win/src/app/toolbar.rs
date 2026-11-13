@@ -70,6 +70,27 @@ const FKEYS: &[(&str, u32)] = &[
     ("ダーク", menu::ID_DARK),
 ];
 
+/// ツールバーの 1 行目の高さと、モードバー（2 行目）の高さ
+const ROW1_H: f32 = 34.0;
+const MODE_H: f32 = 28.0;
+
+/// モードバーのボタン。(表示, コマンドの ID, 説明)
+const MODES: &[Option<(&str, u32, &str)>] = &[
+    Some(("CSV", menu::ID_CSV, "CSV/TSV を表として表示 (Ctrl+Shift+C)")),
+    None,
+    Some(("カンマ", menu::ID_DELIM_BASE, "カンマ区切りで表示")),
+    Some(("タブ", menu::ID_DELIM_BASE + 1, "タブ区切りで表示")),
+    Some(("セミコロン", menu::ID_DELIM_BASE + 2, "セミコロン区切りで表示")),
+    Some(("パイプ", menu::ID_DELIM_BASE + 3, "パイプ（|）区切りで表示")),
+    None,
+    Some(("見出し", menu::ID_CSV_HEADER, "1 行目を見出しにして、上に固定する")),
+    Some(("列で昇順", menu::ID_SORT_ASC, "カーソルの列で昇順に並べ替え")),
+    Some(("列で降順", menu::ID_SORT_DESC, "カーソルの列で降順に並べ替え")),
+    Some(("列フィルタ", menu::ID_FILTER, "列の条件で行を絞り込む")),
+    None,
+    Some(("フィルター", menu::ID_FILTER_LINES, "検索語に一致した行だけを新しいタブに出す (Ctrl+Shift+L)")),
+];
+
 const BTN_W: f32 = 30.0;
 const SEP_W: f32 = 12.0;
 const BTN_PAD: f32 = 8.0;
@@ -78,11 +99,49 @@ const BTN_PAD: f32 = 8.0;
 pub(super) enum Hover {
     Tool(usize),
     Fkey(usize),
+    /// モードバーのボタン
+    Mode(usize),
 }
 
 impl App {
+    /// ツールバー全体の高さ（1 行目＋あればモードバー）
     pub(super) fn tb_h(&self) -> f32 {
-        if self.settings.toolbar { 34.0 } else { 0.0 }
+        if !self.settings.toolbar {
+            return 0.0;
+        }
+        ROW1_H + self.mode_h()
+    }
+
+    fn mode_h(&self) -> f32 {
+        if self.settings.toolbar && self.settings.modebar { MODE_H } else { 0.0 }
+    }
+
+    /// モードバーのボタンの位置。(x0, x1, 番号)
+    fn mode_boxes(&self) -> Vec<(f32, f32, usize)> {
+        let mut x = BTN_PAD;
+        let mut out = Vec::new();
+        for (i, b) in MODES.iter().enumerate() {
+            match b {
+                Some((label, _, _)) => {
+                    let units: Vec<u16> = label.encode_utf16().collect();
+                    let w = unsafe { self.ui_text_width(&units) }.unwrap_or(units.len() as f32 * self.ui_char_w) + 18.0;
+                    out.push((x, x + w, i));
+                    x += w + 2.0;
+                }
+                None => x += SEP_W,
+            }
+        }
+        out
+    }
+
+    fn mode_checked(&self, id: u32) -> bool {
+        let Some(v) = self.csv.as_ref() else { return false };
+        match id {
+            menu::ID_CSV => true,
+            menu::ID_CSV_HEADER => v.header,
+            id if (menu::ID_DELIM_BASE..menu::ID_DELIM_BASE + 4).contains(&id) => menu::DELIMS[(id - menu::ID_DELIM_BASE) as usize].1 == v.delim,
+            _ => false,
+        }
     }
 
     pub(super) fn status_base_h(&self) -> f32 {
@@ -123,7 +182,11 @@ impl App {
     pub(super) fn hover_at(&self, x: f32, y: f32) -> Option<Hover> {
         let tb = self.tb_h();
         if tb > 0.0 && (-(self.tab_h() + tb)..-self.tab_h()).contains(&y) {
-            return self.tool_boxes().into_iter().find(|&(x0, x1, _)| x >= x0 && x < x1).map(|(_, _, i)| Hover::Tool(i));
+            // 上の行はツールバー、下の行はモードバー
+            if y < -(self.tab_h() + self.mode_h()) {
+                return self.tool_boxes().into_iter().find(|&(x0, x1, _)| x >= x0 && x < x1).map(|(_, _, i)| Hover::Tool(i));
+            }
+            return self.mode_boxes().into_iter().find(|&(x0, x1, _)| x >= x0 && x < x1).map(|(_, _, i)| Hover::Mode(i));
         }
         let (w, h) = self.client_size();
         let fk = self.fkey_h();
@@ -137,6 +200,7 @@ impl App {
     pub(super) fn hover_command(&self, hv: Hover) -> Option<(u32, &'static str)> {
         match hv {
             Hover::Tool(i) => BUTTONS.get(i).copied().flatten().map(|(_, id, tip)| (id, tip)),
+            Hover::Mode(i) => MODES.get(i).copied().flatten().map(|(_, id, tip)| (id, tip)),
             Hover::Fkey(i) => FKEYS.get(i).map(|&(label, id)| (id, label)),
         }
     }
@@ -148,7 +212,7 @@ impl App {
             self.hover = hv;
             self.hide_tip();
             // ツールバーのボタンの上なら、少し待ってから説明を出す
-            if matches!(hv, Some(Hover::Tool(_))) {
+            if matches!(hv, Some(Hover::Tool(_) | Hover::Mode(_))) {
                 unsafe {
                     SetTimer(Some(self.hwnd), TIMER_TIP, 450, None);
                 }
@@ -184,26 +248,36 @@ impl App {
 
     /// 待ち時間が過ぎても、まだ同じボタンの上なら説明を出す
     pub(super) fn show_tip(&mut self) {
-        let Some(Hover::Tool(i)) = self.hover else { return };
-        let Some((_, x0, _)) = self.tool_boxes().into_iter().find(|b| b.2 == i) else { return };
-        if let Some((_, _, tip)) = BUTTONS.get(i).copied().flatten() {
-            self.tip = Some((tip.to_string(), x0));
-            self.invalidate();
+        match self.hover {
+            Some(Hover::Tool(i)) => {
+                let Some((x0, _, _)) = self.tool_boxes().into_iter().find(|b| b.2 == i) else { return };
+                if let Some((_, _, tip)) = BUTTONS.get(i).copied().flatten() {
+                    self.tip = Some((tip.to_string(), x0, false));
+                }
+            }
+            Some(Hover::Mode(i)) => {
+                let Some((x0, _, _)) = self.mode_boxes().into_iter().find(|b| b.2 == i) else { return };
+                if let Some((_, _, tip)) = MODES.get(i).copied().flatten() {
+                    self.tip = Some((tip.to_string(), x0, true));
+                }
+            }
+            _ => return,
         }
+        self.invalidate();
     }
 
     // ---- 描画 ----
 
     /// 説明（ツールチップ）：ボタンの下に小さな枠で出す。窓の座標で描く
     pub(super) unsafe fn draw_tip(&self, rt: &ID2D1RenderTarget, brush: &ID2D1SolidColorBrush, w: f32) -> Result<()> {
-        let Some((text, x0)) = &self.tip else { return Ok(()) };
+        let Some((text, x0, second_row)) = &self.tip else { return Ok(()) };
         let t = self.theme;
         let units: Vec<u16> = text.encode_utf16().collect();
         unsafe {
             let tw = self.ui_text_width(&units)?;
             let (bw, bh) = (tw + 16.0, self.ui_line_h + 8.0);
             let x = x0.min((w - bw - 4.0).max(0.0));
-            let y = self.tb_h() + 4.0;
+            let y = self.tb_h() + 4.0 - if *second_row { 0.0 } else { self.mode_h() };
             brush.SetColor(&t.dim);
             rt.FillRoundedRectangle(&rrect(x, y, x + bw, y + bh, 4.0), brush);
             brush.SetColor(&t.panel_bg);
@@ -216,7 +290,7 @@ impl App {
 
 
     pub(super) unsafe fn draw_toolbar(&self, rt: &ID2D1RenderTarget, brush: &ID2D1SolidColorBrush, w: f32) -> Result<()> {
-        let h = self.tb_h();
+        let h = ROW1_H;
         let t = self.theme;
         unsafe {
             brush.SetColor(&t.gutter_bg);
@@ -232,10 +306,40 @@ impl App {
                 brush.SetColor(&t.text);
                 self.draw_icon(rt, brush, icon, x0 + (BTN_W - 16.0) / 2.0, (h - 16.0) / 2.0);
             }
-            // 区切り線
+            // 区切り線（モードバーがなければ、ツールバーの下の線）
+            if self.mode_h() == 0.0 {
+                brush.SetColor(&t.dim);
+                rt.FillRectangle(&rect(0.0, h - 1.0, w, h), brush);
+            }
+        }
+        if self.mode_h() > 0.0 {
+            rt.SetTransform(&Matrix3x2::translation(0.0, ROW1_H));
+            self.draw_modebar(rt, brush, w)?;
+            rt.SetTransform(&Matrix3x2::identity());
+        }
+        Ok(())
+    }
+
+    /// モードバー（ツールバーの 2 行目）：CSV の区切りなど、文字のボタン
+    unsafe fn draw_modebar(&self, rt: &ID2D1RenderTarget, brush: &ID2D1SolidColorBrush, w: f32) -> Result<()> {
+        let h = MODE_H;
+        let t = self.theme;
+        unsafe {
+            brush.SetColor(&t.gutter_bg);
+            rt.FillRectangle(&rect(0.0, 0.0, w, h), brush);
+            for &(x0, x1, i) in &self.mode_boxes() {
+                let Some((label, id, _)) = MODES[i] else { continue };
+                let hovered = self.hover == Some(Hover::Mode(i));
+                let on = self.mode_checked(id);
+                if hovered || on {
+                    brush.SetColor(if on { &t.panel_sel } else { &t.panel_head });
+                    rt.FillRoundedRectangle(&rrect(x0, 3.0, x1, h - 3.0, 4.0), brush);
+                }
+                brush.SetColor(&t.text);
+                self.draw_ui_str(rt, brush, label, x0 + 9.0, (h - self.ui_line_h) / 2.0, x1)?;
+            }
             brush.SetColor(&t.dim);
             rt.FillRectangle(&rect(0.0, h - 1.0, w, h), brush);
-            let _ = h;
         }
         Ok(())
     }

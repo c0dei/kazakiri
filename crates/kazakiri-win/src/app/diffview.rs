@@ -102,8 +102,9 @@ impl App {
         self.message = "差分を計算しています…".into();
         self.invalidate();
         let hwnd = self.hwnd.0 as isize;
+        let opts = diff::Opts { ignore_edge_space: self.diff_ign_edge, ignore_case: self.diff_ign_case };
         std::thread::spawn(move || {
-            let (ha, hb) = (diff::line_hashes(&a), diff::line_hashes(&b));
+            let (ha, hb) = (diff::line_hashes_with(&a, opts), diff::line_hashes_with(&b, opts));
             let rows = diff::diff(&ha, &hb).ok_or_else(|| format!("違いが多すぎて比較できません（{} 行以上）", diff::MAX_D));
             let done = Box::into_raw(Box::new(DiffDone { a, b, a_title, b_title, rows }));
             if unsafe { PostMessageW(Some(HWND(hwnd as *mut _)), WM_DIFF_DONE, WPARAM(0), LPARAM(done as isize)) }.is_err() {
@@ -190,8 +191,14 @@ impl App {
         let total = self.diff_total();
         if let Some(v) = &mut self.diffview {
             let max = total.saturating_sub(vis) as i64;
-            let slot = if v.split && v.focus == 1 { &mut v.top_b } else { &mut v.top };
-            *slot = (*slot as i64 + delta).clamp(0, max) as usize;
+            if v.split && self.split_sync {
+                // 同期スクロール：2 つの窓を同じだけ動かす
+                v.top = (v.top as i64 + delta).clamp(0, max) as usize;
+                v.top_b = (v.top_b as i64 + delta).clamp(0, max) as usize;
+            } else {
+                let slot = if v.split && v.focus == 1 { &mut v.top_b } else { &mut v.top };
+                *slot = (*slot as i64 + delta).clamp(0, max) as usize;
+            }
             self.invalidate();
         }
     }

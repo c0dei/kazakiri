@@ -196,7 +196,7 @@ impl App {
     }
 
     /// 表示中のタブが「何もしていない無題」か（ファイルを開くときに使い回す）
-    fn is_blank(&self) -> bool {
+    pub(super) fn is_blank(&self) -> bool {
         match &self.doc {
             None => true,
             Some(d) => d.path().is_none() && d.is_empty() && !self.is_modified(),
@@ -208,7 +208,7 @@ impl App {
         doc.and_then(|d| d.path()).map(|p| p.to_path_buf())
     }
 
-    fn tab_modified(&self, i: usize) -> bool {
+    pub(super) fn tab_modified(&self, i: usize) -> bool {
         if i == self.active { self.is_modified() } else { self.tabs[i].editor.as_ref().is_some_and(|e| e.is_modified()) }
     }
 
