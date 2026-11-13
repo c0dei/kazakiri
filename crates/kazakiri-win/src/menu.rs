@@ -37,7 +37,7 @@ pub const ID_SORT_LINES_DESC: u32 = 811;
 pub const ID_INSERT_DATE: u32 = 812;
 pub const ID_INSERT_DATETIME: u32 = 813;
 /// 「変換」メニューの項目名（app/lines.rs の CONVS の並びと対応）
-pub const CONV_NAMES: [&str; 10] = [
+pub const CONV_NAMES: [&str; 12] = [
     "大文字にする(&U)",
     "小文字にする(&L)",
     "全角 → 半角（英数字・記号）(&H)",
@@ -48,6 +48,8 @@ pub const CONV_NAMES: [&str; 10] = [
     "カタカナ → ひらがな(&G)",
     "タブ → 空白(&S)",
     "行頭の空白 → タブ(&T)",
+    "JSON を整形（展開）(&E)",
+    "JSON を圧縮（短縮）(&M)",
 ];
 /// 「変換」メニューの項目（CONV_NAMES の並びと対応）
 pub const ID_BM_TOGGLE: u32 = 840;
@@ -57,6 +59,13 @@ pub const ID_BM_CLEAR: u32 = 843;
 pub const ID_BM_LIST: u32 = 844;
 pub const ID_TOOLBAR: u32 = 846;
 pub const ID_FKEYS: u32 = 847;
+pub const ID_OVERWRITE: u32 = 848;
+/// ステータスバーのタブ幅のメニュー（TAB_WIDTHS の並び）
+pub const ID_TABW_BASE: u32 = 850;
+pub const TAB_WIDTHS: [usize; 4] = [2, 3, 4, 8];
+pub const ID_CLIP_BASE: u32 = 900;
+pub const CLIP_MAX: u32 = 20;
+pub const ID_COMPLETE: u32 = 849;
 pub const ID_CONV_BASE: u32 = 830;
 pub const ID_COPY: u32 = 200;
 pub const ID_SELECT_ALL: u32 = 201;
@@ -140,6 +149,8 @@ pub struct Menus {
     pub encoding: HMENU,
     pub recent: HMENU,
     pub view: HMENU,
+    /// 編集 → クリップボード履歴
+    pub clips: HMENU,
 }
 
 fn wide(s: &str) -> Vec<u16> {
@@ -231,11 +242,16 @@ pub unsafe fn build(km: &Keymap) -> Result<Menus> {
         item(km, insert, ID_INSERT_DATE, "日付(&D)")?;
         item(km, insert, ID_INSERT_DATETIME, "日付と時刻(&T)")?;
         popup(edit, insert, "挿入(&I)")?;
+        let clips = CreatePopupMenu()?;
+        let w = wide("（履歴なし）");
+        AppendMenuW(clips, MF_STRING | MF_GRAYED, 0, PCWSTR(w.as_ptr()))?;
+        popup(edit, clips, "クリップボード履歴(&H)")?;
+        item(km, edit, ID_COMPLETE, "単語を補完(&W)\tCtrl+Space")?;
         popup(bar, edit, "編集(&E)")?;
 
         let convert = CreatePopupMenu()?;
         for (i, name) in CONV_NAMES.iter().enumerate() {
-            if i == 2 || i == 4 || i == 8 {
+            if i == 2 || i == 4 || i == 8 || i == 10 {
                 sep(convert)?;
             }
             item(km, convert, ID_CONV_BASE + i as u32, name)?;
@@ -309,7 +325,7 @@ pub unsafe fn build(km: &Keymap) -> Result<Menus> {
         }
         popup(bar, encoding, "エンコード(&N)")?;
 
-        Ok(Menus { bar, file, search, encoding, recent, view })
+        Ok(Menus { bar, file, search, encoding, recent, view, clips })
     }
 }
 
@@ -336,6 +352,29 @@ impl Menus {
             let en = if csv.is_some() { MF_ENABLED } else { MF_GRAYED };
             for id in [ID_CSV_HEADER, ID_SORT_ASC, ID_SORT_DESC] {
                 let _ = EnableMenuItem(self.view, id, en);
+            }
+        }
+    }
+
+    /// クリップボード履歴のサブメニューを作り直す
+    pub unsafe fn refresh_clips(&self, clips: &[String]) {
+        unsafe {
+            while GetMenuItemCount(Some(self.clips)) > 0 {
+                if DeleteMenu(self.clips, 0, MF_BYPOSITION).is_err() {
+                    break;
+                }
+            }
+            if clips.is_empty() {
+                let w = wide("（履歴なし）");
+                let _ = AppendMenuW(self.clips, MF_STRING | MF_GRAYED, 0, PCWSTR(w.as_ptr()));
+            }
+            for (i, c) in clips.iter().take(CLIP_MAX as usize).enumerate() {
+                // 1 行に縮める（改行・タブは空白に、長いものは省略）
+                let one: String = c.chars().map(|ch| if ch.is_control() { ' ' } else { ch }).take(48).collect();
+                let more = if c.chars().count() > 48 { "…" } else { "" };
+                let label = format!("&{} {}{}", if i < 9 { (i + 1).to_string() } else { "0".into() }, one.replace('&', "&&"), more);
+                let w = wide(&label);
+                let _ = AppendMenuW(self.clips, MF_STRING, (ID_CLIP_BASE + i as u32) as usize, PCWSTR(w.as_ptr()));
             }
         }
     }

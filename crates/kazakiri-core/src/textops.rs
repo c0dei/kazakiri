@@ -21,6 +21,10 @@ pub enum Conv {
     TabToSpace(usize),
     /// 行頭の空白 → タブ
     SpaceToTab(usize),
+    /// JSON を整形（展開）する。インデントは空白の数
+    JsonPretty(usize),
+    /// JSON を 1 行に圧縮する
+    JsonMinify,
 }
 
 const HAN: &str = "｡｢｣､･ｦｧｨｩｪｫｬｭｮｯｰｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝ";
@@ -64,6 +68,8 @@ pub fn convert(s: &str, conv: Conv) -> String {
         Conv::ZenKanaToHan => zen_kana_to_han(s),
         Conv::TabToSpace(w) => map_lines_raw(s, |line| tab_to_space(line, w.max(1))),
         Conv::SpaceToTab(w) => map_lines_raw(s, |line| space_to_tab(line, w.max(1))),
+        Conv::JsonPretty(n) => json_pretty(s, n),
+        Conv::JsonMinify => json_minify(s),
     }
 }
 
@@ -178,6 +184,124 @@ fn space_to_tab(line: &str, w: usize) -> String {
         rest = &rest[c.len_utf8()..];
     }
     format!("{}{}{}", "\t".repeat(col / w), " ".repeat(col % w), rest)
+}
+
+/// JSON を整形する（字句だけを見るので、壊れた JSON でもそのまま整える）。改行は `\n`
+pub fn json_pretty(s: &str, indent: usize) -> String {
+    let mut out = String::with_capacity(s.len() * 2);
+    let mut depth = 0usize;
+    let mut in_str = false;
+    let mut esc = false;
+    let chars: Vec<char> = s.chars().collect();
+    let pad = |out: &mut String, d: usize| {
+        out.push('\n');
+        out.extend(std::iter::repeat_n(' ', d * indent));
+    };
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if in_str {
+            out.push(c);
+            if esc {
+                esc = false;
+            } else if c == '\\' {
+                esc = true;
+            } else if c == '"' {
+                in_str = false;
+            }
+            i += 1;
+            continue;
+        }
+        match c {
+            '"' => {
+                in_str = true;
+                out.push(c);
+            }
+            '{' | '[' => {
+                // 空の {} [] はそのまま
+                let close = if c == '{' { '}' } else { ']' };
+                let next = chars[i + 1..].iter().position(|x| !x.is_whitespace()).map(|k| chars[i + 1 + k]);
+                if next == Some(close) {
+                    out.push(c);
+                    out.push(close);
+                    i += 1 + chars[i + 1..].iter().position(|x| *x == close).unwrap_or(0) + 1;
+                    continue;
+                }
+                out.push(c);
+                depth += 1;
+                pad(&mut out, depth);
+            }
+            '}' | ']' => {
+                depth = depth.saturating_sub(1);
+                pad(&mut out, depth);
+                out.push(c);
+            }
+            ',' => {
+                out.push(c);
+                pad(&mut out, depth);
+            }
+            ':' => out.push_str(": "),
+            c if c.is_whitespace() => {}
+            c => out.push(c),
+        }
+        i += 1;
+    }
+    out
+}
+
+/// JSON を 1 行に圧縮する（文字列の中の空白は残す）
+pub fn json_minify(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let (mut in_str, mut esc) = (false, false);
+    for c in s.chars() {
+        if in_str {
+            out.push(c);
+            if esc {
+                esc = false;
+            } else if c == '\\' {
+                esc = true;
+            } else if c == '"' {
+                in_str = false;
+            }
+        } else if c == '"' {
+            in_str = true;
+            out.push(c);
+        } else if !c.is_whitespace() {
+            out.push(c);
+        }
+    }
+    out
+}
+
+fn is_word(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
+/// 単語補完の候補：`window` の中の単語のうち `prefix` で始まるものを、カーソル（`caret`＝文字位置）に近い順に。
+/// カーソルの直前の単語そのもの（補完中の語）は含めない
+pub fn complete_candidates(window: &str, caret: usize, prefix: &str) -> Vec<String> {
+    let chars: Vec<char> = window.chars().collect();
+    let mut found: Vec<(usize, String)> = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        if is_word(chars[i]) {
+            let start = i;
+            while i < chars.len() && is_word(chars[i]) {
+                i += 1;
+            }
+            let word: String = chars[start..i].iter().collect();
+            let is_current = start + prefix.chars().count() == caret && i == caret;
+            if word.len() > prefix.len() && word.starts_with(prefix) && !is_current {
+                let dist = start.abs_diff(caret);
+                found.push((dist, word));
+            }
+        } else {
+            i += 1;
+        }
+    }
+    found.sort_by_key(|(d, _)| *d);
+    let mut seen = std::collections::HashSet::new();
+    found.into_iter().filter_map(|(_, w)| seen.insert(w.clone()).then_some(w)).collect()
 }
 
 // ---- 行の操作 ----
@@ -299,6 +423,17 @@ mod tests {
         assert_eq!(convert("a\tb\r\n\tc\n", Conv::TabToSpace(4)), "a   b\r\n    c\n");
         assert_eq!(convert("あ\tx", Conv::TabToSpace(4)), "あ  x");
         assert_eq!(convert("        x\n  y\n    \n", Conv::SpaceToTab(4)), "\t\tx\n  y\n\t\n");
+    }
+
+    #[test]
+    fn json_and_completion() {
+        let src = "{\"a\":1,\"b\":[1,2,{}],\"c\":\"x, y: {z}\"}";
+        let pretty = json_pretty(src, 2);
+        assert_eq!(pretty, "{\n  \"a\": 1,\n  \"b\": [\n    1,\n    2,\n    {}\n  ],\n  \"c\": \"x, y: {z}\"\n}");
+        assert_eq!(json_minify(&pretty), src);
+        let text = "foo foobar fooz bar foo";
+        // 末尾の foo を補完：近い順
+        assert_eq!(complete_candidates(text, 23, "foo"), vec!["fooz".to_string(), "foobar".to_string()]);
     }
 
     #[test]

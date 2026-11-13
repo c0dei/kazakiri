@@ -10,21 +10,22 @@ use super::*;
 impl App {
     /// ステータスバーの x の位置にあるもの（0 = 文字コード、1 = 改行コード）
     pub(super) fn status_hit(&self, x: f32) -> Option<u8> {
-        let (head, enc, nl, tail) = self.status_parts()?;
+        let segs = self.status_segments();
+        if segs.is_empty() {
+            return None;
+        }
         let w = self.client_size().0;
         let width = |s: &str| unsafe { self.text_width(&s.encode_utf16().collect::<Vec<_>>()) }.unwrap_or(0.0);
-        let rw = width(&format!("{head}{enc}   {nl}   {tail}")).min(w * 0.75);
-        let e0 = w - rw - 8.0 + width(&head);
-        let e1 = e0 + width(&enc);
-        let n0 = e1 + width("   ");
-        let n1 = n0 + width(&nl);
-        if (e0..e1).contains(&x) {
-            Some(0)
-        } else if (n0..n1).contains(&x) {
-            Some(1)
-        } else {
-            None
+        let total: String = segs.iter().map(|(s, _)| s.as_str()).collect();
+        let mut x0 = w - width(&total).min(w * 0.75) - 8.0;
+        for (text, kind) in &segs {
+            let x1 = x0 + width(text);
+            if kind.is_some() && (x0..x1).contains(&x) {
+                return *kind;
+            }
+            x0 = x1;
         }
+        None
     }
 
     /// クリックしたときのポップアップメニュー（使い終わったら呼び出し側が DestroyMenu する）
@@ -56,6 +57,10 @@ impl App {
                     add(conv, menu::ID_HERE_ENC_BASE + i as u32, name, cur.encoding == *enc && (cur.bom_len > 0) == *bom);
                 }
                 sub(m, conv, "変換して保存（このファイルを書き換える）");
+            } else if kind == 3 {
+                for (i, n) in menu::TAB_WIDTHS.iter().enumerate() {
+                    add(m, menu::ID_TABW_BASE + i as u32, &format!("タブの幅 {n}"), *n == self.settings.tab_width);
+                }
             } else {
                 let cur = doc.newline_name();
                 for (i, (name, _)) in menu::CONV_NEWLINES.iter().enumerate() {

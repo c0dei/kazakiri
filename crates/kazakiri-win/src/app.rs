@@ -42,6 +42,7 @@ mod dark;
 mod menubar;
 mod find_dialog;
 mod bookmarks;
+mod complete;
 mod toolbar;
 mod keys_dialog;
 mod lines;
@@ -186,6 +187,8 @@ struct App {
     bm_col0: bool,
     /// ツールバー・機能ボタンの上にあるマウス
     hover: Option<toolbar::Hover>,
+    /// 単語補完の途中（続けて押すと次の候補）
+    dabbrev: Option<complete::Dab>,
     tracking_leave: bool,
     line_h: f32,
     char_w: f32,
@@ -341,6 +344,7 @@ unsafe fn run_inner() -> std::result::Result<(), (&'static str, windows::core::E
             bm_lines: 0,
             bm_col0: false,
             hover: None,
+            dabbrev: None,
             tracking_leave: false,
             line_h,
             char_w,
@@ -861,6 +865,7 @@ impl App {
                 WM_INITMENUPOPUP => {
                     let forced = self.doc.as_ref().map(|d| d.forced_encoding());
                     self.menus.refresh(self.opts.case_sensitive, self.opts.regex, self.follow, forced, &self.recent);
+                    self.menus.refresh_clips(&clipboard::history());
                     self.menus.refresh_view(self.csv.as_ref().map(|v| (v.delim, v.header)), &self.settings);
                     (DONE, None)
                 }
@@ -948,7 +953,12 @@ impl App {
                     }
                     // ステータスバーの文字コード・改行コード
                     if y >= self.client_size().1 - self.status_base_h() {
-                        return (DONE, self.status_hit(x).map(Deferred::StatusMenu));
+                        return match self.status_hit(x) {
+                            Some(2) => (DONE, self.command(menu::ID_GOTO)),
+                            Some(4) => (DONE, self.command(menu::ID_OVERWRITE)),
+                            Some(k) => (DONE, Some(Deferred::StatusMenu(k))),
+                            None => (DONE, None),
+                        };
                     }
                     // 固定した見出し行
                     if y < self.pin_h() {
@@ -1047,6 +1057,8 @@ impl App {
                     (DONE, self.bar_mnemonic_key(wparam).map(Deferred::ShowMenu))
                 }
                 WM_SYSCHAR if self.custom_menu && self.bar_mnemonic_key(wparam).is_some() => (DONE, None),
+                // Ctrl+Space（単語補完）は文字として入れない
+                WM_CHAR if wparam.0 == 0x20 && GetKeyState(VK_CONTROL.0 as i32) < 0 => (DONE, None),
                 WM_CHAR => {
                     self.on_char(wparam.0 as u32);
                     (DONE, None)
@@ -1221,6 +1233,8 @@ impl App {
             menu::ID_BM_PREV => self.goto_bookmark(false),
             menu::ID_BM_CLEAR => self.clear_bookmarks(),
             menu::ID_BM_LIST => self.list_bookmarks(),
+            menu::ID_COMPLETE => self.complete_word(),
+            id if (menu::ID_CLIP_BASE..menu::ID_CLIP_BASE + menu::CLIP_MAX).contains(&id) => self.paste_history((id - menu::ID_CLIP_BASE) as usize),
             id if self.command_lines(id) => {}
             menu::ID_NEW => self.new_tab(),
             menu::ID_CLOSE_TAB => return self.guarded(Pending::CloseTab),
@@ -1311,6 +1325,17 @@ impl App {
                 self.clamp_top();
                 self.update_scrollbars();
                 self.update_ime_position();
+                self.invalidate();
+            }
+            menu::ID_OVERWRITE => {
+                self.overwrite = !self.overwrite;
+                self.message = format!("{}モード", if self.overwrite { "上書き" } else { "挿入" });
+                self.invalidate();
+            }
+            id if (menu::ID_TABW_BASE..menu::ID_TABW_BASE + menu::TAB_WIDTHS.len() as u32).contains(&id) => {
+                let (font, size) = (self.settings.font.clone(), self.settings.font_size);
+                self.set_text_settings(&font, size, menu::TAB_WIDTHS[(id - menu::ID_TABW_BASE) as usize]);
+                self.message = format!("タブの幅: {}", self.settings.tab_width);
                 self.invalidate();
             }
             menu::ID_ADD_NEXT => self.add_next_match(),
@@ -2390,9 +2415,10 @@ impl App {
         }
     }
 
-    /// ステータスバーの右側（ファイルの情報）を、(前, 文字コード, 改行コード, 後ろ) に分けたもの
-    fn status_parts(&self) -> Option<(String, String, String, String)> {
-        let doc = self.doc.as_ref()?;
+    /// ステータスバーの右側（ファイルの情報）を、部分に分けたもの。Some(n) の部分はクリックできる
+    /// （0 = 文字コード、1 = 改行コード、2 = 行・桁、3 = タブ幅、4 = 挿入／上書き）
+    fn status_segments(&self) -> Vec<(String, Option<u8>)> {
+        let Some(doc) = self.doc.as_ref() else { return Vec::new() };
         let p = doc.progress();
         let (lines, exact) = doc.line_count();
         let lines = if exact { group(lines) } else { format!("約{}", group(lines)) };
@@ -2407,7 +2433,6 @@ impl App {
         };
         let follow = if self.follow { "追従中   " } else { "" };
         let modified = if self.is_modified() { "変更あり   " } else { "" };
-        let overwrite = if self.overwrite { "上書き   " } else { "" };
         let enc = if doc.forced_encoding().is_some() { format!("{}（指定）", doc.encoding().name()) } else { doc.encoding().name() };
         // カーソルの行と列（列は文字数）
         let c = self.caret();
@@ -2425,8 +2450,20 @@ impl App {
             Some((l, _)) => format!("{} 行", group(l + 1)),
             None => format!("{} 行目付近", group(self.top + 1)),
         };
-        Some((format!("{overwrite}{modified}{follow}{idx}{sel}{pos} / {lines} 行   "), enc, doc.newline_name().to_string(), human_size(doc.len())))
-    
+        vec![
+            (format!("{modified}{follow}{idx}{sel}"), None),
+            (pos, Some(2)),
+            (format!(" / {lines} 行   "), None),
+            (enc, Some(0)),
+            ("   ".into(), None),
+            (doc.newline_name().to_string(), Some(1)),
+            ("   ".into(), None),
+            (format!("タブ {}", self.settings.tab_width), Some(3)),
+            ("   ".into(), None),
+            ((if self.overwrite { "上書き" } else { "挿入" }).into(), Some(4)),
+            ("   ".into(), None),
+            (human_size(doc.len()), None),
+        ]
     }
 
     unsafe fn draw_status(&self, rt: &ID2D1RenderTarget, brush: &ID2D1SolidColorBrush, w: f32, h: f32) -> Result<()> {
@@ -2442,10 +2479,7 @@ impl App {
             brush.SetColor(&self.theme.status_text);
         }
         let left = self.status_left();
-        let right = match self.status_parts() {
-            None => String::new(),
-            Some((head, enc, nl, tail)) => format!("{head}{enc}   {nl}   {tail}"),
-        };
+        let right: String = self.status_segments().into_iter().map(|(s, _)| s).collect();
         unsafe {
             // 右側（ファイルの情報）を優先し、左側（メッセージ）は残りの幅で切る
             let units: Vec<u16> = right.encode_utf16().collect();

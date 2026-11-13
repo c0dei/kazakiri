@@ -6,7 +6,29 @@ use windows::Win32::System::DataExchange::*;
 use windows::Win32::System::Memory::*;
 use windows::Win32::System::Ole::CF_UNICODETEXT;
 
+/// 履歴（新しい順）。このアプリでコピー・切り取りした文字列と、貼り付けた文字列
+static HISTORY: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+const HISTORY_MAX: usize = 20;
+/// 履歴に残す 1 件の上限
+const HISTORY_ITEM_MAX: usize = 1 << 20;
+
+pub fn remember(text: &str) {
+    if text.is_empty() || text.len() > HISTORY_ITEM_MAX {
+        return;
+    }
+    if let Ok(mut h) = HISTORY.lock() {
+        h.retain(|t| t != text);
+        h.insert(0, text.to_string());
+        h.truncate(HISTORY_MAX);
+    }
+}
+
+pub fn history() -> Vec<String> {
+    HISTORY.lock().map(|h| h.clone()).unwrap_or_default()
+}
+
 pub fn set_text(hwnd: HWND, text: &str) -> Result<()> {
+    remember(text);
     let mut units: Vec<u16> = text.encode_utf16().collect();
     units.push(0);
     unsafe {
