@@ -50,6 +50,7 @@ EmEditor の「大きいファイルが速い」体験を、買い切り不要�
 - ステータスバーの文字コード・改行コードをクリックすると、いまのファイルを開き直す／変換して上書き保存するメニューが出る（秀丸のように）
 - キー割り当ては専用のウィンドウ（ファイル → キー割り当て）で、コマンドを選んでキーを押すだけで変えられる（keys.ini は自動で書く）
 - ウィンドウの位置・大きさ・最大化は、終了時に覚えて、次の起動で戻す（settings.ini の window）。どのモニターにも掛からない位置なら既定の位置
+- 本文のフォントが等幅でない場合（Noto Sans JP など）、CSV/TSV の表示のあいだだけ、列がそろうよう既定の等幅フォント（BIZ UDゴシック → MS ゴシック → Consolas）に自動で替える。CSV でなくなれば元のフォントに戻る
 - フォントは 2 系統：本文（font / font_size）と、画面の部品＝メニュー・タブ・ツールバー・ステータスバー（ui_font / ui_font_size。既定は Yu Gothic UI → Meiryo UI → Segoe UI）。設定ダイアログで別々に変えられる
 - 設定ダイアログ（ファイル → 設定）で、外観・編集・表示の主な項目を画面から変えられる（Mica のオン／オフ、フォント、タブ幅など）
 - 設定は `%APPDATA%\kazakiri\settings.ini` に自動で保存（font, font_size, dark, whitespace, log_colors, tab_width, wrap, grep_backup, ime_inline, syntax, menubar, mica, toolbar, fkeys, ui_font, ui_font_size。テキストエディタで直接編集もできる）

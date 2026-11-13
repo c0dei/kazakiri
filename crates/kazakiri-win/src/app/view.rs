@@ -9,10 +9,15 @@ impl App {
     /// フォントを作り直す（大きさの変更など）
     pub(super) fn apply_font(&mut self) {
         let s = &self.settings;
-        let Ok(format) = (unsafe { create_format(&self.dw, &s.font, s.font_size) }) else {
+        let Ok(configured) = (unsafe { create_format(&self.dw, &s.font, s.font_size) }) else {
             self.message = "フォントを作れませんでした".into();
             return self.invalidate();
         };
+        self.font_prop = unsafe { is_proportional(&self.dw, &configured) };
+        // CSV 表示で等幅でないフォントなら、列がそろうよう既定の等幅フォントを使う
+        let over = self.font_prop && self.csv.is_some();
+        let format = if over { unsafe { create_format(&self.dw, "", s.font_size) }.unwrap_or(configured) } else { configured };
+        self.font_overridden = over;
         let (char_w, line_h) = unsafe { measure(&self.dw, &format) }.unwrap_or((s.font_size * 0.5, (s.font_size * 1.4).ceil()));
         unsafe {
             let _ = format.SetIncrementalTabStop(char_w * s.tab_width as f32);
