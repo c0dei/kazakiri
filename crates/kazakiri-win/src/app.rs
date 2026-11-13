@@ -41,7 +41,9 @@ mod rect;
 mod dark;
 mod menubar;
 mod find_dialog;
+mod keys_dialog;
 mod settings_dialog;
+mod status_menu;
 mod wrap;
 mod multi;
 use csv_view::{CsvView, Disp, Effect, SortDone, WM_SORT_DONE};
@@ -97,6 +99,11 @@ enum Deferred {
     /// 検索・置換・GREP のダイアログを開く（タブの番号）
     ShowFind(usize),
     ShowSettings,
+    ShowKeys,
+    /// ステータスバーの文字コード（0）・改行コード（1）のメニュー
+    StatusMenu(u8),
+    /// いまのファイルを変換して上書き保存してよいか確認する（メニューの ID）
+    ConfirmConvertHere(u32),
     /// 結合するファイルを選んで、出力先を決める
     Join,
     /// 外部ソートの保存先を選ぶ（降順か）
@@ -413,6 +420,10 @@ unsafe fn run_inner() -> std::result::Result<(), (&'static str, windows::core::E
             if sdlg != 0 && IsDialogMessageW(HWND(sdlg as *mut _), &msg).as_bool() {
                 continue;
             }
+            let kdlg = keys_dialog::KEYS_DLG.load(Ordering::Relaxed);
+            if kdlg != 0 && IsDialogMessageW(HWND(kdlg as *mut _), &msg).as_bool() {
+                continue;
+            }
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
@@ -526,6 +537,30 @@ unsafe fn run_deferred(hwnd: HWND, d: Deferred) {
         }
         Deferred::ShowFind(tab) => unsafe { find_dialog::show(hwnd, tab) },
         Deferred::ShowSettings => unsafe { settings_dialog::show(hwnd) },
+        Deferred::ShowKeys => unsafe { keys_dialog::show(hwnd) },
+        Deferred::StatusMenu(kind) => unsafe {
+            if let Some(Some(menu)) = with_app(|app| app.build_status_menu(kind)) {
+                let mut pt = POINT::default();
+                let _ = GetCursorPos(&mut pt);
+                let _ = TrackPopupMenu(menu, TPM_LEFTALIGN | TPM_BOTTOMALIGN, pt.x, pt.y, None, hwnd, None);
+                let _ = DestroyMenu(menu);
+            }
+        },
+        Deferred::ConfirmConvertHere(id) => {
+            let question = with_app(|app| app.convert_here_question(id)).flatten();
+            let go = match question {
+                Some(q) => {
+                    let text = wide(&q);
+                    unsafe { MessageBoxW(Some(hwnd), PCWSTR(text.as_ptr()), w!("kazakiri"), MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) == IDYES }
+                }
+                None => true,
+            };
+            if go {
+                if let Some(Some(d)) = with_app(|app| app.convert_here(id)) {
+                    unsafe { run_deferred(hwnd, d) };
+                }
+            }
+        }
         Deferred::SaveResults => {
             let suggested = with_app(|app| app.doc.as_ref().and_then(|d| d.path().map(|p| p.with_extension("results.txt")))).flatten();
             if let Some(out) = unsafe { edit::save_dialog(hwnd, suggested.or_else(|| Some(PathBuf::from("results.txt")))) } {
@@ -887,6 +922,10 @@ impl App {
                         self.tab_drag_start(x);
                         return (DONE, d);
                     }
+                    // ステータスバーの文字コード・改行コード
+                    if y >= self.client_size().1 - self.status_h() {
+                        return (DONE, self.status_hit(x).map(Deferred::StatusMenu));
+                    }
                     // 固定した見出し行
                     if y < self.pin_h() {
                         return (DONE, None);
@@ -1122,7 +1161,7 @@ impl App {
 
     unsafe fn command(&mut self, id: u32) -> Option<Deferred> {
         match id {
-            menu::ID_KEYS => self.edit_keys(),
+            menu::ID_KEYS => return Some(Deferred::ShowKeys),
             menu::ID_SETTINGS => return Some(Deferred::ShowSettings),
             menu::ID_SPLIT => {
                 if self.doc.as_ref().and_then(|d| d.path()).is_none() {
@@ -1137,6 +1176,11 @@ impl App {
                 || (menu::ID_CONV_NL_BASE..menu::ID_CONV_NL_BASE + menu::CONV_NEWLINES.len() as u32).contains(&id) =>
             {
                 return self.start_convert_save(id);
+            }
+            id if (menu::ID_HERE_ENC_BASE..menu::ID_HERE_ENC_BASE + menu::CONV_ENCODINGS.len() as u32).contains(&id)
+                || (menu::ID_HERE_NL_BASE..menu::ID_HERE_NL_BASE + menu::CONV_NEWLINES.len() as u32).contains(&id) =>
+            {
+                return Some(Deferred::ConfirmConvertHere(id));
             }
             menu::ID_NEW => self.new_tab(),
             menu::ID_CLOSE_TAB => return self.guarded(Pending::CloseTab),
@@ -2269,6 +2313,45 @@ impl App {
         }
     }
 
+    /// ステータスバーの右側（ファイルの情報）を、(前, 文字コード, 改行コード, 後ろ) に分けたもの
+    fn status_parts(&self) -> Option<(String, String, String, String)> {
+        let doc = self.doc.as_ref()?;
+        let p = doc.progress();
+        let (lines, exact) = doc.line_count();
+        let lines = if exact { group(lines) } else { format!("約{}", group(lines)) };
+        let idx = if p.done {
+            String::new()
+        } else {
+            format!("索引 {:.0}%  ", p.scanned_bytes as f64 * 100.0 / p.total_bytes.max(1) as f64)
+        };
+        let sel = match self.selection() {
+            Some((a, b)) => format!("選択 {}   ", human_size(b - a)),
+            None => String::new(),
+        };
+        let follow = if self.follow { "追従中   " } else { "" };
+        let modified = if self.is_modified() { "変更あり   " } else { "" };
+        let overwrite = if self.overwrite { "上書き   " } else { "" };
+        let enc = if doc.forced_encoding().is_some() { format!("{}（指定）", doc.encoding().name()) } else { doc.encoding().name() };
+        // カーソルの行と列（列は文字数）
+        let c = self.caret();
+        let pos = match doc.line_of_offset(c).and_then(|l| doc.line_range(l).map(|r| (l, r))) {
+            Some((l, (s, _))) if c - s <= 1 << 20 => match self.caret_column() {
+                Some((k, n, name)) => {
+                    let name = if name.is_empty() { String::new() } else { format!("「{}」", name.chars().take(24).collect::<String>()) };
+                    format!("{} 行, {}/{} 列{name}", group(l + 1), k + 1, n)
+                }
+                None => {
+                    let col = doc.decode(&doc.read(s, c)).chars().count() + 1;
+                    format!("{} 行, {} 列", group(l + 1), group(col as u64))
+                }
+            },
+            Some((l, _)) => format!("{} 行", group(l + 1)),
+            None => format!("{} 行目付近", group(self.top + 1)),
+        };
+        Some((format!("{overwrite}{modified}{follow}{idx}{sel}{pos} / {lines} 行   "), enc, doc.newline_name().to_string(), human_size(doc.len())))
+    
+    }
+
     unsafe fn draw_status(&self, rt: &ID2D1RenderTarget, brush: &ID2D1SolidColorBrush, w: f32, h: f32) -> Result<()> {
         let top = h - self.status_h();
         unsafe {
@@ -2279,43 +2362,9 @@ impl App {
             brush.SetColor(&self.theme.status_text);
         }
         let left = self.status_left();
-        let right = match &self.doc {
+        let right = match self.status_parts() {
             None => String::new(),
-            Some(doc) => {
-                let p = doc.progress();
-                let (lines, exact) = doc.line_count();
-                let lines = if exact { group(lines) } else { format!("約{}", group(lines)) };
-                let idx = if p.done {
-                    String::new()
-                } else {
-                    format!("索引 {:.0}%  ", p.scanned_bytes as f64 * 100.0 / p.total_bytes.max(1) as f64)
-                };
-                let sel = match self.selection() {
-                    Some((a, b)) => format!("選択 {}   ", human_size(b - a)),
-                    None => String::new(),
-                };
-                let follow = if self.follow { "追従中   " } else { "" };
-                let modified = if self.is_modified() { "変更あり   " } else { "" };
-                let overwrite = if self.overwrite { "上書き   " } else { "" };
-                let enc = if doc.forced_encoding().is_some() { format!("{}（指定）", doc.encoding().name()) } else { doc.encoding().name() };
-                // カーソルの行と列（列は文字数）
-                let c = self.caret();
-                let pos = match doc.line_of_offset(c).and_then(|l| doc.line_range(l).map(|r| (l, r))) {
-                    Some((l, (s, _))) if c - s <= 1 << 20 => match self.caret_column() {
-                        Some((k, n, name)) => {
-                            let name = if name.is_empty() { String::new() } else { format!("「{}」", name.chars().take(24).collect::<String>()) };
-                            format!("{} 行, {}/{} 列{name}", group(l + 1), k + 1, n)
-                        }
-                        None => {
-                            let col = doc.decode(&doc.read(s, c)).chars().count() + 1;
-                            format!("{} 行, {} 列", group(l + 1), group(col as u64))
-                        }
-                    },
-                    Some((l, _)) => format!("{} 行", group(l + 1)),
-                    None => format!("{} 行目付近", group(self.top + 1)),
-                };
-                format!("{overwrite}{modified}{follow}{idx}{sel}{pos} / {lines} 行   {enc}   {}   {}", doc.newline_name(), human_size(doc.len()))
-            }
+            Some((head, enc, nl, tail)) => format!("{head}{enc}   {nl}   {tail}"),
         };
         unsafe {
             // 右側（ファイルの情報）を優先し、左側（メッセージ）は残りの幅で切る

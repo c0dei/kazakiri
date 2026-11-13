@@ -308,7 +308,7 @@ unsafe fn create(owner: HWND) {
         put(ID_LOG, w!("BUTTON"), CHECKS[4].1, check, 0, 28, 336, 420, 22);
         put(ID_SYN, w!("BUTTON"), CHECKS[5].1, check, 0, 28, 362, 420, 22);
         put(ID_BACKUP, w!("BUTTON"), CHECKS[6].1, check, 0, 28, 416, 420, 22);
-        put(ID_KEYS, w!("BUTTON"), "キー割り当てを編集...(&K)", push, 0, 16, 454, 200, 28);
+        put(ID_KEYS, w!("BUTTON"), "キー割り当て...(&K)", push, 0, 16, 454, 200, 28);
         put(ID_CLOSE, w!("BUTTON"), "閉じる", BS_DEFPUSHBUTTON as u32 | WS_TABSTOP.0, 0, 366, 454, 90, 28);
         let (bg, edit_bg) = (CreateSolidBrush(rgb_ref(&super::theme::DARK.gutter_bg)), CreateSolidBrush(rgb_ref(&super::theme::DARK.bg)));
         BG_BRUSH.store(bg.0 as isize, Ordering::Relaxed);

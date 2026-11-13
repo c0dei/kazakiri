@@ -69,6 +69,9 @@ pub const ID_ENC_BASE: u32 = 400;
 pub const ID_CONV_ENC_BASE: u32 = 700;
 /// 「改行コードを変えて保存」の選択肢（CONV_NEWLINES の並びと対応）
 pub const ID_CONV_NL_BASE: u32 = 720;
+/// ステータスバーのメニューから、いまのファイルを書き換える変換（CONV_* と同じ並び）
+pub const ID_HERE_ENC_BASE: u32 = 740;
+pub const ID_HERE_NL_BASE: u32 = 760;
 /// (表示名, 文字コード, BOM を付ける)
 pub const CONV_ENCODINGS: [(&str, &Encoding, bool); 6] = [
     ("UTF-8", encoding_rs::UTF_8, false),
@@ -156,7 +159,7 @@ pub unsafe fn build(km: &Keymap) -> Result<Menus> {
         item(km, file, ID_SPLIT, "ファイルを分割(&L)...")?;
         item(km, file, ID_JOIN, "ファイルを結合(&J)...")?;
         item(km, file, ID_SETTINGS, "設定(&P)...")?;
-        item(km, file, ID_KEYS, "キー割り当てを編集(&K)...")?;
+        item(km, file, ID_KEYS, "キー割り当て(&K)...")?;
         item(km, file, ID_EXIT, "終了(&X)")?;
         popup(bar, file, "ファイル(&F)")?;
 
