@@ -394,9 +394,9 @@ impl App {
                     let (x, y) = (pt.x as f32 / scale, pt.y as f32 / scale - self.chrome_h());
                     let (cw, ch) = self.client_size();
                     let _ = cw;
-                    // 本文の中だけ I ビーム。メニュー・ツールバー・タブ・行番号・結果一覧・ステータスバーは矢印、ボタンは手
+                    // 本文の中だけ I ビーム。ツールバー・タブ・行番号・結果一覧・ステータスバー・機能ボタンは、ボタンも含めて通常の矢印
                     let in_text = self.diffview.is_none() && y >= 0.0 && x >= self.gutter_width() && y < ch - self.status_h() - self.panel_h();
-                    let id = if self.hover_at(x, y).is_some() { IDC_HAND } else if in_text { IDC_IBEAM } else { IDC_ARROW };
+                    let id = if in_text { IDC_IBEAM } else { IDC_ARROW };
                     if let Ok(c) = LoadCursorW(None, id) {
                         SetCursor(Some(c));
                     }
