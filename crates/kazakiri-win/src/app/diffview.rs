@@ -137,6 +137,11 @@ impl App {
     }
 
     /// 分割表示：同じファイルを左右 2 つの窓で見る（もう一度で閉じる）
+    /// 分割表示（同じファイルを左右 2 窓）を開いているか
+    pub(super) fn is_split_view(&self) -> bool {
+        self.diffview.as_ref().is_some_and(|v| v.split)
+    }
+
     pub(super) fn toggle_split_view(&mut self) {
         if self.diffview.as_ref().is_some_and(|v| v.split) {
             self.diffview = None;
