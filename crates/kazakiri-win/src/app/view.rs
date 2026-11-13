@@ -55,7 +55,7 @@ impl App {
     }
 
     /// タイトルバーをテーマに合わせる（Windows 10 20H1 以降）
-    pub(super) fn apply_title_theme(&self) {
+    pub(super) fn apply_title_theme(&mut self) {
         let v = BOOL::from(self.settings.dark);
         unsafe {
             let _ = DwmSetWindowAttribute(self.hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &v as *const BOOL as *const _, size_of::<BOOL>() as u32);
@@ -65,7 +65,10 @@ impl App {
             let backdrop: i32 = if self.settings.mica { 2 } else { 1 };
             let m = MARGINS { cxLeftWidth: -1, cxRightWidth: -1, cyTopHeight: -1, cyBottomHeight: -1 };
             let _ = DwmExtendFrameIntoClientArea(self.hwnd, &m);
-            let _ = DwmSetWindowAttribute(self.hwnd, DWMWA_SYSTEMBACKDROP_TYPE, &backdrop as *const i32 as *const _, size_of::<i32>() as u32);
+            let r = DwmSetWindowAttribute(self.hwnd, DWMWA_SYSTEMBACKDROP_TYPE, &backdrop as *const i32 as *const _, size_of::<i32>() as u32);
+            if let (Err(e), true) = (r, self.settings.mica) {
+                self.message = format!("Mica を適用できませんでした（Windows 11 22H2 以降が必要です）: {e}");
+            }
         }
     }
 
