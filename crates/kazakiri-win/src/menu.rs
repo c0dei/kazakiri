@@ -22,6 +22,35 @@ pub const ID_KEYS: u32 = 112;
 pub const ID_SPLIT: u32 = 113;
 pub const ID_JOIN: u32 = 114;
 pub const ID_SETTINGS: u32 = 115;
+pub const ID_LINE_DUP: u32 = 800;
+pub const ID_LINE_DEL: u32 = 801;
+pub const ID_LINE_UP: u32 = 802;
+pub const ID_LINE_DOWN: u32 = 803;
+pub const ID_DEL_BOL: u32 = 804;
+pub const ID_DEL_EOL: u32 = 805;
+pub const ID_INDENT: u32 = 806;
+pub const ID_UNINDENT: u32 = 807;
+pub const ID_TRIM: u32 = 808;
+pub const ID_DEDUPE: u32 = 809;
+pub const ID_SORT_LINES_ASC: u32 = 810;
+pub const ID_SORT_LINES_DESC: u32 = 811;
+pub const ID_INSERT_DATE: u32 = 812;
+pub const ID_INSERT_DATETIME: u32 = 813;
+/// 「変換」メニューの項目名（app/lines.rs の CONVS の並びと対応）
+pub const CONV_NAMES: [&str; 10] = [
+    "大文字にする(&U)",
+    "小文字にする(&L)",
+    "全角 → 半角（英数字・記号）(&H)",
+    "半角 → 全角（英数字・記号）(&Z)",
+    "全角カタカナ → 半角カタカナ(&K)",
+    "半角カタカナ → 全角カタカナ(&J)",
+    "ひらがな → カタカナ(&A)",
+    "カタカナ → ひらがな(&G)",
+    "タブ → 空白(&S)",
+    "行頭の空白 → タブ(&T)",
+];
+/// 「変換」メニューの項目（CONV_NAMES の並びと対応）
+pub const ID_CONV_BASE: u32 = 830;
 pub const ID_COPY: u32 = 200;
 pub const ID_SELECT_ALL: u32 = 201;
 pub const ID_UNDO: u32 = 202;
@@ -173,7 +202,38 @@ pub unsafe fn build(km: &Keymap) -> Result<Menus> {
         item(km, edit, ID_SELECT_ALL, "すべて選択(&A)\tCtrl+A")?;
         sep(edit)?;
         item(km, edit, ID_ADD_NEXT, "次の同じ文字列を選択に追加(&D)\tCtrl+D")?;
+        sep(edit)?;
+        let lines = CreatePopupMenu()?;
+        item(km, lines, ID_LINE_DUP, "行を複製(&D)\tCtrl+Shift+D")?;
+        item(km, lines, ID_LINE_DEL, "行を削除(&K)\tCtrl+Shift+K")?;
+        item(km, lines, ID_LINE_UP, "行を上へ移動(&U)\tCtrl+Shift+↑")?;
+        item(km, lines, ID_LINE_DOWN, "行を下へ移動(&N)\tCtrl+Shift+↓")?;
+        sep(lines)?;
+        item(km, lines, ID_DEL_BOL, "行頭まで削除(&B)")?;
+        item(km, lines, ID_DEL_EOL, "行末まで削除(&E)")?;
+        sep(lines)?;
+        item(km, lines, ID_INDENT, "インデント(&I)\tTab（複数行を選択）")?;
+        item(km, lines, ID_UNINDENT, "逆インデント(&O)\tShift+Tab")?;
+        sep(lines)?;
+        item(km, lines, ID_TRIM, "行末の空白を削除(&T)")?;
+        item(km, lines, ID_DEDUPE, "重複した行を削除(&P)")?;
+        item(km, lines, ID_SORT_LINES_ASC, "行を昇順に並べ替え(&A)")?;
+        item(km, lines, ID_SORT_LINES_DESC, "行を降順に並べ替え(&Z)")?;
+        popup(edit, lines, "行の操作(&L)")?;
+        let insert = CreatePopupMenu()?;
+        item(km, insert, ID_INSERT_DATE, "日付(&D)")?;
+        item(km, insert, ID_INSERT_DATETIME, "日付と時刻(&T)")?;
+        popup(edit, insert, "挿入(&I)")?;
         popup(bar, edit, "編集(&E)")?;
+
+        let convert = CreatePopupMenu()?;
+        for (i, name) in CONV_NAMES.iter().enumerate() {
+            if i == 2 || i == 4 || i == 8 {
+                sep(convert)?;
+            }
+            item(km, convert, ID_CONV_BASE + i as u32, name)?;
+        }
+        popup(bar, convert, "変換(&C)")?;
 
         let search = CreatePopupMenu()?;
         item(km, search, ID_FIND, "検索(&F)...\tCtrl+F")?;
