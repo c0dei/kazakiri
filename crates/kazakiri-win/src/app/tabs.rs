@@ -32,6 +32,8 @@ pub(super) struct Tab {
     follow: bool,
     stick_bottom: bool,
     pending_goto: Option<(u64, u64, u64)>,
+    bookmarks: std::collections::BTreeSet<u64>,
+    bm_lines: u64,
     /// 終了の確認で「保存しない」を選んだ（終了の手続きの間だけ使う）
     discard: bool,
 }
@@ -80,6 +82,8 @@ impl App {
             follow: std::mem::take(&mut self.follow),
             stick_bottom: std::mem::take(&mut self.stick_bottom),
             pending_goto: self.pending_goto.take(),
+            bookmarks: std::mem::take(&mut self.bookmarks),
+            bm_lines: std::mem::take(&mut self.bm_lines),
             discard: std::mem::take(&mut self.discard),
         }
     }
@@ -96,6 +100,8 @@ impl App {
         self.follow = t.follow;
         self.stick_bottom = t.stick_bottom;
         self.pending_goto = t.pending_goto;
+        self.bookmarks = t.bookmarks;
+        self.bm_lines = t.bm_lines;
         self.discard = t.discard;
     }
 

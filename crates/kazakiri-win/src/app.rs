@@ -41,6 +41,7 @@ mod rect;
 mod dark;
 mod menubar;
 mod find_dialog;
+mod bookmarks;
 mod keys_dialog;
 mod lines;
 mod settings_dialog;
@@ -177,6 +178,11 @@ struct App {
     gfx: Option<Gfx>,
     menus: Menus,
     keymap: keymap::Keymap,
+    /// ブックマークの行（0 始まり）と、そのときの総行数
+    bookmarks: std::collections::BTreeSet<u64>,
+    bm_lines: u64,
+    /// 直前の編集が行頭から始まったか（ブックマークのずらし方に使う）
+    bm_col0: bool,
     line_h: f32,
     char_w: f32,
     /// いま表示している Document（編集のたびに editor から取り直す）
@@ -327,6 +333,9 @@ unsafe fn run_inner() -> std::result::Result<(), (&'static str, windows::core::E
             gfx: None,
             menus,
             keymap,
+            bookmarks: Default::default(),
+            bm_lines: 0,
+            bm_col0: false,
             line_h,
             char_w,
             doc: None,
@@ -1183,6 +1192,11 @@ impl App {
             {
                 return Some(Deferred::ConfirmConvertHere(id));
             }
+            menu::ID_BM_TOGGLE => self.toggle_bookmark(),
+            menu::ID_BM_NEXT => self.goto_bookmark(true),
+            menu::ID_BM_PREV => self.goto_bookmark(false),
+            menu::ID_BM_CLEAR => self.clear_bookmarks(),
+            menu::ID_BM_LIST => self.list_bookmarks(),
             id if self.command_lines(id) => {}
             menu::ID_NEW => self.new_tab(),
             menu::ID_CLOSE_TAB => return self.guarded(Pending::CloseTab),
@@ -2091,6 +2105,23 @@ impl App {
                 let num = format!("{:>width$}", group(line.number + 1), width = digits);
                 brush.SetColor(&self.theme.gutter_text);
                 self.draw_str(&rt, brush, &num, self.char_w * 0.5, y, gutter)?;
+            }
+            // ブックマークの印（行番号の欄の左端に帯）
+            if !self.bookmarks.is_empty() {
+                brush.SetColor(&theme::accent(self.settings.dark));
+                if self.wrap_on() {
+                    for &(y, number) in &wrapped_numbers {
+                        if self.bookmarks.contains(&number) {
+                            rt.FillRectangle(&rect(0.0, y + 1.0, 4.0, y + self.line_h - 1.0), brush);
+                        }
+                    }
+                }
+                for (i, line) in lines_nowrap.iter().enumerate() {
+                    if self.bookmarks.contains(&line.number) {
+                        let y = i as f32 * self.line_h;
+                        rt.FillRectangle(&rect(0.0, y + 1.0, 4.0, y + self.line_h - 1.0), brush);
+                    }
+                }
             }
             if lines.is_empty() && self.doc.is_some() {
                 brush.SetColor(&self.theme.dim);
