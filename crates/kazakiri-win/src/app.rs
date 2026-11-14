@@ -782,6 +782,10 @@ impl App {
                         self.tab_double_click(x);
                         return (DONE, None);
                     }
+                    // 検索・置換バーの上は、素早い 2 回目のクリックも 1 回目と同じ操作（本文の単語選択にしない）
+                    if self.find_bar_click(x, y) {
+                        return (DONE, None);
+                    }
                     if y < self.pin_h() {
                         self.header_click(x);
                         return (DONE, None);
