@@ -71,6 +71,11 @@ impl Editor {
         *self = Editor::new(doc);
     }
 
+    /// 編集のたびに変わる番号（元に戻すと、その時点の番号に戻る）
+    pub fn version(&self) -> u64 {
+        self.version
+    }
+
     pub fn is_modified(&self) -> bool {
         self.version != self.saved_version
     }

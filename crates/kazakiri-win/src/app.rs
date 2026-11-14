@@ -67,6 +67,7 @@ mod dark;
 mod find_dialog;
 mod bookmarks;
 mod diffview;
+mod mdview;
 mod markers;
 mod complete;
 mod toolbar;
@@ -155,6 +156,8 @@ enum Deferred {
     ExternalSort(bool),
     /// 結果の一覧の保存先を選ぶ
     SaveResults,
+    /// Markdown を HTML にして保存する先を選ぶ
+    ExportHtml,
 }
 
 impl Gfx {
@@ -181,6 +184,8 @@ struct Gfx {
     brush: ID2D1SolidColorBrush,
     /// 文字の色を変える範囲用（空白の印、ERROR、WARN、DEBUG）
     effects: Vec<IUnknown>,
+    /// Markdown のプレビュー用：リンクの色、コードの色、構文の色（文字列・数・予約語・コメント・タグ・キー）
+    md: Vec<IUnknown>,
 }
 
 /// 実行中の検索
@@ -258,6 +263,8 @@ struct App {
     markers: Vec<markers::Marker>,
     /// 差分表示（左右に並べた比較）
     diffview: Option<diffview::DiffView>,
+    /// Markdown のプレビュー（分割／デザインビュー）
+    md: Option<mdview::MdView>,
     tracking_leave: bool,
     line_h: f32,
     char_w: f32,
@@ -427,8 +434,14 @@ impl App {
                     let (cw, ch) = self.client_size();
                     let _ = cw;
                     // 本文の中だけ I ビーム。ツールバー・タブ・行番号・結果一覧・ステータスバー・機能ボタンは、ボタンも含めて通常の矢印
-                    let in_text = self.diffview.is_none() && y >= 0.0 && x >= self.gutter_width() && y < ch - self.status_h() - self.panel_h();
-                    let id = if in_text { IDC_IBEAM } else { IDC_ARROW };
+                    let in_text = self.diffview.is_none() && !self.md_hit(x, y) && y >= 0.0 && x >= self.gutter_width() && y < ch - self.status_h() - self.panel_h();
+                    let id = if in_text {
+                        IDC_IBEAM
+                    } else if self.md_link_under(x, y) {
+                        IDC_HAND
+                    } else {
+                        IDC_ARROW
+                    };
                     if let Ok(c) = LoadCursorW(None, id) {
                         SetCursor(Some(c));
                     }
@@ -436,7 +449,7 @@ impl App {
                 }
                 WM_RBUTTONDOWN => {
                     let (x, y) = self.mouse_pos(lparam);
-                    if self.diffview.is_none() && y >= 0.0 && y < self.text_height() && x >= self.gutter_width() {
+                    if self.diffview.is_none() && !self.md_hit(x, y) && y >= 0.0 && y < self.text_height() && x >= self.gutter_width() {
                         // 選択の外を右クリックしたら、そこへカーソルを移す（選択の中なら、そのまま）
                         let inside = self.doc.clone().and_then(|d| {
                             let off = self.offset_at(&d, x, y)?;
@@ -455,7 +468,7 @@ impl App {
                     let _ = ScreenToClient(self.hwnd, &mut pt);
                     let scale = GetDpiForWindow(self.hwnd) as f32 / 96.0;
                     let (x, y) = (pt.x as f32 / scale, pt.y as f32 / scale - self.chrome_h());
-                    if self.diffview.is_none() && y >= 0.0 && y < self.text_height() && x >= self.gutter_width() {
+                    if self.diffview.is_none() && !self.md_hit(x, y) && y >= 0.0 && y < self.text_height() && x >= self.gutter_width() {
                         (DONE, Some(Deferred::ContextMenu))
                     } else {
                         (None, None)
@@ -592,10 +605,17 @@ impl App {
                     let forced = self.doc.as_ref().map(|d| d.forced_encoding());
                     self.menus.refresh(self.opts.case_sensitive, self.opts.regex, self.follow, forced, &self.recent);
                     self.menus.refresh_clips(&clipboard::history());
-                    self.menus.refresh_view(self.csv.as_ref().map(|v| (v.delim, v.header)), self.is_split_view(), [self.diff_ign_edge, self.diff_ign_case, self.split_sync, self.csv_letters, self.cell_mode], &self.settings);
+                    self.menus.refresh_view(self.csv.as_ref().map(|v| (v.delim, v.header)), self.is_split_view(), [self.diff_ign_edge, self.diff_ign_case, self.split_sync, self.csv_letters, self.cell_mode], (self.md_mode() == Some(mdview::MdMode::Split), self.md_mode() == Some(mdview::MdMode::Design)), &self.settings);
                     (DONE, None)
                 }
                 WM_COMMAND => (DONE, self.command(loword(wparam.0))),
+                WM_VSCROLL if self.md_mode() == Some(mdview::MdMode::Design) => {
+                    let code = SCROLLBAR_COMMAND(loword(wparam.0) as i32);
+                    let mut si = SCROLLINFO { cbSize: size_of::<SCROLLINFO>() as u32, fMask: SIF_TRACKPOS, ..Default::default() };
+                    let _ = GetScrollInfo(self.hwnd, SB_VERT, &mut si);
+                    self.md_vscroll(code, si.nTrackPos);
+                    (DONE, None)
+                }
                 WM_VSCROLL => {
                     let code = SCROLLBAR_COMMAND(loword(wparam.0) as i32);
                     let page = self.visible_lines() as i64;
@@ -622,8 +642,8 @@ impl App {
                         SB_LINELEFT => self.hscroll_by(-self.char_w * 4.0),
                         SB_LINERIGHT => self.hscroll_by(self.char_w * 4.0),
                         // 1 ページ = 画面の幅（長い行を、画面の幅ずつ読み進められる）
-                        SB_PAGELEFT => self.hscroll_by(-(self.client_size().0 - self.gutter_width()).max(self.char_w * 40.0)),
-                        SB_PAGERIGHT => self.hscroll_by((self.client_size().0 - self.gutter_width()).max(self.char_w * 40.0)),
+                        SB_PAGELEFT => self.hscroll_by(-(self.editor_w() - self.gutter_width()).max(self.char_w * 40.0)),
+                        SB_PAGERIGHT => self.hscroll_by((self.editor_w() - self.gutter_width()).max(self.char_w * 40.0)),
                         SB_THUMBTRACK | SB_THUMBPOSITION => {
                             let mut si = SCROLLINFO { cbSize: size_of::<SCROLLINFO>() as u32, fMask: SIF_TRACKPOS, ..Default::default() };
                             let _ = GetScrollInfo(self.hwnd, SB_HORZ, &mut si);
@@ -641,7 +661,9 @@ impl App {
                     let mut pt = POINT { x: loword(lparam.0 as usize) as i16 as i32, y: hiword(lparam.0 as usize) as i16 as i32 };
                     let _ = ScreenToClient(self.hwnd, &mut pt);
                     let scale = GetDpiForWindow(self.hwnd) as f32 / 96.0;
-                    if self.diffview.is_some() {
+                    if self.md_hit(pt.x as f32 / scale, pt.y as f32 / scale - self.chrome_h()) {
+                        self.md_wheel(delta);
+                    } else if self.diffview.is_some() {
                         self.diff_wheel(pt.x as f32 / scale, -delta * 3 / 120);
                     } else if GetKeyState(VK_CONTROL.0 as i32) < 0 {
                         // Ctrl+ホイールで文字の大きさ
@@ -670,6 +692,9 @@ impl App {
                         let d = self.tab_click(x, false);
                         self.tab_drag_start(x);
                         return (DONE, d);
+                    }
+                    if self.md_hit(x, y) {
+                        return (DONE, self.md_click(x, y));
                     }
                     if self.diffview.is_some() {
                         self.diff_focus_at(x);

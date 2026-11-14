@@ -34,7 +34,11 @@ impl App {
                 mk(&t.syn_tag)?,
                 mk(&t.syn_key)?,
             ];
-            self.gfx = Some(Gfx { target, brush, effects });
+            let md = vec![mk(&theme::accent(self.settings.dark))?, mk(&t.syn_tag)?, mk(&t.syn_str)?, mk(&t.syn_num)?, mk(&t.syn_kw)?, mk(&t.syn_comment)?, mk(&t.syn_tag)?, mk(&t.syn_key)?];
+            self.gfx = Some(Gfx { target, brush, effects, md });
+            if let Some(v) = &self.md {
+                v.reset();
+            }
             // レイアウトは古いブラシを指しているので作り直す
             self.layout_cache.borrow_mut().clear();
         }
@@ -83,6 +87,15 @@ impl App {
             let pin = self.pin_h();
             if pin > 0.0 {
                 self.draw_pinned_header(&rt, brush, w)?;
+            }
+            // デザインビュー：本文の代わりに整形した Markdown を描く
+            if self.md_mode() == Some(mdview::MdMode::Design) {
+                rt.SetTransform(&Matrix3x2::translation(0.0, self.chrome_h()));
+                self.draw_markdown(&rt, brush)?;
+                self.draw_status(&rt, brush, w, h)?;
+                rt.SetTransform(&Matrix3x2::identity());
+                self.draw_tip(&rt, brush, w)?;
+                return rt.EndDraw(None, None);
             }
             // 差分表示：本文の代わりに左右の比較を描く
             if self.diffview.is_some() {
@@ -200,6 +213,10 @@ impl App {
 
             // 結果一覧とステータスバーは、見出し行の分を含めた位置に描く
             rt.SetTransform(&Matrix3x2::translation(0.0, self.chrome_h()));
+            // 分割のプレビュー：エディタの右半分に重ねる
+            if self.md_mode() == Some(mdview::MdMode::Split) {
+                self.draw_markdown(&rt, brush)?;
+            }
             self.draw_panel(&rt, brush, w, text_h + pin)?;
             self.draw_status(&rt, brush, w, h)?;
             self.draw_prompt_bar(&rt, brush, w, h)?;

@@ -97,6 +97,7 @@ impl App {
             self.message = "行数が多すぎて比較できません（300 万行まで）".into();
             return self.invalidate();
         }
+        self.md_close();
         let a_title = self.tab_title(self.active);
         let b_title = self.tab_title(other);
         self.message = "差分を計算しています…".into();
@@ -150,6 +151,7 @@ impl App {
             return self.invalidate();
         }
         let Some(doc) = self.doc.clone() else { return };
+        self.md_close();
         let title = self.tab_title(self.active);
         let top = self.top as usize;
         self.diffview = Some(DiffView { a: doc.clone(), b: doc, a_title: title.clone(), b_title: title, rows: Vec::new(), changes: Vec::new(), top, split: true, top_b: top, focus: 1 });

@@ -33,6 +33,9 @@ impl App {
             menu::ID_BM_LIST => self.list_bookmarks(),
             menu::ID_DIFF => return self.diff_command(),
             menu::ID_SPLIT_VIEW => self.toggle_split_view(),
+            menu::ID_MD_SPLIT => self.md_toggle(mdview::MdMode::Split),
+            menu::ID_MD_DESIGN => self.md_toggle(mdview::MdMode::Design),
+            menu::ID_MD_EXPORT => return Some(Deferred::ExportHtml),
             id if (menu::ID_DIFF_TAB_BASE..menu::ID_DIFF_TAB_BASE + 64).contains(&id) => self.start_diff((id - menu::ID_DIFF_TAB_BASE) as usize),
             id if (menu::ID_TRAY_ACTIVATE..=menu::ID_TRAY_REMOVE).contains(&id) || (menu::ID_TRAY_FOLDER_BASE..menu::ID_TRAY_FOLDER_BASE + 10).contains(&id) || (menu::ID_TRAY_TAB_BASE..menu::ID_TRAY_TAB_BASE + 20).contains(&id) => {
                 if let Some(r) = self.command_tray(id) {

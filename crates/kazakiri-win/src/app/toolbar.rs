@@ -90,6 +90,9 @@ const MODES: &[Option<(&str, u32, &str)>] = &[
     Some(("列フィルタ", menu::ID_FILTER, "CSV/TSV：対象の列（見出しをクリックして選ぶ）の条件で行を絞り込む")),
     None,
     Some(("行フィルター", menu::ID_FILTER_LINES, "検索語を入力して、一致した行だけを新しいタブに出す (Ctrl+Shift+L)")),
+    None,
+    Some(("MDプレビュー", menu::ID_MD_SPLIT, "Markdown を右に整形して並べて表示 (Ctrl+Shift+V)")),
+    Some(("デザインビュー", menu::ID_MD_DESIGN, "Markdown を整形して表示（編集には Esc で戻る） (Ctrl+Shift+G)")),
 ];
 
 const BTN_W: f32 = 30.0;
@@ -194,6 +197,8 @@ impl App {
             menu::ID_WHITESPACE => self.settings.whitespace,
             menu::ID_CSV => self.csv.is_some(),
             menu::ID_DARK => self.settings.dark,
+            menu::ID_MD_SPLIT => self.md_mode() == Some(mdview::MdMode::Split),
+            menu::ID_MD_DESIGN => self.md_mode() == Some(mdview::MdMode::Design),
             _ => false,
         }
     }
