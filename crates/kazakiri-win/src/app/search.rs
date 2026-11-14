@@ -145,7 +145,7 @@ impl App {
         self.input = match p {
             Prompt::GotoLine => String::new(),
             // 対象の列（カーソルのある列）を入れておく。「: 」は「含む」
-            Prompt::ColumnFilter => match self.caret_column() {
+            Prompt::ColumnFilter => match self.target_column() {
                 Some((col, _, _)) => format!("{} : ", col + 1),
                 None => self.last_filter.clone(),
             },

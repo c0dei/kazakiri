@@ -114,6 +114,10 @@ pub const ID_SPLIT_SYNC: u32 = 920;
 pub const ID_CSV_LETTERS: u32 = 921;
 pub const ID_DIFF_TAB_BASE: u32 = 1000;
 pub const ID_MODEBAR: u32 = 922;
+pub const ID_COLPICK: u32 = 923;
+pub const ID_COL_FOLLOW: u32 = 924;
+/// 対象の列を選ぶメニューの項目（列番号 0 から 199）
+pub const ID_COL_BASE: u32 = 1200;
 pub const ID_TRAY_ACTIVATE: u32 = 950;
 pub const ID_TRAY_NEW: u32 = 951;
 pub const ID_TRAY_NEW_PASTE: u32 = 952;
@@ -399,6 +403,7 @@ pub unsafe fn build(km: &Keymap) -> Result<Menus> {
         let csv = CreatePopupMenu()?;
         item(km, csv, ID_CSV, "CSV/TSV を表として表示(&C)\tCtrl+Shift+C")?;
         item(km, csv, ID_CSV_HEADER, "1 行目は見出し(&H)")?;
+        item(km, csv, ID_COLPICK, "対象の列を選ぶ（並べ替え・列フィルタ）(&T)...")?;
         item(km, csv, ID_CSV_LETTERS, "列の位置を A, B, C… で表示(&L)")?;
         sep(csv)?;
         for (i, (name, _)) in DELIMS.iter().enumerate() {

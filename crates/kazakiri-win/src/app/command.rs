@@ -39,6 +39,29 @@ impl App {
                     return r;
                 }
             }
+            menu::ID_COLPICK => {
+                if self.csv.is_some() {
+                    return Some(Deferred::ColMenu);
+                }
+                self.message = "対象の列を選べるのは CSV/TSV モードのときです（Ctrl+Shift+C）".into();
+                self.invalidate();
+            }
+            menu::ID_COL_FOLLOW => {
+                if let Some(v) = &mut self.csv {
+                    v.target = None;
+                }
+                self.message = "対象の列を、カーソルのある列に合わせます".into();
+                self.invalidate();
+            }
+            id if (menu::ID_COL_BASE..menu::ID_COL_BASE + 200).contains(&id) => {
+                let col = (id - menu::ID_COL_BASE) as usize;
+                if let Some(v) = &mut self.csv {
+                    v.target = Some(col);
+                }
+                let name = self.csv_column_names(usize::MAX).get(col).cloned().unwrap_or_default();
+                self.message = format!("対象の列: {} 列目{}", col + 1, if name.is_empty() { String::new() } else { format!("「{name}」") });
+                self.invalidate();
+            }
             menu::ID_FILTER_LINES => self.start_filter_lines(),
             menu::ID_DIFF_IGN_EDGE => self.diff_ign_edge = !self.diff_ign_edge,
             menu::ID_DIFF_IGN_CASE => self.diff_ign_case = !self.diff_ign_case,

@@ -135,7 +135,7 @@ impl App {
             let lines_nowrap: &[Line] = if self.wrap_on() { &[] } else { &lines };
             self.csv_measure(lines_nowrap);
             let generation = self.csv.as_ref().map_or(0, |v| v.generation.get());
-            let caret_col = self.caret_column().map(|(c, _, _)| c);
+            let caret_col = self.target_column().map(|(c, _, _)| c);
             let mut old = std::mem::take(&mut *self.layout_cache.borrow_mut());
             let mut cache = HashMap::with_capacity(lines.len());
             for (i, line) in lines_nowrap.iter().enumerate() {

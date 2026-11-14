@@ -36,11 +36,13 @@ pub(super) struct CsvView {
     widths: RefCell<Vec<usize>>,
     /// 幅が変わったら増える（描画済みのレイアウトを作り直す目印）
     pub generation: Cell<u64>,
+    /// 並べ替え・列フィルタの対象の列（0 始まり）。None ならカーソルのある列
+    pub target: Option<usize>,
 }
 
 impl CsvView {
     pub fn new(delim: char) -> CsvView {
-        CsvView { delim, header: true, widths: RefCell::new(Vec::new()), generation: Cell::new(0) }
+        CsvView { delim, header: true, widths: RefCell::new(Vec::new()), generation: Cell::new(0), target: None }
     }
 
     /// 行を見て列の幅を広げる。広がったら true
@@ -396,7 +398,7 @@ impl App {
     /// 外部ソート：`out` に、並べ替えた結果を書き出す（終わったら開く）
     pub(super) fn start_external_sort(&mut self, out: PathBuf, desc: bool) {
         let (Some((delim, header)), Some(doc)) = (self.csv.as_ref().map(|v| (v.delim, v.header)), self.doc.clone()) else { return };
-        let Some((col, _, name)) = self.caret_column() else { return };
+        let Some((col, _, name)) = self.target_column() else { return };
         if doc.path().is_some_and(|p| p == out.as_path()) {
             self.message = "元のファイルとは別の名前で保存してください".into();
             return self.invalidate();
@@ -551,9 +553,45 @@ impl App {
         self.sel = Some((off, off));
         self.goal_x = None;
         if let Some((col, _, name)) = self.caret_column() {
+            if let Some(v) = &mut self.csv {
+                v.target = Some(col);
+            }
             self.message = format!("対象の列: {} 列目{}（「列で昇順／降順」「列フィルタ」はこの列に対して行います）", col + 1, if name.is_empty() { String::new() } else { format!("「{name}」") });
         }
         self.invalidate();
+    }
+
+    /// 並べ替え・列フィルタの対象の列：(列, 列数, 見出しの名前)。明示的に選んでいればその列、なければカーソルのある列
+    pub(super) fn target_column(&self) -> Option<(usize, usize, String)> {
+        let v = self.csv.as_ref()?;
+        let Some(col) = v.target else { return self.caret_column() };
+        let names = self.csv_column_names(usize::MAX);
+        let doc = self.doc.as_ref()?;
+        let total = doc.lines(0, 1).first().map_or(0, |l| csv::split_fields(&l.text, v.delim).len());
+        Some((col, total.max(col + 1), names.get(col).cloned().unwrap_or_default()))
+    }
+
+    /// 対象の列を選ぶメニュー（使い終わったら呼び出し側が DestroyMenu する）
+    pub(super) unsafe fn build_col_menu(&self) -> Option<HMENU> {
+        let v = self.csv.as_ref()?;
+        let (cur, total, _) = self.target_column()?;
+        unsafe {
+            let m = CreatePopupMenu().ok()?;
+            let w = wide("カーソルのある列に合わせる(&C)");
+            let _ = AppendMenuW(m, MF_STRING | if v.target.is_none() { MF_CHECKED } else { MF_UNCHECKED }, menu::ID_COL_FOLLOW as usize, PCWSTR(w.as_ptr()));
+            let _ = AppendMenuW(m, MF_SEPARATOR, 0, PCWSTR::null());
+            let names = self.csv_column_names(usize::MAX);
+            for i in 0..total.min(200) {
+                let label = match names.get(i) {
+                    Some(n) if !n.is_empty() => format!("{}: {}", i + 1, n.replace('&', "&&")),
+                    _ => format!("{} 列目", i + 1),
+                };
+                let w = wide(&label);
+                let checked = v.target == Some(i) || (v.target.is_none() && i == cur);
+                let _ = AppendMenuW(m, MF_STRING | if checked && v.target.is_some() { MF_CHECKED } else { MF_UNCHECKED }, (menu::ID_COL_BASE + i as u32) as usize, PCWSTR(w.as_ptr()));
+            }
+            Some(m)
+        }
     }
 
     /// 見出し行の各列の名前（最大 `max` 個）
@@ -575,7 +613,7 @@ impl App {
         if !self.check_editable() {
             return;
         }
-        let Some((col, _, name)) = self.caret_column() else { return };
+        let Some((col, _, name)) = self.target_column() else { return };
         let opts = SortOptions { column: col, delim, descending: desc, header };
         // 行が多すぎてメモリに載らないときは、並べ替えた結果を別のファイルへ書き出す（外部ソート）
         if doc.line_count().0 > csv::SORT_LIMIT {

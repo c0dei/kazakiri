@@ -101,6 +101,8 @@ pub(super) enum Hover {
     Fkey(usize),
     /// モードバーのボタン
     Mode(usize),
+    /// モードバーの「対象の列」ドロップダウン
+    ColPick,
 }
 
 impl App {
@@ -132,6 +134,22 @@ impl App {
             }
         }
         out
+    }
+
+    /// 「対象の列」の表示（CSV 表示のとき）。ボタンの文字
+    fn colpick_label(&self) -> Option<String> {
+        let (col, _, name) = self.target_column()?;
+        let follow = self.csv.as_ref().is_some_and(|v| v.target.is_none());
+        Some(format!("対象の列: {}{}{}", col + 1, if name.is_empty() { String::new() } else { format!(": {name}") }, if follow { "（カーソル）" } else { "" }))
+    }
+
+    /// 「対象の列」ドロップダウンの位置。(x0, x1)
+    fn colpick_box(&self) -> Option<(f32, f32)> {
+        let label = self.colpick_label()?;
+        let last = self.mode_boxes().last().map(|b| b.1)?;
+        let units: Vec<u16> = label.encode_utf16().collect();
+        let w = unsafe { self.ui_text_width(&units) }.unwrap_or(units.len() as f32 * self.ui_char_w) + 34.0;
+        Some((last + 14.0, last + 14.0 + w))
     }
 
     fn mode_checked(&self, id: u32) -> bool {
@@ -186,6 +204,11 @@ impl App {
             if y < -(self.tab_h() + self.mode_h()) {
                 return self.tool_boxes().into_iter().find(|&(x0, x1, _)| x >= x0 && x < x1).map(|(_, _, i)| Hover::Tool(i));
             }
+            if let Some((x0, x1)) = self.colpick_box() {
+                if x >= x0 && x < x1 {
+                    return Some(Hover::ColPick);
+                }
+            }
             return self.mode_boxes().into_iter().find(|&(x0, x1, _)| x >= x0 && x < x1).map(|(_, _, i)| Hover::Mode(i));
         }
         let (w, h) = self.client_size();
@@ -201,6 +224,7 @@ impl App {
         match hv {
             Hover::Tool(i) => BUTTONS.get(i).copied().flatten().map(|(_, id, tip)| (id, tip)),
             Hover::Mode(i) => MODES.get(i).copied().flatten().map(|(_, id, tip)| (id, tip)),
+            Hover::ColPick => Some((menu::ID_COLPICK, "並べ替え・列フィルタの対象の列を選ぶ（見出しのクリックでも選べる）")),
             Hover::Fkey(i) => FKEYS.get(i).map(|&(label, id)| (id, label)),
         }
     }
@@ -212,7 +236,7 @@ impl App {
             self.hover = hv;
             self.hide_tip();
             // ツールバーのボタンの上なら、少し待ってから説明を出す
-            if matches!(hv, Some(Hover::Tool(_) | Hover::Mode(_))) {
+            if matches!(hv, Some(Hover::Tool(_) | Hover::Mode(_) | Hover::ColPick)) {
                 unsafe {
                     SetTimer(Some(self.hwnd), TIMER_TIP, 450, None);
                 }
@@ -260,6 +284,10 @@ impl App {
                 if let Some((_, _, tip)) = MODES.get(i).copied().flatten() {
                     self.tip = Some((tip.to_string(), x0, true));
                 }
+            }
+            Some(Hover::ColPick) => {
+                let Some((x0, _)) = self.colpick_box() else { return };
+                self.tip = Some(("並べ替え・列フィルタの対象の列を選ぶ（見出しのクリックでも選べる）".to_string(), x0, true));
             }
             _ => return,
         }
@@ -338,11 +366,21 @@ impl App {
                 brush.SetColor(&t.text);
                 self.draw_ui_str(rt, brush, label, x0 + 9.0, (h - self.ui_line_h) / 2.0, x1)?;
             }
-            // CSV 表示のあいだ、並べ替え・列フィルタの対象の列を見せる（見出し行を押すと変わる）
-            if let (Some((col, total, name)), Some(&(_, last_x1, _))) = (self.caret_column(), self.mode_boxes().last()) {
-                let label = format!("対象の列: {}/{}{}  （見出しをクリックで変更）", col + 1, total, if name.is_empty() { String::new() } else { format!(" 「{name}」") });
-                brush.SetColor(&t.gutter_text);
-                self.draw_ui_str(rt, brush, &label, last_x1 + 16.0, (h - self.ui_line_h) / 2.0, w)?;
+            // CSV 表示のあいだ、並べ替え・列フィルタの対象の列を、ドロップダウンの形で見せる（押すと列の一覧）
+            if let (Some(label), Some((x0, x1))) = (self.colpick_label(), self.colpick_box()) {
+                let hovered = self.hover == Some(Hover::ColPick);
+                brush.SetColor(if hovered { &t.panel_head } else { &t.bg });
+                rt.FillRoundedRectangle(&rrect(x0, 3.0, x1, h - 3.0, 4.0), brush);
+                brush.SetColor(&t.dim);
+                rt.DrawRoundedRectangle(&rrect(x0 + 0.5, 3.5, x1 - 0.5, h - 3.5, 4.0), brush, 1.0, None);
+                brush.SetColor(&t.text);
+                self.draw_ui_str(rt, brush, &label, x0 + 9.0, (h - self.ui_line_h) / 2.0, x1 - 22.0)?;
+                // ▼
+                let (cx, cy) = (x1 - 14.0, h / 2.0);
+                for k in 0..3 {
+                    let d = 4.0 - k as f32 * 1.4;
+                    rt.FillRectangle(&rect(cx - d, cy - 1.0 + k as f32 * 1.4, cx + d, cy + 0.4 + k as f32 * 1.4), brush);
+                }
             }
             brush.SetColor(&t.dim);
             rt.FillRectangle(&rect(0.0, h - 1.0, w, h), brush);
