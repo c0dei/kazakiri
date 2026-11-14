@@ -448,7 +448,7 @@ impl App {
             return;
         }
         let x = self.x_of_offset(&doc, pos);
-        let (w, _) = self.client_size();
+        let w = self.editor_w();
         let view = (w - self.gutter_width() - 8.0 - 20.0).max(self.char_w * 8.0);
         if x < self.x_off {
             self.x_off = (x - self.char_w * 8.0).max(0.0);

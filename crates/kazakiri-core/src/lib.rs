@@ -8,6 +8,7 @@ pub mod encoding;
 pub mod grep;
 pub mod editor;
 pub mod line_index;
+pub mod markdown;
 mod pieces;
 pub mod search;
 pub mod source;

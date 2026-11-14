@@ -41,7 +41,7 @@ impl App {
 
     /// 本文を折り返す幅
     fn wrap_width(&self) -> f32 {
-        let (w, _) = self.client_size();
+        let w = self.editor_w();
         (w - self.gutter_width() - 8.0).max(self.char_w * 8.0)
     }
 

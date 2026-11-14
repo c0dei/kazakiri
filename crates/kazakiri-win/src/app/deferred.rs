@@ -83,6 +83,12 @@ pub(super) unsafe fn run_deferred(hwnd: HWND, d: Deferred) {
                 }
             }
         }
+        Deferred::ExportHtml => {
+            let suggested = with_app(|app| app.doc.as_ref().and_then(|d| d.path().map(|p| p.with_extension("html")))).flatten();
+            if let Some(out) = unsafe { edit::save_dialog(hwnd, suggested.or_else(|| Some(PathBuf::from("document.html")))) } {
+                with_app(|app| app.md_export_html(out));
+            }
+        }
         Deferred::SaveResults => {
             let suggested = with_app(|app| app.doc.as_ref().and_then(|d| d.path().map(|p| p.with_extension("results.txt")))).flatten();
             if let Some(out) = unsafe { edit::save_dialog(hwnd, suggested.or_else(|| Some(PathBuf::from("results.txt")))) } {

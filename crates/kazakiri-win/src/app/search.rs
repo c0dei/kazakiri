@@ -130,7 +130,7 @@ impl App {
         let Some(l) = doc.lines(line, 1).into_iter().next() else { return };
         let prefix = decode_units(doc, &doc.read(l.start, offset.min(l.end)));
         let x = prefix as f32 * self.char_w; // おおよその位置で十分
-        let (w, _) = self.client_size();
+        let w = self.editor_w();
         let view = w - self.gutter_width() - 8.0;
         if x < self.x_off || x > self.x_off + view - self.char_w * 8.0 {
             self.x_off = (x - view / 3.0).max(0.0);

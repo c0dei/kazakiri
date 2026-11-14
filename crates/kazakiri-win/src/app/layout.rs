@@ -8,7 +8,7 @@ impl App {
         let mut v = doc.lines(first, count);
         if !self.wrap_on() && self.csv.is_none() {
             // 1 桁 ≒ 1 バイトとして、横の位置を行の中のバイト位置にする。窓は、画面の幅の 3 倍ほどのバイト数
-            let cols = (self.client_size().0 / self.char_w.max(1.0)) as usize;
+            let cols = (self.editor_w() / self.char_w.max(1.0)) as usize;
             let window = (cols * 3 + 64).clamp(256, LONG_LINE_WINDOW);
             let from = (self.x_off / self.char_w.max(1.0)) as u64;
             for l in &mut v {
@@ -208,6 +208,15 @@ impl App {
     }
 
     pub(super) fn update_scrollbars(&self) {
+        // Markdown のデザインビュー：プレビューの高さに合わせる（横スクロールバーは出さない）
+        if let Some((total, page, pos)) = self.md_scroll_info() {
+            let v = SCROLLINFO { cbSize: size_of::<SCROLLINFO>() as u32, fMask: SIF_RANGE | SIF_PAGE | SIF_POS, nMin: 0, nMax: total, nPage: page, nPos: pos, nTrackPos: 0 };
+            unsafe {
+                SetScrollInfo(self.hwnd, SB_VERT, &v, true);
+                let _ = ShowScrollBar(self.hwnd, SB_HORZ, false);
+            }
+            return;
+        }
         let scale = self.scroll_scale();
         let page = self.visible_lines() as u64;
         let total = self.total_lines();
@@ -220,7 +229,7 @@ impl App {
             nPos: (self.top / scale) as i32,
             nTrackPos: 0,
         };
-        let (w, _) = self.client_size();
+        let w = self.editor_w();
         // 長い行があれば、その長さまでスクロールできる（1 桁 ≒ 1 バイト）
         let long_max = self.doc.as_ref().map_or(0.0, |d| {
             (self.top..self.top + self.visible_lines() as u64 + 1)

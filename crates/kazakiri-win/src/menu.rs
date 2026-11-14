@@ -78,6 +78,9 @@ pub const ID_MARK_BASE: u32 = 860;
 pub const ID_MARK_CLEAR: u32 = 866;
 pub const ID_DIFF: u32 = 870;
 pub const ID_SPLIT_VIEW: u32 = 871;
+pub const ID_MD_SPLIT: u32 = 963;
+pub const ID_MD_DESIGN: u32 = 964;
+pub const ID_MD_EXPORT: u32 = 965;
 pub const ID_FILTER_LINES: u32 = 872;
 pub const ID_INS_ABOVE: u32 = 873;
 pub const ID_INS_BELOW: u32 = 874;
@@ -437,6 +440,9 @@ pub unsafe fn build(km: &Keymap) -> Result<Menus> {
         sep(view)?;
         item(km, view, ID_SPLIT_VIEW, "分割表示（同じファイルを左右に並べて参照）(&P)")?;
         item(km, view, ID_SPLIT_SYNC, "分割表示で同期スクロール(&Q)")?;
+        item(km, view, ID_MD_SPLIT, "Markdown プレビュー（右に並べる）(&V)\tCtrl+Shift+V")?;
+        item(km, view, ID_MD_DESIGN, "Markdown デザインビュー（整形して表示）(&G)\tCtrl+Shift+G")?;
+        item(km, view, ID_MD_EXPORT, "Markdown を HTML に書き出し(&H)...")?;
         item(km, view, ID_TOOLBAR, "ツールバーを表示(&B)")?;
         item(km, view, ID_MODEBAR, "モードバー（CSV の区切りなど）を表示(&D)")?;
         item(km, view, ID_FKEYS, "機能ボタンの列を表示(&U)")?;
@@ -544,13 +550,15 @@ pub unsafe fn build_context(km: &Keymap) -> Result<HMENU> {
 
 impl Menus {
     /// 表示メニューのチェック状態（`csv` は CSV モードのときの (区切り, 見出しあり)）
-    pub unsafe fn refresh_view(&self, csv: Option<(char, bool)>, split: bool, flags: [bool; 5], s: &crate::settings::Settings) {
+    pub unsafe fn refresh_view(&self, csv: Option<(char, bool)>, split: bool, flags: [bool; 5], md: (bool, bool), s: &crate::settings::Settings) {
         unsafe {
             let check = |on: bool| if on { MF_CHECKED.0 } else { MF_UNCHECKED.0 };
             CheckMenuItem(self.view, ID_WHITESPACE, check(s.whitespace));
             CheckMenuItem(self.view, ID_LOG_COLORS, check(s.log_colors));
             CheckMenuItem(self.view, ID_SYNTAX, check(s.syntax));
             CheckMenuItem(self.view, ID_SPLIT_VIEW, check(split));
+            CheckMenuItem(self.view, ID_MD_SPLIT, check(md.0));
+            CheckMenuItem(self.view, ID_MD_DESIGN, check(md.1));
             // flags: 比較で空白を無視 / 大文字小文字を無視 / 同期スクロール / 列を A,B,C で表示
             CheckMenuItem(self.search, ID_DIFF_IGN_EDGE, check(flags[0]));
             CheckMenuItem(self.search, ID_DIFF_IGN_CASE, check(flags[1]));

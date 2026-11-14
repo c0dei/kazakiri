@@ -29,7 +29,7 @@ impl App {
     pub(super) unsafe fn on_key(&mut self, vk: VIRTUAL_KEY) -> Option<Deferred> {
         let ctrl = unsafe { GetKeyState(VK_CONTROL.0 as i32) } < 0;
         let shift = unsafe { GetKeyState(VK_SHIFT.0 as i32) } < 0;
-        if self.diff_key(vk, ctrl, shift) {
+        if self.md_key(vk, ctrl) || self.diff_key(vk, ctrl, shift) {
             return None;
         }
         // キー割り当て（keys.ini）。入力欄が開いているときはタブの切り替えだけ効く
@@ -113,7 +113,7 @@ impl App {
     }
 
     pub(super) fn on_char(&mut self, ch: u32) {
-        if self.diffview.is_some() {
+        if self.diffview.is_some() || self.md_mode() == Some(mdview::MdMode::Design) {
             return;
         }
         // 制御文字（Enter, BS, Tab, Esc, Ctrl+?）は WM_KEYDOWN 側で処理済み
