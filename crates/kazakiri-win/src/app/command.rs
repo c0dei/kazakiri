@@ -153,6 +153,22 @@ impl App {
                 }
             }
             menu::ID_CSV => self.toggle_csv(),
+            // モードバーの「CSV」：タブ区切りのときは、最後に使った区切り（なければカンマ）に切り替える
+            menu::ID_CSV_MODE => match self.csv.as_ref().map(|v| v.delim) {
+                Some('\t') => self.set_delim(self.last_csv_delim),
+                _ => self.toggle_csv(),
+            },
+            menu::ID_TSV => match self.csv.as_ref().map(|v| v.delim) {
+                Some('\t') => self.toggle_csv(),
+                _ => self.set_delim('\t'),
+            },
+            menu::ID_DELIM_FIELD => {
+                self.delim_edit = !self.delim_edit;
+                if self.delim_edit {
+                    self.message = "区切りにする記号を 1 文字入力してください（Tab キーでタブ、Esc で取消）".into();
+                }
+                self.invalidate();
+            }
             menu::ID_WHITESPACE => self.toggle_whitespace(),
             menu::ID_LOG_COLORS => self.toggle_log_colors(),
             menu::ID_WRAP => self.toggle_wrap(),

@@ -380,6 +380,9 @@ impl App {
     }
 
     pub(super) fn set_delim(&mut self, d: char) {
+        if d != '\t' {
+            self.last_csv_delim = d;
+        }
         let header = self.csv.as_ref().is_none_or(|v| v.header);
         let mut v = CsvView::new(d);
         v.header = header;
@@ -693,7 +696,7 @@ pub(super) fn delim_name(d: char) -> &'static str {
         ',' => "カンマ",
         ';' => "セミコロン",
         '|' => "縦棒",
-        _ => "その他",
+        _ => "指定した記号",
     }
 }
 

@@ -76,12 +76,9 @@ pub(super) const MODE_H: f32 = 28.0;
 
 /// モードバーのボタン。(表示, コマンドの ID, 説明)
 const MODES: &[Option<(&str, u32, &str)>] = &[
-    Some(("CSV", menu::ID_CSV, "CSV/TSV を表として表示 (Ctrl+Shift+C)")),
-    None,
-    Some(("カンマ", menu::ID_DELIM_BASE, "カンマ区切りで表示")),
-    Some(("タブ", menu::ID_DELIM_BASE + 1, "タブ区切りで表示")),
-    Some(("セミコロン", menu::ID_DELIM_BASE + 2, "セミコロン区切りで表示")),
-    Some(("パイプ", menu::ID_DELIM_BASE + 3, "パイプ（|）区切りで表示")),
+    Some(("CSV", menu::ID_CSV_MODE, "CSV を表として表示 (Ctrl+Shift+C)。タブ区切りのときは、最後に使った区切りに戻す")),
+    Some(("TSV", menu::ID_TSV, "タブ区切り（TSV）の表として表示")),
+    Some(("区切り", menu::ID_DELIM_FIELD, "区切りにする記号を入力する（欄を押して、記号を 1 文字打つ。Tab キーでタブ）")),
     None,
     Some(("セル選択", menu::ID_CELL_MODE, "ドラッグでセルの四角を選ぶ（Excel のように）。コピー・削除・入力は選んだセルの全行に効く")),
     Some(("見出し", menu::ID_CSV_HEADER, "1 行目を見出しにして、上に固定する")),
@@ -97,12 +94,14 @@ const MODES: &[Option<(&str, u32, &str)>] = &[
 ];
 
 /// MODES のうち、ここから後ろは Markdown 用（先頭は CSV 用との間の区切り）
-const MD_FROM: usize = 15;
+const MD_FROM: usize = 12;
 
 const BTN_W: f32 = 30.0;
 const SEP_W: f32 = 20.0;
-/// MODES のうち、区切り文字の 4 つ（枠で囲んで 1 つのグループに見せる）
-const DELIM_GROUP: std::ops::RangeInclusive<usize> = 2..=5;
+/// MODES のうち、「CSV」「TSV」の 2 つ（枠で囲んで 1 つのグループに見せる）
+const DELIM_GROUP: std::ops::RangeInclusive<usize> = 0..=1;
+/// 区切り文字の欄の中の、記号を出す枠の幅
+const DELIM_BOX_W: f32 = 40.0;
 const BTN_PAD: f32 = 8.0;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -181,7 +180,9 @@ impl App {
                         }
                     }
                     let units: Vec<u16> = label.encode_utf16().collect();
-                    let w = unsafe { self.ui_text_width(&units) }.unwrap_or(units.len() as f32 * self.ui_char_w) + 18.0;
+                    let tw = unsafe { self.ui_text_width(&units) }.unwrap_or(units.len() as f32 * self.ui_char_w);
+                    // 区切り文字の欄は、題のあとに記号を入れる枠を足した幅
+                    let w = if *id == menu::ID_DELIM_FIELD { tw + 8.0 + DELIM_BOX_W + 18.0 } else { tw + 18.0 };
                     out.push((x, x + w, i));
                     x += w + 2.0;
                 }
@@ -224,12 +225,15 @@ impl App {
             menu::ID_MD_DESIGN => return self.md_mode() == Some(mdview::MdMode::Design),
             _ => {}
         }
+        if id == menu::ID_DELIM_FIELD {
+            return self.delim_edit;
+        }
         let Some(v) = self.csv.as_ref() else { return false };
         match id {
-            menu::ID_CSV => true,
+            menu::ID_CSV | menu::ID_CSV_MODE => v.delim != '\t' || id == menu::ID_CSV,
+            menu::ID_TSV => v.delim == '\t',
             menu::ID_CSV_HEADER => v.header,
             menu::ID_CELL_MODE => self.cell_mode,
-            id if (menu::ID_DELIM_BASE..menu::ID_DELIM_BASE + 4).contains(&id) => menu::DELIMS[(id - menu::ID_DELIM_BASE) as usize].1 == v.delim,
             _ => false,
         }
     }
@@ -429,6 +433,43 @@ impl App {
         Ok(())
     }
 
+    /// 区切り文字の欄：題と、いまの区切りを入れた枠。入力待ちのあいだは、アクセントカラーの枠
+    unsafe fn draw_delim_field(&self, rt: &ID2D1RenderTarget, brush: &ID2D1SolidColorBrush, (x0, x1): (f32, f32), label: &str, hovered: bool, editing: bool) -> Result<()> {
+        let (t, h) = (self.theme, MODE_H);
+        unsafe {
+            if hovered && !editing {
+                brush.SetColor(&t.panel_head);
+                rt.FillRoundedRectangle(&rrect(x0, 3.0, x1, h - 3.0, 4.0), brush);
+            }
+            brush.SetColor(&t.text);
+            self.draw_ui_str(rt, brush, label, x0 + 9.0, (h - self.ui_line_h) / 2.0, x1)?;
+            let (bx1, by0, by1) = (x1 - 9.0, 3.0, h - 3.0);
+            let bx0 = bx1 - DELIM_BOX_W;
+            brush.SetColor(if editing { &theme::accent(self.settings.dark) } else { &t.dim });
+            rt.FillRoundedRectangle(&rrect(bx0, by0, bx1, by1, 5.0), brush);
+            brush.SetColor(&t.bg);
+            rt.FillRoundedRectangle(&rrect(bx0 + 1.0, by0 + 1.0, bx1 - 1.0, by1 - 1.0, 4.0), brush);
+            // いまの区切り（表示していないときは、最後に使った区切り）
+            let d = self.csv.as_ref().map_or(self.last_csv_delim, |v| v.delim);
+            let shown = match d {
+                '\t' => "Tab".to_string(),
+                ' ' => "空白".to_string(),
+                c => c.to_string(),
+            };
+            let (text, color) = if editing { ("入力…".to_string(), theme::accent(self.settings.dark)) } else { (shown, if self.csv.is_some() { t.text } else { t.gutter_text }) };
+            let units: Vec<u16> = text.encode_utf16().collect();
+            let tw = self.ui_text_width(&units)?;
+            brush.SetColor(&color);
+            self.draw_ui_str(rt, brush, &text, (bx0 + bx1) / 2.0 - tw / 2.0, (h - self.ui_line_h) / 2.0, bx1 - 2.0)?;
+        }
+        Ok(())
+    }
+
+    /// 窓の座標（本文の座標）の点が、区切り文字の欄の上か
+    pub(super) fn over_delim_field(&self, x: f32, y: f32) -> bool {
+        matches!(self.hover_at(x, y), Some(Hover::Mode(i)) if MODES.get(i).copied().flatten().is_some_and(|m| m.1 == menu::ID_DELIM_FIELD))
+    }
+
     /// モードバー（ツールバーの 2 行目）：CSV の区切りなど、文字のボタン
     unsafe fn draw_modebar(&self, rt: &ID2D1RenderTarget, brush: &ID2D1SolidColorBrush, w: f32) -> Result<()> {
         let h = MODE_H;
@@ -455,6 +496,10 @@ impl App {
                 let Some((label, id, _)) = MODES[i] else { continue };
                 let hovered = self.hover == Some(Hover::Mode(i));
                 let on = self.mode_checked(id);
+                if id == menu::ID_DELIM_FIELD {
+                    self.draw_delim_field(rt, brush, (x0, x1), label, hovered, on)?;
+                    continue;
+                }
                 if hovered || on {
                     brush.SetColor(if on { &t.panel_sel } else { &t.panel_head });
                     rt.FillRoundedRectangle(&rrect(x0, 3.0, x1, h - 3.0, 4.0), brush);

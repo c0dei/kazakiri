@@ -113,6 +113,8 @@ pub(super) unsafe fn run_inner() -> std::result::Result<(), (&'static str, windo
             input2: String::new(),
             prompt_focus: 0,
             col_drop: None,
+            delim_edit: false,
+            last_csv_delim: ',',
             last_find: String::new(),
             last_filter: String::new(),
             history: crate::history::History::load(),

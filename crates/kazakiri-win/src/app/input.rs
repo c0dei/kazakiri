@@ -31,6 +31,19 @@ impl App {
         if unsafe { self.col_drop_key(vk) } {
             return None;
         }
+        // 区切り文字の入力待ち：Esc で取消、Tab キーでタブ区切り。文字は WM_CHAR（on_char）で受ける
+        if self.delim_edit {
+            match vk {
+                VK_ESCAPE => self.delim_edit = false,
+                VK_TAB => {
+                    self.delim_edit = false;
+                    self.set_delim('\t');
+                }
+                _ => {}
+            }
+            self.invalidate();
+            return None;
+        }
         let ctrl = unsafe { GetKeyState(VK_CONTROL.0 as i32) } < 0;
         let shift = unsafe { GetKeyState(VK_SHIFT.0 as i32) } < 0;
         if self.md_key(vk, ctrl) || self.diff_key(vk, ctrl, shift) {
@@ -137,6 +150,16 @@ impl App {
 
     pub(super) fn on_char(&mut self, ch: u32) {
         if self.col_drop.is_some() {
+            return;
+        }
+        if self.delim_edit {
+            if ch >= 0x20 && ch != 0x7F {
+                if let Some(c) = char::from_u32(ch).filter(|c| !matches!(*c as u32, 0xD800..=0xDFFF)) {
+                    self.delim_edit = false;
+                    self.set_delim(c);
+                }
+            }
+            self.invalidate();
             return;
         }
         if self.diffview.is_some() || self.md_mode() == Some(mdview::MdMode::Design) {
