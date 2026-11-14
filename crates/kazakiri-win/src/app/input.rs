@@ -195,7 +195,7 @@ impl App {
     pub(super) fn mouse_pos(&self, lparam: LPARAM) -> (f32, f32) {
         let scale = unsafe { GetDpiForWindow(self.hwnd) } as f32 / 96.0;
         let x = loword(lparam.0 as usize) as i16 as f32 / scale;
-        // 本文の座標（タブバーの下を 0 とする）。タブバーの上なら負になる
+        // 本文の座標（ツールバーの下を 0 とする）。タブバー・ツールバーの上なら負になる
         let y = hiword(lparam.0 as usize) as i16 as f32 / scale - self.chrome_h();
         (x, y)
     }

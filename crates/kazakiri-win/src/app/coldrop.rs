@@ -34,11 +34,11 @@ impl App {
             self.invalidate();
             return None;
         }
-        let Some((cur, total, _)) = self.target_column() else { return None };
+        let (cur, total, _) = self.target_column()?;
         if self.colpick_box().is_none() {
             return Some(Deferred::ColMenu);
         }
-        let Some(v) = self.csv.as_ref() else { return None };
+        let v = self.csv.as_ref()?;
         let follow = v.target.is_none();
         let names = self.csv_column_names(usize::MAX);
         let mut items = vec![("カーソルのある列に合わせる".to_string(), None)];

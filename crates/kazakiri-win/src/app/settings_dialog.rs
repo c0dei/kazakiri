@@ -31,7 +31,6 @@ const CLASS: PCWSTR = w!("KazakiriSettingsDialog");
 const EN_KILLFOCUS_CODE: u32 = 0x0200;
 
 const ID_DARK: i32 = 201;
-const ID_MICA: i32 = 202;
 const ID_TRAY: i32 = 226;
 const ID_MODEBAR: i32 = 227;
 const ID_FONT: i32 = 204;
@@ -177,7 +176,6 @@ fn flip_checked(id: i32) {
 fn sync() {
     let Some(s) = with_app(|app| app.settings.clone()) else { return };
     set_checked(ID_DARK, s.dark);
-    set_checked(ID_MICA, s.mica);
     set_checked(ID_WRAP, s.wrap);
     set_checked(ID_IME, s.ime_inline);
     set_checked(ID_WS, s.whitespace);
@@ -418,10 +416,6 @@ unsafe fn on_command(dlg: HWND, id: i32, code: u32) {
                     app.settings.save();
                 });
             }
-            ID_MICA => {
-                let on = is_checked(ID_MICA);
-                with_app(|app| app.set_mica(on));
-            }
             ID_KEYS => {
                 let d = with_app(|app| app.command(menu::ID_KEYS)).flatten();
                 if let Some(d) = d {
@@ -542,17 +536,16 @@ unsafe fn create(owner: HWND) {
         put(1, ID_WHEEL, w!("EDIT"), "", edit | ES_NUMBER as u32 | flat, 0, right - 60, mid(y, 26), 60, 26);
         // 外観
         card(&mut rows, 2, 0, "ダークテーマ", "タイトルバー・スクロールバー・メニューも暗くなる", Some(ID_DARK));
-        card(&mut rows, 2, 1, "Mica", "Windows 11 のタイトルバーを半透明にする", Some(ID_MICA));
-        let y = card(&mut rows, 2, 2, "本文のフォント", "空欄で自動。右は大きさ (pt)", None);
+        let y = card(&mut rows, 2, 1, "本文のフォント", "空欄で自動。右は大きさ (pt)", None);
         put(2, ID_FONT, w!("EDIT"), "", edit | flat, 0, right - 60 - 8 - 72 - 8 - 150, mid(y, 26), 150, 26);
         put(2, ID_FONT_PICK, w!("BUTTON"), "選択...", push, 0, right - 60 - 8 - 72, mid(y, 28), 72, 28);
         put(2, ID_SIZE, w!("EDIT"), "", edit | ES_NUMBER as u32 | flat, 0, right - 60, mid(y, 26), 60, 26);
-        let y = card(&mut rows, 2, 3, "画面のフォント", "メニュー・タブなど。空欄で自動", None);
+        let y = card(&mut rows, 2, 2, "画面のフォント", "メニュー・タブなど。空欄で自動", None);
         put(2, ID_UIFONT, w!("EDIT"), "", edit | flat, 0, right - 60 - 8 - 72 - 8 - 150, mid(y, 26), 150, 26);
         put(2, ID_UIFONT_PICK, w!("BUTTON"), "選択...", push, 0, right - 60 - 8 - 72, mid(y, 28), 72, 28);
         put(2, ID_UISIZE, w!("EDIT"), "", edit | ES_NUMBER as u32 | flat, 0, right - 60, mid(y, 26), 60, 26);
         // フォントの見え方（設定を変えると、すぐ変わる）
-        rows.push(Row { page: 2, y: 4 * (ROW_H + ROW_GAP), title: "プレビュー", desc: "", toggle: None, h: 92, preview: true });
+        rows.push(Row { page: 2, y: 3 * (ROW_H + ROW_GAP), title: "プレビュー", desc: "", toggle: None, h: 92, preview: true });
         // 表示
         card(&mut rows, 3, 0, "空白・タブ・改行を表示", "印で見えるようにする（Ctrl+Shift+W）", Some(ID_WS));
         card(&mut rows, 3, 1, "ログの色分け", "ERROR / WARN などに色を付ける", Some(ID_LOG));

@@ -751,4 +751,29 @@ mod tests {
         assert_eq!(d.to_disp(7), d.shown);
         assert_eq!(String::from_utf16_lossy(&d.units[d.shown..]), "↓");
     }
+
+    /// フィールドの中のタブは、列の幅の数え方（半角 1 文字）に合わせて空白 1 つで見せる（列がずれない）
+    #[test]
+    fn csv_tab_in_field_is_one_column() {
+        let v = CsvView::new(',');
+        let rows = [line("\tid,name"), line("1,Bob")];
+        for r in &rows {
+            v.measure(&r.text);
+        }
+        let shown: Vec<String> = rows.iter().map(|r| String::from_utf16_lossy(&Disp::csv(r, &v).units)).collect();
+        // 1 列目の幅（タブ込みで 3）にそろい、2 列目の「│」の位置が同じ
+        assert_eq!(shown[0].find('│'), shown[1].find('│'));
+        assert!(!shown[0].contains('\t'));
+    }
+
+    /// 区切りの縦線は、控えめな色（Mark）で塗る
+    #[test]
+    fn csv_separator_is_marked() {
+        let v = CsvView::new(',');
+        let r = line("a,b,c");
+        v.measure(&r.text);
+        let d = Disp::csv(&r, &v);
+        assert_eq!(d.effects.len(), 2);
+        assert!(d.effects.iter().all(|e| e.2 == Effect::Mark));
+    }
 }

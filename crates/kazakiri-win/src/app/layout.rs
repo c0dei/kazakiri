@@ -126,7 +126,7 @@ impl App {
     }
 
     /// ステータスバー（と、あれば機能ボタンの列）の高さ
-    /// タブバーより上の部分（ツールバー＋タブバー）の高さ。メニューバーは標準のものなので、ここには含まれない
+    /// 本文より上の部分（タブバー＋ツールバー＋モードバー）の高さ。いちばん上がタブバー（タイトルバーを兼ねる）
     pub(super) fn chrome_h(&self) -> f32 {
         self.tb_h() + self.tab_h()
     }
@@ -210,6 +210,8 @@ impl App {
     }
 
     pub(super) fn update_scrollbars(&self) {
+        // タブの切り替えなどで、モードバーが出入りして本文の上端が動くことがあるので、スクロールバーを置き直す
+        self.layout_scrollbars();
         // Markdown のデザインビュー：プレビューの高さに合わせる（横スクロールバーは出さない）
         if let Some((total, page, pos)) = self.md_scroll_info() {
             let v = SCROLLINFO { cbSize: size_of::<SCROLLINFO>() as u32, fMask: SIF_RANGE | SIF_PAGE | SIF_POS, nMin: 0, nMax: total, nPage: page, nPos: pos, nTrackPos: 0 };
@@ -282,6 +284,12 @@ impl App {
         let (vw, hh) = self.scrollbar_px();
         let hh = if self.hbar_on.get() { hh } else { 0 };
         let top = (self.chrome_h() * scale).round() as i32;
+        // 位置が前回と同じなら何もしない（スクロールのたびに呼ばれるので）
+        let placed = [rc.right, rc.bottom, top, vw, hh, 0];
+        if self.sb_placed.get() == placed {
+            return;
+        }
+        self.sb_placed.set(placed);
         unsafe {
             let _ = SetWindowPos(self.vbar, None, rc.right - vw, top, vw, (rc.bottom - top - hh).max(0), SWP_NOZORDER | SWP_NOACTIVATE);
             let _ = SetWindowPos(self.hbar, None, 0, rc.bottom - hh.max(1), (rc.right - vw).max(0), hh.max(1), SWP_NOZORDER | SWP_NOACTIVATE);

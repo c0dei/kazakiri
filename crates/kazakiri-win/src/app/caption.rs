@@ -6,8 +6,8 @@ use super::*;
 
 /// ウィンドウのボタン 1 つの幅（DIP）
 pub(super) const CAP_BTN_W: f32 = 46.0;
-/// 左の、アプリのマークと名前の幅（DIP）。タブは、この右から並ぶ
-pub(super) const TAB_X0: f32 = 118.0;
+/// 左の、アプリのアイコンの幅（DIP）。タブは、この右から並ぶ
+pub(super) const TAB_X0: f32 = 48.0;
 /// ウィンドウの縁（サイズ変更のつかみ代。DIP）
 const EDGE: f32 = 6.0;
 
@@ -169,16 +169,50 @@ impl App {
         true
     }
 
-    /// いちばん上の行の左のマークと名前、右のウィンドウのボタンを描く（タブバーの中）
+    /// exe に埋め込んだアイコン（16 DIP の大きさ）を、描画用のビットマップにする
+    pub(super) unsafe fn load_app_icon(&self, target: &ID2D1HwndRenderTarget) -> Option<ID2D1Bitmap> {
+        unsafe {
+            let size = (16.0 * GetDpiForWindow(self.hwnd) as f32 / 96.0).round() as i32;
+            let module = GetModuleHandleW(None).ok()?;
+            let icon = LoadImageW(Some(module.into()), PCWSTR(std::ptr::without_provenance::<u16>(1)), IMAGE_ICON, size, size, LR_DEFAULTCOLOR).ok()?;
+            // 32 ビットの DIB に描いて、その画素を取り出す（透明な背景のまま）
+            let bi = BITMAPINFO { bmiHeader: BITMAPINFOHEADER { biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32, biWidth: size, biHeight: -size, biPlanes: 1, biBitCount: 32, biCompression: BI_RGB.0, ..Default::default() }, ..Default::default() };
+            let hdc = CreateCompatibleDC(None);
+            let mut bits = std::ptr::null_mut();
+            let dib = CreateDIBSection(Some(hdc), &bi, DIB_RGB_COLORS, &mut bits, None, 0);
+            let result = match dib {
+                Ok(dib) if !bits.is_null() => {
+                    let old = SelectObject(hdc, dib.into());
+                    std::ptr::write_bytes(bits as *mut u8, 0, (size * size * 4) as usize);
+                    let _ = DrawIconEx(hdc, 0, 0, HICON(icon.0), size, size, 0, None, DI_NORMAL);
+                    let props = D2D1_BITMAP_PROPERTIES { pixelFormat: D2D1_PIXEL_FORMAT { format: windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM, alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED }, dpiX: 96.0, dpiY: 96.0 };
+                    let bmp = target.CreateBitmap(D2D_SIZE_U { width: size as u32, height: size as u32 }, Some(bits as *const _), (size * 4) as u32, &props).ok();
+                    SelectObject(hdc, old);
+                    let _ = DeleteObject(dib.into());
+                    bmp
+                }
+                _ => None,
+            };
+            let _ = DeleteDC(hdc);
+            let _ = DestroyIcon(HICON(icon.0));
+            result
+        }
+    }
+
+    /// いちばん上の行の左のアイコン、右のウィンドウのボタンを描く（タブバーの中）
     pub(super) unsafe fn draw_caption(&self, rt: &ID2D1RenderTarget, brush: &ID2D1SolidColorBrush, w: f32) -> Result<()> {
         let (t, h) = (self.theme, self.tab_h());
         let accent = theme::accent(self.settings.dark);
         unsafe {
-            // マークと名前
-            brush.SetColor(&accent);
-            rt.FillRoundedRectangle(&rrect(14.0, (h - 16.0) / 2.0, 30.0, (h + 16.0) / 2.0, 4.0), brush);
-            brush.SetColor(&t.gutter_text);
-            self.draw_ui_str(rt, brush, "kazakiri", 38.0, (h - self.ui_line_h) / 2.0, TAB_X0)?;
+            // アプリのアイコン（読み込めなかったときは、アクセントカラーの四角）
+            let dest = rect(16.0, (h - 16.0) / 2.0, 32.0, (h + 16.0) / 2.0);
+            match self.gfx.as_ref().and_then(|g| g.icon.as_ref()) {
+                Some(bmp) => rt.DrawBitmap(bmp, Some(&dest), 1.0, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, None),
+                None => {
+                    brush.SetColor(&accent);
+                    rt.FillRoundedRectangle(&rrect(16.0, (h - 16.0) / 2.0, 32.0, (h + 16.0) / 2.0, 4.0), brush);
+                }
+            }
             // ウィンドウのボタン
             let zoomed = IsZoomed(self.hwnd).as_bool();
             for b in [BTN_MIN, BTN_MAX, BTN_CLOSE] {

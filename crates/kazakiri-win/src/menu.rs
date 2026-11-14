@@ -698,6 +698,21 @@ impl Menus {
 }
 
 #[cfg(test)]
+mod palette_tests {
+    use super::*;
+
+    /// パレットに出す名前：「(&X)」「&」「...」とキーの表示を除く
+    #[test]
+    fn palette_names_drop_mnemonics() {
+        assert_eq!(palette_name("新しいタブ(&N)\tCtrl+N"), "新しいタブ");
+        assert_eq!(palette_name("開く(&O)...\tCtrl+O"), "開く");
+        assert_eq!(palette_name("&Save"), "Save");
+        assert_eq!(palette_name("コマンドパレット(&P)...\tCtrl+Shift+P"), "コマンドパレット");
+        assert_eq!(palette_name(""), "");
+    }
+}
+
+#[cfg(test)]
 mod id_tests {
     use super::*;
 

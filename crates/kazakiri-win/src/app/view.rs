@@ -1,7 +1,6 @@
 //! 表示の設定：文字の大きさ、テーマ、空白の可視化、ログの色分け。変更は設定ファイルに保存する。
 
-use windows::Win32::Graphics::Dwm::{DwmExtendFrameIntoClientArea, DwmSetWindowAttribute, DWMWA_SYSTEMBACKDROP_TYPE, DWMWA_USE_IMMERSIVE_DARK_MODE};
-use windows::Win32::UI::Controls::MARGINS;
+use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE};
 
 use super::*;
 
@@ -58,27 +57,12 @@ impl App {
         self.invalidate();
     }
 
-    /// タイトルバーをテーマに合わせる（Windows 10 20H1 以降）
+    /// ウィンドウの縁（DWM が描く細い枠線）とポップアップメニュー・スクロールバーを、テーマに合わせる（Windows 10 20H1 以降）
     pub(super) fn apply_title_theme(&mut self) {
         let v = BOOL::from(self.settings.dark);
         unsafe {
             let _ = DwmSetWindowAttribute(self.hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &v as *const BOOL as *const _, size_of::<BOOL>() as u32);
-            // 標準のメニューバーは、ダークテーマなら暗く塗る（非公開メッセージ。dark.rs）
-            super::dark::set_bar(self.settings.dark, self.theme);
             super::dark::apply(self.hwnd, self.settings.dark);
-            // Windows 11：タイトルバーを Mica に（DWMWA_SYSTEMBACKDROP_TYPE: 1=なし, 2=Mica）。
-            // Windows 10 などでは属性が無く、失敗しても何も起きない
-            let backdrop: i32 = if self.settings.mica { 2 } else { 1 };
-            // Mica が見えるのはタイトルバーだけでよい。ウィンドウ全体をガラスにすると（-1）、ガラス越しに合成される
-            // 画面の上のほうの文字（自前のメニューバーなど）が見えなくなることがあるので、上端の 1 ピクセルだけ枠を広げる。
-            // Mica をオフのときは、枠を広げない
-            let top = i32::from(self.settings.mica);
-            let m = MARGINS { cxLeftWidth: 0, cxRightWidth: 0, cyTopHeight: top, cyBottomHeight: 0 };
-            let _ = DwmExtendFrameIntoClientArea(self.hwnd, &m);
-            let r = DwmSetWindowAttribute(self.hwnd, DWMWA_SYSTEMBACKDROP_TYPE, &backdrop as *const i32 as *const _, size_of::<i32>() as u32);
-            if let (Err(e), true) = (r, self.settings.mica) {
-                self.message = format!("Mica を適用できませんでした（Windows 11 22H2 以降が必要です）: {e}");
-            }
         }
     }
 
@@ -100,13 +84,6 @@ impl App {
 }
 
 impl App {
-    pub(super) fn set_mica(&mut self, on: bool) {
-        self.settings.mica = on;
-        self.apply_title_theme();
-        self.settings.save();
-        self.invalidate();
-    }
-
     /// 設定ダイアログの入力欄：フォント名（空なら自動）、大きさ、タブ幅
     pub(super) fn set_text_settings(&mut self, font: &str, size: f32, tab: usize) {
         let size = size.clamp(settings::MIN_FONT, settings::MAX_FONT);

@@ -14,8 +14,9 @@
 //! | `files` / `search` / `results` | 開く・再読み込み、検索、結果一覧・GREP |
 //! | `edit` / `lines` / `multi` / `rect` / `wrap` / `complete` | 編集、行の操作と変換、複数カーソル、矩形選択、折り返し、補完 |
 //! | `csv_view` / `diffview` / `bookmarks` / `markers` | CSV 表示、差分・分割表示、ブックマーク、カラーマーカー |
-//! | `tabs` / `menubar` / `toolbar` / `status_menu` / `view` / `theme` / `dark` | タブ、メニューバー、ツールバー、ステータスバー、表示設定、配色 |
-//! | `find_dialog` / `settings_dialog` / `keys_dialog` | 各ダイアログ |
+//! | `tabs` / `caption` / `toolbar` / `status_menu` / `view` / `theme` / `dark` | タブ、タイトルバー（ウィンドウのボタン・移動・サイズ変更）、ツールバーとモードバー、ステータスバー、表示設定、配色 |
+//! | `findbar` / `palette` / `coldrop` | 本文の上に浮かぶ検索・置換バーと入力欄のカード、コマンドパレット、「対象の列」のドロップダウン |
+//! | `find_dialog` / `settings_dialog` / `keys_dialog` | 各ダイアログ（検索ダイアログは GREP 用） |
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -219,6 +220,8 @@ struct Gfx {
     effects: Vec<IUnknown>,
     /// Markdown のプレビュー用：リンクの色、コードの色、構文の色（文字列・数・予約語・コメント・タグ・キー）
     md: Vec<IUnknown>,
+    /// タブバーの左に出すアプリのアイコン（exe に埋め込んだもの。作れなければ None）
+    icon: Option<ID2D1Bitmap>,
 }
 
 /// 実行中の検索
@@ -258,6 +261,8 @@ struct App {
     hbar: HWND,
     /// 横のスクロールバーを出しているか
     hbar_on: Cell<bool>,
+    /// 直前に置いたスクロールバーの位置（変わっていなければ、置き直さない）
+    sb_placed: Cell<[i32; 6]>,
     /// ウィンドウのボタン（最小化・最大化・閉じる）の、マウスが上にある／押しているもの
     cap_hover: Option<u8>,
     cap_down: Option<u8>,
@@ -431,10 +436,6 @@ pub fn run() {
 }
 
 extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    // 標準のメニューバーを暗く塗るメッセージは、App を借りる前に処理する（描画の最中に同期で届くため）
-    if let Some(r) = unsafe { dark::bar_message(hwnd, msg, wparam, lparam) } {
-        return r;
-    }
     let result = APP.with(|cell| {
         let Ok(mut guard) = cell.try_borrow_mut() else { return None };
         let app = guard.as_mut()?;
@@ -907,6 +908,8 @@ impl App {
                     (DONE, None)
                 }
                 WM_KEYDOWN => (DONE, self.on_key(VIRTUAL_KEY(wparam.0 as u16))),
+                // F10 はシステムキーとして届く。☰ のメニュー（keys.ini で変えられる割り当て）を開く
+                WM_SYSKEYDOWN if VIRTUAL_KEY(wparam.0 as u16) == VK_F10 => (DONE, self.on_key(VK_F10)),
                 // Alt+C / Alt+R：検索オプションの切り替え。
                 // DefWindowProc にも渡す（渡さないと Alt を離したときにメニューが開いてしまう）
                 // 検索欄で Alt+Enter：すべて検索して一覧に。置換欄で Alt+A：すべて置換

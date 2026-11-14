@@ -51,7 +51,7 @@ impl App {
         let (x0, y0) = (((w - cw) / 2.0).max(0.0), self.pin_h() + 14.0);
         let input = (x0 + 12.0, y0 + 12.0, x0 + cw - 12.0, y0 + 12.0 + self.ui_line_h + 12.0);
         let row_h = self.ui_line_h + 12.0;
-        let count = self.palette_results().len().min(MAX_ROWS).max(1);
+        let count = self.palette_results().len().clamp(1, MAX_ROWS);
         let rows = (x0 + 6.0, input.3 + 8.0, x0 + cw - 6.0, input.3 + 8.0 + count as f32 * row_h);
         PaletteLayout { card: (x0, y0, x0 + cw, rows.3 + 8.0), input, rows, row_h, count }
     }

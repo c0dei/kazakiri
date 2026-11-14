@@ -77,6 +77,9 @@ const FKEYS: &[(&str, u32)] = &[
 pub(super) const ROW1_H: f32 = 34.0;
 pub(super) const MODE_H: f32 = 28.0;
 
+/// モードバーの並び：ボタンの位置 (x0, x1, MODES の番号) と、「対象の列」の欄の位置 (x0, x1)
+type ModeLayout = (Vec<(f32, f32, usize)>, Option<(f32, f32)>);
+
 /// モードバーのボタン。(表示, コマンドの ID, 説明)
 const MODES: &[Option<(&str, u32, &str)>] = &[
     Some(("CSV", menu::ID_CSV_MODE, "カンマ区切り（CSV）の表として表示。TSV や指定した区切りのときは、カンマに切り替える")),
@@ -170,7 +173,7 @@ impl App {
 
     /// モードバーのボタンの位置 (x0, x1, 番号) と、「対象の列」ドロップダウンの位置 (x0, x1)。
     /// ドロップダウンは、並べ替え・列フィルタのボタンの直前に置く
-    fn mode_layout(&self) -> (Vec<(f32, f32, usize)>, Option<(f32, f32)>) {
+    fn mode_layout(&self) -> ModeLayout {
         let pick_w = self.colpick_label().map(|label| {
             let units: Vec<u16> = label.encode_utf16().collect();
             unsafe { self.ui_text_width(&units) }.unwrap_or(units.len() as f32 * self.ui_char_w) + 34.0
@@ -590,7 +593,7 @@ impl App {
                 let (cx, cy) = (x1 - 14.0, h / 2.0);
                 let dy = if open { 1.5 } else { -1.5 };
                 brush.SetColor(&t.gutter_text);
-                rt.DrawLine(Vector2 { X: cx - 4.0, Y: cy + dy - if open { 0.0 } else { 0.0 } }, Vector2 { X: cx, Y: cy - dy }, brush, 1.4, None);
+                rt.DrawLine(Vector2 { X: cx - 4.0, Y: cy + dy }, Vector2 { X: cx, Y: cy - dy }, brush, 1.4, None);
                 rt.DrawLine(Vector2 { X: cx, Y: cy - dy }, Vector2 { X: cx + 4.0, Y: cy + dy }, brush, 1.4, None);
             }
             brush.SetColor(&t.dim);
