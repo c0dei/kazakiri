@@ -89,11 +89,19 @@ impl Document {
 
     /// 行インデックスを作らずに開く（GREP 用。行番号は使えない）
     pub fn open_scan(path: &Path) -> io::Result<Document> {
+        Self::open_scan_with(path, None)
+    }
+
+    /// `open_scan` で文字コードを指定する（`None` なら自動判定）
+    pub fn open_scan_with(path: &Path, forced: Option<&'static Encoding>) -> io::Result<Document> {
         let source = Arc::new(Source::open(path)?);
-        let detected = encoding::detect(source.bytes());
+        let detected = match forced {
+            None => encoding::detect(source.bytes()),
+            Some(enc) => encoding::forced(enc, source.bytes()),
+        };
         let kind = newline_kind(&detected, source.bytes());
         let index = Arc::new(LineIndex::none(source.clone(), kind, detected.bom_len as u64));
-        Ok(Document { path: Some(path.to_path_buf()), source, detected, index, forced: None, text: None })
+        Ok(Document { path: Some(path.to_path_buf()), source, detected, index, forced, text: None })
     }
 
     pub fn from_bytes(bytes: Vec<u8>) -> Document {

@@ -67,7 +67,7 @@ EmEditor の「大きいファイルが速い」体験を、買い切り不要�
 - 本文のフォントが等幅でない場合（Noto Sans JP など）、CSV/TSV の表示のあいだだけ、列がそろうよう既定の等幅フォント（BIZ UDゴシック → MS ゴシック → Consolas）に自動で替える。CSV でなくなれば元のフォントに戻る
 - フォントは 2 系統：本文（font / font_size）と、画面の部品＝メニュー・タブ・ツールバー・ステータスバー（ui_font / ui_font_size。既定は Yu Gothic UI → Meiryo UI → Segoe UI）。設定ダイアログで別々に変えられる
 - 設定ダイアログ（ファイル → 設定）で、外観・編集・表示の主な項目を画面から変えられる（Mica のオン／オフ、フォント、タブ幅など）
-- 設定は `%APPDATA%\kazakiri\settings.ini` に自動で保存（font, font_size, dark, whitespace, log_colors, tab_width, wrap, grep_backup, ime_inline, syntax, mica, toolbar, fkeys, ui_font, ui_font_size, window。テキストエディタで直接編集もできる）
+- 設定は `%APPDATA%\kazakiri\settings.ini` に自動で保存（font, font_size, dark, whitespace, log_colors, tab_width, wrap, grep_backup, grep_close, ime_inline, syntax, mica, toolbar, fkeys, ui_font, ui_font_size, window。テキストエディタで直接編集もできる）
 
 ![空白の表示とログの色分け（ダークテーマ）](docs/screenshot-whitespace.png)
 
@@ -85,6 +85,7 @@ EmEditor の「大きいファイルが速い」体験を、買い切り不要�
 ![CSV モード](docs/screenshot-csv.png)
 
 ### 検索・置換・GREP
+- GREP タブ（EmEditor 風）：フォルダ・ファイル種類は履歴のドロップダウンから選べる。「終了したら閉じる」、文字コードの指定（自動判定／UTF-8／Shift_JIS／EUC-JP／UTF-16）、最大件数の指定、出力の形（ファイル名・行・一致した行／ファイル名・行／ファイル名だけ／一致した行だけ）、「抽出」ボタン（一致した行だけを新しいタブに出す）
 - 検索・置換・GREP のダイアログ（Ctrl+F / Ctrl+H / Ctrl+Shift+F）：1 つのウィンドウにタブ（検索・置換・GREP）。開いたまま本文を編集できる。検索語はコンボボックスで履歴から選べる。オプション（大文字小文字・正規表現・選択範囲の中だけ・GREP のフォルダ／ファイル／サブフォルダ／バックアップ）をそのまま選べる。ダークテーマでは暗くなる
 - 検索語・置換語の履歴：ダイアログのコンボボックスで過去の語を選べる。検索語と置換語は別々に最大 100 件ずつ、`%APPDATA%\kazakiri\history.txt` に保存
 - 結果の一覧（全件検索・GREP）では、一致した部分を黄色の背景で強調する。「検索 → 結果の一覧を新しいタブに出す」で無題のタブに、「結果の一覧をファイルに保存」で UTF-8（CRLF）のファイルに出せる

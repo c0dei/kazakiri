@@ -49,6 +49,13 @@ const ID_REPL_ALL: i32 = 124;
 const ID_GREP: i32 = 125;
 const ID_GREP_REPLACE: i32 = 126;
 const ID_CLOSE: i32 = 130;
+/// GREP の追加の項目：終了したら閉じる、最大一致数（チェックと数）、文字コード、出力、抽出ボタン
+const ID_GCLOSE: i32 = 116;
+const ID_MAXON: i32 = 117;
+const ID_MAXVAL: i32 = 118;
+const ID_ENC: i32 = 131;
+const ID_OUT: i32 = 132;
+const ID_EXTRACT: i32 = 127;
 
 const TAB_FIND: usize = 0;
 const TAB_REPLACE: usize = 1;
@@ -91,6 +98,11 @@ struct Form {
     backup: bool,
     selonly: bool,
     word: bool,
+    close_after: bool,
+    max_on: bool,
+    max_val: usize,
+    enc: usize,
+    out: usize,
 }
 
 impl Ctrls {
@@ -122,8 +134,25 @@ impl Ctrls {
         }
     }
 
+    /// ドロップダウン（選ぶだけの）の、選んでいる番号
+    fn sel(&self, id: i32) -> usize {
+        let r = unsafe { SendMessageW(self.ctl(id), CB_GETCURSEL, None, None) }.0;
+        r.max(0) as usize
+    }
+
+    fn set_sel(&self, id: i32, i: usize) {
+        unsafe {
+            SendMessageW(self.ctl(id), CB_SETCURSEL, Some(WPARAM(i)), None);
+        }
+    }
+
     fn form(&self) -> Form {
         Form {
+            close_after: self.checked(ID_GCLOSE),
+            max_on: self.checked(ID_MAXON),
+            max_val: self.text(ID_MAXVAL).trim().parse().unwrap_or(10000),
+            enc: self.sel(ID_ENC),
+            out: self.sel(ID_OUT),
             tab: self.cur_tab,
             find: self.text(ID_FIND),
             repl: self.text(ID_REPL),
@@ -158,9 +187,9 @@ impl Ctrls {
         let buttons: &[(i32, &str)] = match tab {
             TAB_FIND => &[(ID_NEXT, "次を検索(&N)"), (ID_PREV, "前を検索(&P)"), (ID_ALL, "すべて検索(&A)"), (ID_CLOSE, "閉じる")],
             TAB_REPLACE => &[(ID_NEXT, "次を検索(&N)"), (ID_REPL_NEXT, "置換して次へ(&R)"), (ID_REPL_ALL, "すべて置換(&A)"), (ID_ALL, "すべて検索(&L)"), (ID_CLOSE, "閉じる")],
-            _ => &[(ID_GREP, "検索(&S)"), (ID_GREP_REPLACE, "結果を置換(&R)..."), (ID_CLOSE, "閉じる")],
+            _ => &[(ID_GREP, "検索(&S)"), (ID_EXTRACT, "抽出(&X)"), (ID_GREP_REPLACE, "結果を置換(&R)..."), (ID_CLOSE, "閉じる")],
         };
-        for id in [ID_NEXT, ID_PREV, ID_ALL, ID_REPL_NEXT, ID_REPL_ALL, ID_GREP, ID_GREP_REPLACE, ID_CLOSE] {
+        for id in [ID_NEXT, ID_PREV, ID_ALL, ID_REPL_NEXT, ID_REPL_ALL, ID_GREP, ID_EXTRACT, ID_GREP_REPLACE, ID_CLOSE] {
             let pos = buttons.iter().position(|(b, _)| *b == id);
             match pos {
                 Some(i) => {
@@ -183,9 +212,9 @@ impl Ctrls {
         }
         let (folder_y, files_y) = if grep { (y, y + 52) } else { (0, 0) };
         // GREP の場合は、置換後の文字列の下にフォルダとファイル
-        self.place(ID_FOLDER, 20, folder_y + 18, 252, 24, grep);
+        self.place(ID_FOLDER, 20, folder_y + 18, 252, 200, grep);
         self.place(ID_BROWSE, 278, folder_y + 18, 48, 24, grep);
-        self.place(ID_FILES, 20, files_y + 18, 306, 24, grep);
+        self.place(ID_FILES, 20, files_y + 18, 306, 200, grep);
         let mut cy = match tab {
             TAB_FIND => y + 4,
             TAB_REPLACE => y + 56,
@@ -204,6 +233,24 @@ impl Ctrls {
             _ => {
                 cy += 26;
                 self.place(ID_WORD, 20, cy, 150, 22, true);
+            }
+        }
+        // GREP：終了したら閉じる／最大一致数／文字コード／出力
+        if grep {
+            self.place(ID_GCLOSE, 176, cy, 160, 22, true);
+            cy += 26;
+            self.place(ID_MAXON, 20, cy, 150, 22, true);
+            self.place(ID_MAXVAL, 176, cy - 1, 80, 24, true);
+            cy += 30;
+            self.place(1005, 20, cy + 3, 90, 18, true);
+            self.place(ID_ENC, 110, cy, 216, 200, true);
+            cy += 30;
+            self.place(1006, 20, cy + 3, 90, 18, true);
+            self.place(ID_OUT, 110, cy, 216, 200, true);
+            cy += 26;
+        } else {
+            for id in [ID_GCLOSE, ID_MAXON, ID_MAXVAL, ID_ENC, ID_OUT, 1005, 1006] {
+                self.place(id, 0, 0, 0, 0, false);
             }
         }
         let content_bottom = cy + 30;
@@ -318,6 +365,11 @@ pub(super) unsafe fn show(owner: HWND, tab: usize) {
                 ct.set_checked(ID_BACKUP, init.backup);
                 ct.set_checked(ID_WORD, init.word);
                 ct.set_checked(ID_SELONLY, init.scope);
+                ct.set_checked(ID_GCLOSE, init.close_after);
+                ct.set_checked(ID_MAXON, init.max_on);
+                ct.set_text(ID_MAXVAL, &init.max_val.to_string());
+                ct.set_sel(ID_ENC, init.enc);
+                ct.set_sel(ID_OUT, init.out);
                 let _ = EnableWindow(ct.ctl(ID_SELONLY), init.scope);
                 ct.layout(tab);
             }
@@ -408,6 +460,13 @@ pub(super) struct DialogInit {
     dark: bool,
     find_history: Vec<String>,
     repl_history: Vec<String>,
+    folder_history: Vec<String>,
+    files_history: Vec<String>,
+    close_after: bool,
+    max_on: bool,
+    max_val: usize,
+    enc: usize,
+    out: usize,
 }
 
 impl Default for DialogInit {
@@ -425,13 +484,20 @@ impl Default for DialogInit {
             dark: false,
             find_history: Vec::new(),
             repl_history: Vec::new(),
+            folder_history: Vec::new(),
+            files_history: Vec::new(),
+            close_after: false,
+            max_on: false,
+            max_val: 10000,
+            enc: 0,
+            out: 0,
         }
     }
 }
 
 impl Ctrls {
     fn refill_history(&self, init: &DialogInit) {
-        for (id, list) in [(ID_FIND, &init.find_history), (ID_REPL, &init.repl_history)] {
+        for (id, list) in [(ID_FIND, &init.find_history), (ID_REPL, &init.repl_history), (ID_FOLDER, &init.folder_history), (ID_FILES, &init.files_history)] {
             let h = self.ctl(id);
             unsafe {
                 SendMessageW(h, CB_RESETCONTENT, None, None);
@@ -497,10 +563,26 @@ unsafe fn create(owner: HWND) {
         for id in [1001, 1002, 1003, 1004] {
             all.push((id, make_child(dlg, w!("STATIC"), "", 0, 0, id, font)));
         }
+        all.push((1005, make_child(dlg, w!("STATIC"), "エンコード(&D)", 0, 0, 1005, font)));
+        all.push((1006, make_child(dlg, w!("STATIC"), "出力(&O)", 0, 0, 1006, font)));
         all.push((ID_FIND, make_child(dlg, w!("COMBOBOX"), "", combo, 0, ID_FIND, font)));
         all.push((ID_REPL, make_child(dlg, w!("COMBOBOX"), "", combo, 0, ID_REPL, font)));
-        all.push((ID_FOLDER, make_child(dlg, w!("EDIT"), "", edit, WS_EX_CLIENTEDGE.0, ID_FOLDER, font)));
-        all.push((ID_FILES, make_child(dlg, w!("EDIT"), "", edit, WS_EX_CLIENTEDGE.0, ID_FILES, font)));
+        all.push((ID_FOLDER, make_child(dlg, w!("COMBOBOX"), "", combo, 0, ID_FOLDER, font)));
+        all.push((ID_FILES, make_child(dlg, w!("COMBOBOX"), "", combo, 0, ID_FILES, font)));
+        let drop = CBS_DROPDOWNLIST as u32 | WS_VSCROLL.0 | WS_TABSTOP.0;
+        let enc = make_child(dlg, w!("COMBOBOX"), "", drop, 0, ID_ENC, font);
+        for (name, _) in menu::GREP_ENCODINGS {
+            let t = wide(name);
+            SendMessageW(enc, CB_ADDSTRING, None, Some(LPARAM(t.as_ptr() as isize)));
+        }
+        all.push((ID_ENC, enc));
+        let out = make_child(dlg, w!("COMBOBOX"), "", drop, 0, ID_OUT, font);
+        for name in menu::GREP_OUTPUTS {
+            let t = wide(name);
+            SendMessageW(out, CB_ADDSTRING, None, Some(LPARAM(t.as_ptr() as isize)));
+        }
+        all.push((ID_OUT, out));
+        all.push((ID_MAXVAL, make_child(dlg, w!("EDIT"), "10000", edit | ES_NUMBER as u32, WS_EX_CLIENTEDGE.0, ID_MAXVAL, font)));
         all.push((ID_BROWSE, make_child(dlg, w!("BUTTON"), "参照...", push, 0, ID_BROWSE, font)));
         for (id, text) in [
             (ID_CASE, "大文字と小文字を区別(&C)"),
@@ -509,10 +591,12 @@ unsafe fn create(owner: HWND) {
             (ID_BACKUP, "置換前にバックアップ(.bak)"),
             (ID_SELONLY, "選択範囲の中だけ(&S)"),
             (ID_WORD, "単語単位(&W)"),
+            (ID_GCLOSE, "終了したら閉じる(&L)"),
+            (ID_MAXON, "最大一致数を指定(&M)"),
         ] {
             all.push((id, make_child(dlg, w!("BUTTON"), text, check, 0, id, font)));
         }
-        for id in [ID_NEXT, ID_PREV, ID_ALL, ID_REPL_NEXT, ID_REPL_ALL, ID_GREP, ID_GREP_REPLACE, ID_CLOSE] {
+        for id in [ID_NEXT, ID_PREV, ID_ALL, ID_REPL_NEXT, ID_REPL_ALL, ID_GREP, ID_EXTRACT, ID_GREP_REPLACE, ID_CLOSE] {
             all.push((id, make_child(dlg, w!("BUTTON"), "", push, 0, id, font)));
         }
         let (bg, edit_bg) = (CreateSolidBrush(rgb_ref(&super::theme::DARK.gutter_bg)), CreateSolidBrush(rgb_ref(&super::theme::DARK.bg)));
@@ -565,7 +649,7 @@ unsafe fn on_command(dlg: HWND, id: i32) {
         let Some(form) = current_form() else { return };
         // Enter は、タブごとの既定の操作
         let id = if id == IDOK.0 { if form.tab == TAB_GREP { ID_GREP } else { ID_NEXT } } else { id };
-        if !matches!(id, ID_NEXT | ID_PREV | ID_ALL | ID_REPL_NEXT | ID_REPL_ALL | ID_GREP | ID_GREP_REPLACE) {
+        if !matches!(id, ID_NEXT | ID_PREV | ID_ALL | ID_REPL_NEXT | ID_REPL_ALL | ID_GREP | ID_EXTRACT | ID_GREP_REPLACE) {
             return;
         }
         let deferred = with_app(|app| app.dialog_action(id, &form)).flatten();
@@ -574,6 +658,10 @@ unsafe fn on_command(dlg: HWND, id: i32) {
         }
         // 見つかった所を見えるように、本文のウィンドウへ描き直しを促す
         let _ = InvalidateRect(Some(owner), None, false);
+        // 「終了したら閉じる」：GREP を始めたら、ダイアログを閉じる
+        if form.close_after && matches!(id, ID_GREP | ID_EXTRACT) {
+            hide(dlg);
+        }
     }
 }
 
@@ -603,7 +691,7 @@ unsafe extern "system" fn dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                     switch_tab((id - ID_TAB0) as usize);
                     return LRESULT(0);
                 }
-                let is_check = matches!(id, ID_CASE | ID_REGEX | ID_SUBDIR | ID_BACKUP | ID_SELONLY | ID_WORD);
+                let is_check = matches!(id, ID_CASE | ID_REGEX | ID_SUBDIR | ID_BACKUP | ID_SELONLY | ID_WORD | ID_GCLOSE | ID_MAXON | ID_ENC | ID_OUT | ID_FOLDER | ID_FILES | ID_MAXVAL);
                 if (code == BN_CLICKED || id == IDOK.0 || id == IDCANCEL.0) && !is_check {
                     on_command(hwnd, id);
                 }
@@ -662,6 +750,13 @@ impl App {
             dark: self.settings.dark,
             find_history: self.history.list(crate::history::Kind::Find).to_vec(),
             repl_history: self.history.list(crate::history::Kind::Replace).to_vec(),
+            folder_history: self.history.list(crate::history::Kind::Folder).to_vec(),
+            files_history: self.history.list(crate::history::Kind::Files).to_vec(),
+            close_after: self.settings.grep_close,
+            max_on: self.grep_max_on,
+            max_val: self.grep_max,
+            enc: self.grep_enc,
+            out: self.grep_output,
         }
     }
 
@@ -679,6 +774,13 @@ impl App {
             self.grep_files = f.files.clone();
             self.grep_recursive = f.subdir;
             self.settings.grep_backup = f.backup;
+            self.settings.grep_close = f.close_after;
+            self.grep_enc = f.enc;
+            self.grep_max_on = f.max_on;
+            self.grep_max = f.max_val.max(1);
+            self.grep_output = f.out;
+            self.history.push(crate::history::Kind::Folder, &f.folder);
+            self.history.push(crate::history::Kind::Files, &f.files);
             self.settings.save();
         }
         if f.find.is_empty() {
@@ -696,6 +798,10 @@ impl App {
                 self.replace_all();
             }
             ID_GREP => self.start_grep(),
+            ID_EXTRACT => {
+                self.grep_extract = true;
+                self.start_grep();
+            }
             ID_GREP_REPLACE => {
                 if !matches!(self.results.as_ref().map(|r| &r.kind), Some(results::ResultKind::Grep { .. })) {
                     self.message = "GREP の結果がありません。先に「検索」を押してください".into();

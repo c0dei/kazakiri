@@ -115,6 +115,17 @@ pub const ID_CSV_LETTERS: u32 = 921;
 pub const ID_DIFF_TAB_BASE: u32 = 1000;
 pub const ID_MODEBAR: u32 = 922;
 pub const ID_COLPICK: u32 = 923;
+/// GREP の文字コードの選択肢（自動判定または指定）
+pub const GREP_ENCODINGS: [(&str, Option<&Encoding>); 6] = [
+    ("自動判定", None),
+    ("UTF-8", Some(encoding_rs::UTF_8)),
+    ("Shift_JIS (CP932)", Some(encoding_rs::SHIFT_JIS)),
+    ("EUC-JP", Some(encoding_rs::EUC_JP)),
+    ("UTF-16LE", Some(encoding_rs::UTF_16LE)),
+    ("UTF-16BE", Some(encoding_rs::UTF_16BE)),
+];
+/// GREP の結果に出す内容
+pub const GREP_OUTPUTS: [&str; 4] = ["ファイル名・行・一致した行", "ファイル名・行", "ファイル名だけ（一致したファイルの一覧）", "一致した行だけ"];
 pub const ID_CELL_MODE: u32 = 925;
 pub const ID_COL_FOLLOW: u32 = 924;
 /// 対象の列を選ぶメニューの項目（列番号 0 から 199）

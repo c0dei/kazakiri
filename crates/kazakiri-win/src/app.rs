@@ -307,6 +307,13 @@ struct App {
     dlg_scope: Option<(u64, u64)>,
     /// GREP でサブフォルダも探す
     grep_recursive: bool,
+    /// GREP の文字コード（menu::GREP_ENCODINGS の番号）、最大一致数の指定、出力の内容（menu::GREP_OUTPUTS の番号）
+    grep_enc: usize,
+    grep_max_on: bool,
+    grep_max: usize,
+    grep_output: usize,
+    /// 「抽出」：GREP の結果の、一致した行だけを新しいタブに出す
+    grep_extract: bool,
     /// IME で変換中の文字
     comp: Option<edit::Comp>,
     /// CSV の、前の行から続く行の一覧

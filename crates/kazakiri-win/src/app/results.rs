@@ -208,7 +208,12 @@ impl App {
                 for h in &res.hits {
                     let path = &res.files[h.file];
                     let rel = path.strip_prefix(root).unwrap_or(path);
-                    out.push_str(&format!("{}({}): {}\n", rel.display(), h.line + 1, h.text));
+                    match self.grep_output {
+                        1 => out.push_str(&format!("{}({})\n", rel.display(), h.line + 1)),
+                        2 => out.push_str(&format!("{}\n", rel.display())),
+                        3 => out.push_str(&format!("{}\n", h.text)),
+                        _ => out.push_str(&format!("{}({}): {}\n", rel.display(), h.line + 1, h.text)),
+                    }
                 }
             }
         }
@@ -448,10 +453,36 @@ impl App {
             }
             JobDone::Grep { query, root, res, elapsed, .. } => match res {
                 Err(e) => self.message = e,
-                Ok(res) => {
+                Ok(mut res) => {
+                    // 「ファイル名だけ」：一致したファイルごとに 1 件にする
+                    if self.grep_output == 2 {
+                        let mut seen = std::collections::HashSet::new();
+                        res.hits.retain(|h| seen.insert(h.file));
+                    }
+                    // 「抽出」：一致した行だけを、新しいタブに出す
+                    if std::mem::take(&mut self.grep_extract) {
+                        let mut out = String::new();
+                        for h in &res.hits {
+                            out.push_str(&h.text);
+                            out.push('\n');
+                        }
+                        let n = res.hits.len();
+                        if n == 0 {
+                            self.message = format!("GREP「{query}」は見つかりませんでした");
+                            return self.invalidate();
+                        }
+                        self.new_tab();
+                        let nl = self.newline_str();
+                        let text = if nl == "\n" { out } else { out.replace('\n', nl) };
+                        self.type_text(&text, EditKind::Other);
+                        self.sel = Some((0, 0));
+                        self.top = 0;
+                        self.message = format!("GREP「{query}」: 一致した {} 行を新しいタブに抽出しました（{} ファイル）", group(n as u64), group(res.matched_files as u64));
+                        return self.invalidate();
+                    }
                     let mut notes = Vec::new();
                     if res.truncated {
-                        notes.push(format!("{} 件で打ち切り", group(GREP_LIMIT as u64)));
+                        notes.push(format!("{} 件で打ち切り", group(if self.grep_max_on { self.grep_max as u64 } else { GREP_LIMIT as u64 })));
                     }
                     if res.cancelled {
                         notes.push("中止".into());
@@ -660,12 +691,24 @@ impl App {
                         let hit = &res.hits[i];
                         let path = &res.files[hit.file];
                         let rel = path.strip_prefix(root).unwrap_or(path).display().to_string();
-                        let loc = format!("{rel}({})", group(hit.line + 1));
+                        // 出力の内容（GREP ダイアログの「出力」）
+                        let mode = self.grep_output;
+                        let loc = match mode {
+                            2 => rel.clone(),
+                            3 => String::new(),
+                            _ => format!("{rel}({})", group(hit.line + 1)),
+                        };
                         brush.SetColor(&self.theme.panel_file);
                         let lw = self.text_width(&loc.encode_utf16().collect::<Vec<_>>())?.min(w * 0.45);
                         self.draw_str(rt, brush, &loc, 8.0, y, 8.0 + lw)?;
-                        let shown = format!(": {}", hit.text);
-                        self.highlight_units(rt, brush, &shown, hit.col + 2, hit.col + 2 + hit.col_len, 8.0 + lw, y, w - 4.0)?;
+                        let (shown, base) = match mode {
+                            1 | 2 => (String::new(), 0),
+                            3 => (hit.text.clone(), 0),
+                            _ => (format!(": {}", hit.text), 2),
+                        };
+                        if !shown.is_empty() {
+                            self.highlight_units(rt, brush, &shown, hit.col + base, hit.col + base + hit.col_len, 8.0 + lw, y, w - 4.0)?;
+                        }
                         brush.SetColor(&self.theme.text);
                         self.draw_str(rt, brush, &shown, 8.0 + lw, y, w - 4.0)?;
                     }
@@ -816,7 +859,8 @@ impl App {
             search: self.opts,
             include: grep::parse_include(&self.grep_files),
             recursive: self.grep_recursive,
-            max_hits: GREP_LIMIT,
+            max_hits: if self.grep_max_on { self.grep_max.max(1) } else { GREP_LIMIT },
+            encoding: menu::GREP_ENCODINGS[self.grep_enc.min(menu::GREP_ENCODINGS.len() - 1)].1,
         };
         self.cancel_jobs();
         let id = self.next_job;
