@@ -144,7 +144,11 @@ impl App {
         self.prompt = Some(p);
         self.input = match p {
             Prompt::GotoLine => String::new(),
-            Prompt::ColumnFilter => self.last_filter.clone(),
+            // 対象の列（カーソルのある列）を入れておく。「: 」は「含む」
+            Prompt::ColumnFilter => match self.caret_column() {
+                Some((col, _, _)) => format!("{} : ", col + 1),
+                None => self.last_filter.clone(),
+            },
             Prompt::Split => "1000000".into(),
             Prompt::Sequence => "1,1,0".into(),
         };

@@ -84,9 +84,9 @@ const MODES: &[Option<(&str, u32, &str)>] = &[
     Some(("パイプ", menu::ID_DELIM_BASE + 3, "パイプ（|）区切りで表示")),
     None,
     Some(("見出し", menu::ID_CSV_HEADER, "1 行目を見出しにして、上に固定する")),
-    Some(("列で昇順", menu::ID_SORT_ASC, "カーソルの列で昇順に並べ替え")),
-    Some(("列で降順", menu::ID_SORT_DESC, "カーソルの列で降順に並べ替え")),
-    Some(("列フィルタ", menu::ID_FILTER, "列の条件で行を絞り込む")),
+    Some(("列で昇順", menu::ID_SORT_ASC, "対象の列（見出しをクリックして選ぶ）で昇順に並べ替え")),
+    Some(("列で降順", menu::ID_SORT_DESC, "対象の列（見出しをクリックして選ぶ）で降順に並べ替え")),
+    Some(("列フィルタ", menu::ID_FILTER, "対象の列（見出しをクリックして選ぶ）の条件で行を絞り込む")),
     None,
     Some(("フィルター", menu::ID_FILTER_LINES, "検索語に一致した行だけを新しいタブに出す (Ctrl+Shift+L)")),
 ];
@@ -337,6 +337,12 @@ impl App {
                 }
                 brush.SetColor(&t.text);
                 self.draw_ui_str(rt, brush, label, x0 + 9.0, (h - self.ui_line_h) / 2.0, x1)?;
+            }
+            // CSV 表示のあいだ、並べ替え・列フィルタの対象の列を見せる（見出し行を押すと変わる）
+            if let (Some((col, total, name)), Some(&(_, last_x1, _))) = (self.caret_column(), self.mode_boxes().last()) {
+                let label = format!("対象の列: {}/{}{}  （見出しをクリックで変更）", col + 1, total, if name.is_empty() { String::new() } else { format!(" 「{name}」") });
+                brush.SetColor(&t.gutter_text);
+                self.draw_ui_str(rt, brush, &label, last_x1 + 16.0, (h - self.ui_line_h) / 2.0, w)?;
             }
             brush.SetColor(&t.dim);
             rt.FillRectangle(&rect(0.0, h - 1.0, w, h), brush);
