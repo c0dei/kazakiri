@@ -135,6 +135,8 @@ pub const ID_COL_FOLLOW: u32 = 924;
 pub const ID_CSV_MODE: u32 = 926;
 pub const ID_TSV: u32 = 927;
 pub const ID_DELIM_FIELD: u32 = 928;
+/// コマンドパレット（Ctrl+Shift+P）
+pub const ID_PALETTE: u32 = 929;
 /// 対象の列を選ぶメニューの項目（列番号 0 から 199）
 pub const ID_COL_BASE: u32 = 1200;
 pub const ID_TRAY_ACTIVATE: u32 = 950;
@@ -246,8 +248,49 @@ fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
-/// メニュー項目。キーの表示（`\t` の後ろ）は keys.ini の設定に合わせる
+thread_local! {
+    /// コマンドパレットに出す、メニューのコマンド一覧（名前, キー, ID）。メニューを作るときに集める
+    static PALETTE_ITEMS: std::cell::RefCell<Vec<(String, String, u32)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// コマンドパレット用の一覧
+pub fn palette_items() -> Vec<(String, String, u32)> {
+    PALETTE_ITEMS.with(|p| p.borrow().clone())
+}
+
+/// メニューの文字から、パレットに出す名前を作る（「(&X)」や「&」、末尾の「...」を除く）
+fn palette_name(text: &str) -> String {
+    let t = text.split('\t').next().unwrap_or(text);
+    let mut out = String::new();
+    let mut chars = t.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '(' && chars.peek() == Some(&'&') {
+            // 「(&X)」を読み飛ばす
+            for d in chars.by_ref() {
+                if d == ')' {
+                    break;
+                }
+            }
+        } else if c != '&' {
+            out.push(c);
+        }
+    }
+    out.trim_end_matches("...").trim().to_string()
+}
+
+/// メニュー項目。キーの表示（タブ文字の後ろ）は keys.ini の設定に合わせる
 unsafe fn item(km: &Keymap, menu: HMENU, id: u32, text: &str) -> Result<()> {
+    PALETTE_ITEMS.with(|p| {
+        let mut p = p.borrow_mut();
+        let name = palette_name(text);
+        if !name.is_empty() && !p.iter().any(|e| e.2 == id) {
+            let key = match km.label(id) {
+                Some(k) => k.to_string(),
+                None => text.split('\t').nth(1).unwrap_or("").to_string(),
+            };
+            p.push((name, key, id));
+        }
+    });
     let text = match km.label(id) {
         Some("") => text.split('\t').next().unwrap_or(text).to_string(),
         Some(k) => format!("{}\t{k}", text.split('\t').next().unwrap_or(text)),
@@ -447,6 +490,8 @@ pub unsafe fn build(km: &Keymap) -> Result<Menus> {
         item(km, view, ID_MD_SPLIT, "Markdown プレビュー（右に並べる）(&V)\tCtrl+Shift+V")?;
         item(km, view, ID_MD_DESIGN, "Markdown デザインビュー（整形して表示）(&G)\tCtrl+Shift+G")?;
         item(km, view, ID_MD_EXPORT, "Markdown を HTML に書き出し(&H)...")?;
+        item(km, view, ID_PALETTE, "コマンドパレット(&P)...\tCtrl+Shift+P")?;
+        sep(view)?;
         item(km, view, ID_TOOLBAR, "ツールバーを表示(&B)")?;
         item(km, view, ID_MODEBAR, "モードバー（CSV の区切りなど）を表示(&D)")?;
         item(km, view, ID_FKEYS, "機能ボタンの列を表示(&U)")?;
@@ -681,7 +726,7 @@ mod id_tests {
             }
         }
         // 単独のコマンドの ID が、範囲の中に入っていないこと
-        let single = [("TOOLBAR", ID_TOOLBAR), ("FKEYS", ID_FKEYS), ("OVERWRITE", ID_OVERWRITE), ("COMPLETE", ID_COMPLETE), ("MODEBAR", ID_MODEBAR), ("COLPICK", ID_COLPICK), ("MARK_CLEAR", ID_MARK_CLEAR), ("DIFF", ID_DIFF), ("SPLIT_VIEW", ID_SPLIT_VIEW), ("FILTER_LINES", ID_FILTER_LINES), ("CSV_MODE", ID_CSV_MODE), ("TSV", ID_TSV), ("DELIM_FIELD", ID_DELIM_FIELD)];
+        let single = [("TOOLBAR", ID_TOOLBAR), ("FKEYS", ID_FKEYS), ("OVERWRITE", ID_OVERWRITE), ("COMPLETE", ID_COMPLETE), ("MODEBAR", ID_MODEBAR), ("COLPICK", ID_COLPICK), ("MARK_CLEAR", ID_MARK_CLEAR), ("DIFF", ID_DIFF), ("SPLIT_VIEW", ID_SPLIT_VIEW), ("FILTER_LINES", ID_FILTER_LINES), ("CSV_MODE", ID_CSV_MODE), ("TSV", ID_TSV), ("DELIM_FIELD", ID_DELIM_FIELD), ("PALETTE", ID_PALETTE)];
         for (n, id) in single {
             for r in &ranges {
                 assert!(!(r.1..r.1 + r.2).contains(&id), "{n} ({id}) が {} の範囲に入っています", r.0);

@@ -491,6 +491,9 @@ impl App {
         if self.is_find_bar() {
             return self.find_layout().card;
         }
+        if self.prompt == Some(Prompt::Palette) {
+            return self.palette_layout().card;
+        }
         let w = self.client_size().0;
         let cw = (w - 40.0).clamp(280.0, 560.0).min(w);
         let (x0, y0) = ((w - cw - 20.0).max(0.0), self.pin_h() + 10.0);
@@ -502,6 +505,9 @@ impl App {
         if self.is_find_bar() {
             let l = self.find_layout();
             return if self.prompt_focus == 1 { l.repl.unwrap_or(l.find) } else { l.find };
+        }
+        if self.prompt == Some(Prompt::Palette) {
+            return self.palette_layout().input;
         }
         let (x0, y0, x1, _) = self.prompt_card();
         let top = y0 + 10.0 + self.ui_line_h + 6.0;
@@ -519,9 +525,12 @@ impl App {
         if self.is_find_bar() {
             return unsafe { self.draw_find_bar(rt, brush) };
         }
+        if prompt == Prompt::Palette {
+            return unsafe { self.draw_palette(rt, brush) };
+        }
         let t = self.theme;
         let (title, hint) = match prompt {
-            Prompt::Find | Prompt::Replace => (String::new(), String::new()),
+            Prompt::Find | Prompt::Replace | Prompt::Palette => (String::new(), String::new()),
             Prompt::GotoLine => ("行へ移動".to_string(), "行番号を入力して Enter".to_string()),
             Prompt::LineFilter => ("行フィルター".to_string(), format!("検索語を入力して Enter。一致した行だけを新しいタブに出します（{}{}）", if self.opts.case_sensitive { "大文字小文字を区別" } else { "大文字小文字を区別しない" }, if self.opts.regex { "・正規表現" } else { "" })),
             Prompt::Sequence => ("連番を挿入".to_string(), "開始値,増分,桁数（例: 1,1,3 → 001, 002…）を入力して Enter".to_string()),

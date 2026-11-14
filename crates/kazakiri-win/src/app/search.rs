@@ -167,6 +167,11 @@ impl App {
 
     /// 検索・置換バーの入力が変わった：F3 などでも同じ語で探せるように、検索語・置換語を更新する
     pub(super) fn find_bar_changed(&mut self) {
+        if self.prompt == Some(Prompt::Palette) {
+            // 絞り込みが変わったら、先頭の行を選び直す
+            self.palette_sel = 0;
+            self.palette_top = 0;
+        }
         if self.is_find_bar() {
             self.last_find = self.input.clone();
             self.last_replace = self.input2.clone();
@@ -224,6 +229,7 @@ impl App {
             Prompt::Sequence => "1,1,0".into(),
             Prompt::LineFilter => self.last_find.clone(),
             Prompt::Find | Prompt::Replace => self.last_find.clone(),
+            Prompt::Palette => String::new(),
         };
         self.invalidate();
     }
@@ -240,6 +246,12 @@ impl App {
     pub(super) fn submit_prompt(&mut self) -> Option<Deferred> {
         match self.prompt.take() {
             Some(Prompt::Find | Prompt::Replace) => {}
+            Some(Prompt::Palette) => {
+                let id = self.palette_results().get(self.palette_sel).map(|e| e.2);
+                self.comp = None;
+                self.invalidate();
+                return id.and_then(|id| unsafe { self.command(id) });
+            }
             Some(Prompt::ColumnFilter) => {
                 self.last_filter = std::mem::take(&mut self.input);
                 self.start_filter();

@@ -67,6 +67,7 @@ mod dark;
 mod find_dialog;
 mod findbar;
 mod coldrop;
+mod palette;
 mod bookmarks;
 mod diffview;
 mod autosave;
@@ -148,6 +149,8 @@ enum Prompt {
     Find,
     /// 検索・置換バー（2 段。Tab で置換欄へ）
     Replace,
+    /// コマンドパレット（名前で絞り込んで、Enter で実行）
+    Palette,
 }
 
 /// 借用中に実行できない処理（モーダルダイアログはメッセージを再入させる）
@@ -346,6 +349,9 @@ struct App {
     col_drop: Option<coldrop::ColDrop>,
     /// モードバーの区切り文字の欄を入力待ちにしているか（次に打った 1 文字が区切りになる）
     delim_edit: bool,
+    /// コマンドパレットで選んでいる行と、先頭に見えている行
+    palette_sel: usize,
+    palette_top: usize,
     /// 最後に使った、タブ以外の区切り文字（「CSV」ボタンで戻す先）
     last_csv_delim: char,
     last_find: String,
@@ -775,6 +781,9 @@ impl App {
                     if self.prompt_chip_click(x, y) {
                         return (DONE, None);
                     }
+                    if let Some(r) = self.palette_click(x, y) {
+                        return (DONE, r);
+                    }
                     if self.md_hit(x, y) {
                         return (DONE, self.md_click(x, y));
                     }
@@ -824,6 +833,9 @@ impl App {
                     // 検索・置換バーの上は、素早い 2 回目のクリックも 1 回目と同じ操作（本文の単語選択にしない）
                     if self.find_bar_click(x, y) || self.prompt_chip_click(x, y) {
                         return (DONE, None);
+                    }
+                    if let Some(r) = self.palette_click(x, y) {
+                        return (DONE, r);
                     }
                     if y < self.pin_h() {
                         self.header_click(x);

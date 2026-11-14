@@ -115,6 +115,8 @@ pub(super) unsafe fn run_inner() -> std::result::Result<(), (&'static str, windo
             prompt_focus: 0,
             col_drop: None,
             delim_edit: false,
+            palette_sel: 0,
+            palette_top: 0,
             last_csv_delim: ',',
             last_find: String::new(),
             last_filter: String::new(),

@@ -51,7 +51,7 @@ impl App {
         }
         // キー割り当て（keys.ini）。入力欄が開いているときはタブの切り替えだけ効く
         if let Some(id) = self.keymap.lookup(ctrl, shift, vk.0) {
-            let bar_ok = self.is_find_bar() && matches!(id, menu::ID_FIND_NEXT | menu::ID_FIND_PREV | menu::ID_FIND | menu::ID_REPLACE);
+            let bar_ok = (self.is_find_bar() && matches!(id, menu::ID_FIND_NEXT | menu::ID_FIND_PREV | menu::ID_FIND | menu::ID_REPLACE)) || (self.prompt == Some(Prompt::Palette) && id == menu::ID_PALETTE);
             if self.prompt.is_none() || bar_ok || matches!(id, menu::ID_NEXT_TAB | menu::ID_PREV_TAB) {
                 return unsafe { self.command(id) };
             }
@@ -74,6 +74,7 @@ impl App {
                     };
                     self.find_bar_do(act);
                 }
+                VK_UP | VK_DOWN | VK_PRIOR | VK_NEXT | VK_HOME | VK_END if self.prompt == Some(Prompt::Palette) => self.palette_move(vk),
                 VK_TAB if self.prompt == Some(Prompt::Replace) => {
                     self.prompt_focus = if shift { 0 } else { 1 - self.prompt_focus.min(1) };
                     self.comp = None;

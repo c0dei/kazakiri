@@ -23,6 +23,7 @@ const COMMANDS: &[(&str, u32)] = &[
     ("split", ID_SPLIT),
     ("join", ID_JOIN),
     ("settings", ID_SETTINGS),
+    ("command_palette", ID_PALETTE),
     ("filter_lines", ID_FILTER_LINES),
     ("diff", ID_DIFF),
     ("split_view", ID_SPLIT_VIEW),
@@ -141,6 +142,7 @@ const DEFAULTS: &[(&str, &str)] = &[
     ("zoom_in", "Ctrl+Plus"),
     ("zoom_out", "Ctrl+Minus"),
     ("zoom_reset", "Ctrl+0"),
+    ("command_palette", "Ctrl+Shift+P"),
 ];
 
 /// 仮想キーコード

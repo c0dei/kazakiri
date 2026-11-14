@@ -114,6 +114,8 @@ pub(super) enum Hover {
     ColPick,
     /// タブ
     Tab(usize),
+    /// ツールバー右端のコマンドパレットの欄
+    Palette,
     /// ステータスバーのクリックできる部分（`status_segments` の種類）
     Status(u8),
 }
@@ -289,6 +291,12 @@ impl App {
         if (-self.tab_h()..0.0).contains(&y) {
             return self.tab_hover(x);
         }
+        if let Some((x0, y0, x1, y1)) = self.palette_pill() {
+            let ty = y - self.toolbar_top();
+            if x >= x0 && x < x1 && ty >= y0 && ty < y1 {
+                return Some(Hover::Palette);
+            }
+        }
         if tb > 0.0 && (-(self.tab_h() + tb)..-self.tab_h()).contains(&y) {
             // 上の行はツールバー、下の行はモードバー
             if y < -(self.tab_h() + self.mode_h()) {
@@ -320,6 +328,7 @@ impl App {
             Hover::ColPick => Some((menu::ID_COLPICK, "並べ替え・列フィルタの対象の列を選ぶ（見出しのクリックでも選べる）")),
             Hover::Fkey(i) => FKEYS.get(i).map(|&(label, id)| (id, label)),
             Hover::Tab(_) | Hover::Status(_) => None,
+            Hover::Palette => Some((menu::ID_PALETTE, "コマンドを名前で検索して実行します")),
         }
     }
 
@@ -411,6 +420,20 @@ impl App {
     }
 
 
+    /// ツールバーの右端の、コマンドパレットを開く丸い欄（ツールバーの行の中の座標）。幅が足りないときは None
+    pub(super) fn palette_pill(&self) -> Option<(f32, f32, f32, f32)> {
+        let w = self.client_size().0;
+        if w < 900.0 || !self.settings.toolbar {
+            return None;
+        }
+        Some((w - 14.0 - 300.0, 4.0, w - 14.0, ROW1_H - 4.0))
+    }
+
+    /// ツールバーの行（1 行目）の座標 → 本文の座標の y からの変換用：ツールバーの上端
+    pub(super) fn toolbar_top(&self) -> f32 {
+        -(self.tab_h() + self.tb_h())
+    }
+
     pub(super) unsafe fn draw_toolbar(&self, rt: &ID2D1RenderTarget, brush: &ID2D1SolidColorBrush, w: f32) -> Result<()> {
         let h = ROW1_H;
         let t = self.theme;
@@ -427,6 +450,23 @@ impl App {
                 }
                 brush.SetColor(&t.text);
                 self.draw_icon(rt, brush, icon, x0 + (BTN_W - 16.0) / 2.0, (h - 16.0) / 2.0);
+            }
+            // コマンドパレットの欄
+            if let Some((x0, y0, x1, y1)) = self.palette_pill() {
+                let hovered = self.hover == Some(Hover::Palette);
+                brush.SetColor(&t.dim);
+                rt.FillRoundedRectangle(&rrect(x0, y0, x1, y1, (y1 - y0) / 2.0), brush);
+                brush.SetColor(if hovered { &t.panel_head } else { &t.bg });
+                rt.FillRoundedRectangle(&rrect(x0 + 1.0, y0 + 1.0, x1 - 1.0, y1 - 1.0, (y1 - y0) / 2.0 - 1.0), brush);
+                brush.SetColor(&t.gutter_text);
+                let (cx, cy) = (x0 + 18.0, (y0 + y1) / 2.0 - 1.0);
+                rt.DrawEllipse(&D2D1_ELLIPSE { point: Vector2 { X: cx, Y: cy }, radiusX: 4.5, radiusY: 4.5 }, brush, 1.4, None);
+                rt.DrawLine(Vector2 { X: cx + 3.5, Y: cy + 3.5 }, Vector2 { X: cx + 7.0, Y: cy + 7.0 }, brush, 1.4, None);
+                self.draw_ui_str(rt, brush, "コマンドを検索", x0 + 34.0, (y0 + y1 - self.ui_line_h) / 2.0, x1 - 120.0)?;
+                let key = self.keymap.label(menu::ID_PALETTE).filter(|k| !k.is_empty()).unwrap_or("Ctrl+Shift+P").to_string();
+                let units: Vec<u16> = key.encode_utf16().collect();
+                let kw = self.ui_text_width(&units)?;
+                self.draw_ui_str(rt, brush, &key, x1 - 16.0 - kw, (y0 + y1 - self.ui_line_h) / 2.0, x1 - 4.0)?;
             }
             // 区切り線（モードバーがなければ、ツールバーの下の線）
             if self.mode_h() == 0.0 {
