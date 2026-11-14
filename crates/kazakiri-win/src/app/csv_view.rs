@@ -244,7 +244,8 @@ impl Disp {
             let flen = f.encode_utf16().count() as u32;
             let disp_start = units.len() as u32;
             segs.push((src_pos, disp_start, flen));
-            units.extend(f.encode_utf16());
+            // フィールドの中のタブは、列の幅の計算（半角 1 文字分）に合わせて空白 1 つで見せる（タブ位置まで広がって列がずれるのを防ぐ）
+            units.extend(f.encode_utf16().map(|u| if u == 0x09 { 0x20 } else { u }));
             src_pos += flen;
             if k + 1 < n {
                 let pad = widths.get(k).copied().unwrap_or(0).saturating_sub(csv::display_width(f)) + 1;
