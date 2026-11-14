@@ -161,6 +161,10 @@ fn is_checked(id: i32) -> bool {
     CTRLS.with(|c| c.borrow().as_ref().and_then(|ct| ct.toggles.get(&id).copied())).unwrap_or(false)
 }
 
+fn is_toggle(id: i32) -> bool {
+    CTRLS.with(|c| c.borrow().as_ref().is_some_and(|ct| ct.rows.iter().any(|r| r.toggle == Some(id))))
+}
+
 fn flip_checked(id: i32) {
     set_checked(id, !is_checked(id));
 }
@@ -583,6 +587,16 @@ unsafe fn create(owner: HWND) {
         if let Some(&(_, h)) = all.iter().find(|(i, _)| *i == ID_TITLE) {
             SendMessageW(h, WM_SETFONT, Some(WPARAM(big_font.0 as usize)), Some(LPARAM(1)));
         }
+        // スイッチの行ごとに、カードの上に透明なボタンを重ねる（Tab で止まり、Space で切り替わる。クリックもこのボタンが受ける）
+        for r in &rows {
+            if let Some(id) = r.toggle {
+                let hw = make_child(dlg, w!("BUTTON"), "", BS_OWNERDRAW as u32 | WS_TABSTOP.0, 0, id, font);
+                let (x, y) = (PAGE_X + 4, PAGE_Y + r.y + 4);
+                let _ = SetWindowPos(hw, None, p(x), p(y), p(CARD_W - 8), p(ROW_H - 8), SWP_NOZORDER | SWP_NOACTIVATE);
+                all.push((id, hw));
+                pages.push((id, r.page, String::new()));
+            }
+        }
         // 検索欄の薄い案内文
         if let Some(&(_, h)) = all.iter().find(|(i, _)| *i == ID_SEARCH) {
             let cue = wide("設定を検索");
@@ -718,27 +732,15 @@ unsafe fn paint_bg(hwnd: HWND, hdc: HDC) {
     }
 }
 
-/// クライアント座標の点にある、スイッチのある行の ID
-fn toggle_at(hwnd: HWND, x: i32, y: i32) -> Option<i32> {
-    let scale = unsafe { GetDpiForWindow(hwnd) }.max(96) as f32 / 96.0;
-    CTRLS.with(|c| {
-        let c = c.borrow();
-        let ct = c.as_ref()?;
-        ct.rows.iter().filter(|r| r.page == ct.cur).find_map(|r| {
-            let (x0, y0) = (PAGE_X as f32 * scale, (PAGE_Y + r.y) as f32 * scale);
-            let (x1, y1) = (x0 + CARD_W as f32 * scale, y0 + ROW_H as f32 * scale);
-            let inside = (x as f32) >= x0 && (x as f32) < x1 && (y as f32) >= y0 && (y as f32) < y1;
-            r.toggle.filter(|_| inside)
-        })
-    })
-}
-
 unsafe extern "system" fn dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     unsafe {
         match msg {
             WM_COMMAND => {
                 let id = (wparam.0 & 0xFFFF) as i32;
                 let code = ((wparam.0 >> 16) & 0xFFFF) as u32;
+                if code == BN_CLICKED && is_toggle(id) {
+                    flip_checked(id);
+                }
                 on_command(hwnd, id, code);
                 LRESULT(0)
             }
@@ -751,23 +753,25 @@ unsafe extern "system" fn dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                 paint_bg(hwnd, HDC(wparam.0 as *mut _));
                 LRESULT(1)
             }
-            WM_LBUTTONUP => {
-                let (x, y) = ((lparam.0 & 0xFFFF) as i16 as i32, ((lparam.0 >> 16) & 0xFFFF) as i16 as i32);
-                if let Some(id) = toggle_at(hwnd, x, y) {
-                    flip_checked(id);
-                    on_command(hwnd, id, BN_CLICKED);
-                }
-                LRESULT(0)
-            }
             WM_SETCURSOR => {
-                let mut pt = POINT::default();
-                let _ = GetCursorPos(&mut pt);
-                let _ = ScreenToClient(hwnd, &mut pt);
-                if (lparam.0 & 0xFFFF) as u32 == HTCLIENT && toggle_at(hwnd, pt.x, pt.y).is_some() {
+                // スイッチの上は手の形
+                let child = HWND(wparam.0 as *mut _);
+                let id = GetDlgCtrlID(child);
+                if id != 0 && is_toggle(id) {
                     SetCursor(LoadCursorW(None, IDC_HAND).ok());
                     return LRESULT(1);
                 }
                 DefWindowProcW(hwnd, msg, wparam, lparam)
+            }
+            WM_DRAWITEM => {
+                // カードの上に重ねた透明なボタン：フォーカスがあるときだけ、枠を描く（ないときはカードの色で消す）
+                let di = &*(lparam.0 as *const DRAWITEMSTRUCT);
+                let p = pal();
+                let focused = di.itemState.0 & ODS_FOCUS.0 != 0;
+                let brush = CreateSolidBrush(rgb_ref(if focused { &p.acc } else { &p.card }));
+                FrameRect(di.hDC, &di.rcItem, brush);
+                let _ = DeleteObject(brush.into());
+                LRESULT(1)
             }
             WM_CTLCOLORDLG | WM_CTLCOLORSTATIC | WM_CTLCOLORBTN | WM_CTLCOLOREDIT | WM_CTLCOLORLISTBOX => {
                 let hdc = HDC(wparam.0 as *mut _);
@@ -782,7 +786,8 @@ unsafe extern "system" fn dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                 SetBkMode(hdc, TRANSPARENT);
                 let is_title = HWND(lparam.0 as *mut _) == ctl(ID_TITLE);
                 SetTextColor(hdc, rgb_ref(if is_title { &p.text } else { &p.dim }));
-                if msg == WM_CTLCOLORSTATIC {
+                // 静的な文字と、カードの上に重ねた透明なボタンは、下のカードを塗りつぶさない
+                if msg == WM_CTLCOLORSTATIC || msg == WM_CTLCOLORBTN {
                     return LRESULT(GetStockObject(NULL_BRUSH).0 as isize);
                 }
                 LRESULT(BG_BRUSH[i].load(Ordering::Relaxed))
