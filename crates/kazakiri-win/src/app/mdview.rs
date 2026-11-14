@@ -720,16 +720,33 @@ impl App {
         }
     }
 
-    /// （本文の座標で）点の下にリンクがあるか
-    pub(super) fn md_link_under(&self, x: f32, y: f32) -> bool {
-        if !self.md_hit(x, y) {
-            return false;
+    /// （本文の座標で）点の下にあるリンクの飛び先。あいだ、ステータスバーに出す
+    pub(super) fn md_link_hover(&mut self, x: f32, y: f32) -> bool {
+        let url = if self.md_hit(x, y) {
+            let (left, w, _) = self.md_area();
+            let (_, off) = self.md_content(w);
+            self.md.as_ref().and_then(|v| v.laid()).and_then(|laid| laid.link_at(x - left - off, y + self.md_scroll(&laid)))
+        } else {
+            None
+        };
+        match url {
+            Some(u) => {
+                if self.message != u {
+                    self.message = u;
+                    self.md_hover = true;
+                    self.invalidate();
+                }
+                true
+            }
+            None => {
+                if self.md_hover {
+                    self.md_hover = false;
+                    self.message.clear();
+                    self.invalidate();
+                }
+                false
+            }
         }
-        let (left, w, _) = self.md_area();
-        let (cw, off) = self.md_content(w);
-        let Some(laid) = self.md.as_ref().and_then(|v| v.laid()) else { return false };
-        let _ = cw;
-        laid.link_at(x - left - off, y + self.md_scroll(&laid)).is_some()
     }
 
     pub(super) fn md_mode(&self) -> Option<MdMode> {
@@ -769,7 +786,18 @@ impl App {
     /// いまのスクロール位置（DIP）。分割のときはエディタの先頭行に合わせる
     fn md_scroll(&self, laid: &Laid) -> f32 {
         match self.md_mode() {
-            Some(MdMode::Split) => laid.y_for_line(self.top as u32).max(0.0),
+            Some(MdMode::Split) => {
+                // 先頭の行にだけ合わせると、下へ行くほどずれる（プレビューのほうが縦に長いため）。
+                // 文書の頭では先頭、末尾では最下部がそろうよう、基準の行を画面の上から下へ動かす
+                let (_, _, h) = self.md_area();
+                let vis = self.visible_lines() as f32;
+                let max_top = (self.total_lines() as f32 - vis).max(1.0);
+                let f = (self.top as f32 / max_top).clamp(0.0, 1.0);
+                let line = self.top as f32 + f * vis;
+                let y0 = laid.y_for_line(line as u32);
+                let y1 = laid.y_for_line(line as u32 + 1);
+                (y0 + (y1 - y0) * line.fract() - f * h).max(0.0)
+            }
             _ => self.md.as_ref().map_or(0.0, |v| v.scroll.get()),
         }
     }
