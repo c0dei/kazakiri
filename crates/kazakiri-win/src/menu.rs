@@ -148,7 +148,7 @@ pub const ID_TRAY_MINIMIZE: u32 = 961;
 pub const ID_TRAY_REMOVE: u32 = 962;
 pub const ID_TRAY_FOLDER_BASE: u32 = 970;
 pub const ID_TRAY_TAB_BASE: u32 = 1100;
-pub const ID_CONV_BASE: u32 = 830;
+pub const ID_CONV_BASE: u32 = 1500;
 pub const ID_COPY: u32 = 200;
 pub const ID_SELECT_ALL: u32 = 201;
 pub const ID_UNDO: u32 = 202;
@@ -641,6 +641,46 @@ impl Menus {
             for (i, p) in recent.iter().enumerate() {
                 let label = format!("&{} {}", (i + 1) % 10, p.display());
                 let _ = item(&Keymap::default(), self.recent, ID_RECENT_BASE + i as u32, &label);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod id_tests {
+    use super::*;
+
+    /// 範囲で受けるコマンド（BASE + 個数）が、ほかのコマンドの ID と重ならないこと
+    #[test]
+    fn id_ranges_do_not_overlap() {
+        let ranges: [(&str, u32, u32); 16] = [
+            ("ENC", ID_ENC_BASE, ENCODINGS.len() as u32),
+            ("RECENT", ID_RECENT_BASE, RECENT_MAX as u32),
+            ("DELIM", ID_DELIM_BASE, DELIMS.len() as u32),
+            ("CONV_ENC", ID_CONV_ENC_BASE, CONV_ENCODINGS.len() as u32),
+            ("CONV_NL", ID_CONV_NL_BASE, CONV_NEWLINES.len() as u32),
+            ("HERE_ENC", ID_HERE_ENC_BASE, CONV_ENCODINGS.len() as u32),
+            ("HERE_NL", ID_HERE_NL_BASE, CONV_NEWLINES.len() as u32),
+            ("CONV", ID_CONV_BASE, CONV_NAMES.len() as u32),
+            ("TABW", ID_TABW_BASE, TAB_WIDTHS.len() as u32),
+            ("MARK", ID_MARK_BASE, 6),
+            ("SORTK", ID_SORTK_BASE, SORT_NAMES.len() as u32),
+            ("CLIP", ID_CLIP_BASE, CLIP_MAX),
+            ("TRAY_FOLDER", ID_TRAY_FOLDER_BASE, 10),
+            ("DIFF_TAB", ID_DIFF_TAB_BASE, 64),
+            ("TRAY_TAB", ID_TRAY_TAB_BASE, 20),
+            ("COL", ID_COL_BASE, 200),
+        ];
+        for (i, a) in ranges.iter().enumerate() {
+            for b in &ranges[i + 1..] {
+                assert!(a.1 + a.2 <= b.1 || b.1 + b.2 <= a.1, "{} と {} が重なっています", a.0, b.0);
+            }
+        }
+        // 単独のコマンドの ID が、範囲の中に入っていないこと
+        let single = [("TOOLBAR", ID_TOOLBAR), ("FKEYS", ID_FKEYS), ("OVERWRITE", ID_OVERWRITE), ("COMPLETE", ID_COMPLETE), ("MODEBAR", ID_MODEBAR), ("COLPICK", ID_COLPICK), ("MARK_CLEAR", ID_MARK_CLEAR), ("DIFF", ID_DIFF), ("SPLIT_VIEW", ID_SPLIT_VIEW), ("FILTER_LINES", ID_FILTER_LINES)];
+        for (n, id) in single {
+            for r in &ranges {
+                assert!(!(r.1..r.1 + r.2).contains(&id), "{n} ({id}) が {} の範囲に入っています", r.0);
             }
         }
     }

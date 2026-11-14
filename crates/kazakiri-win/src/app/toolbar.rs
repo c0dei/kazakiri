@@ -202,6 +202,17 @@ impl App {
         Some(format!("対象の列: {}{}{}", col + 1, if name.is_empty() { String::new() } else { format!(": {name}") }, if follow { "（カーソル）" } else { "" }))
     }
 
+    /// 「対象の列」の欄の左下（画面の座標）。ドロップダウンの一覧をここから開く
+    pub(super) fn colpick_anchor(&self) -> Option<POINT> {
+        let (x0, _) = self.colpick_box()?;
+        let scale = unsafe { GetDpiForWindow(self.hwnd) } as f32 / 96.0;
+        let mut pt = POINT { x: (x0 * scale) as i32, y: ((ROW1_H + MODE_H - 2.0) * scale) as i32 };
+        unsafe {
+            let _ = ClientToScreen(self.hwnd, &mut pt);
+        }
+        Some(pt)
+    }
+
     /// 「対象の列」ドロップダウンの位置。(x0, x1)
     fn colpick_box(&self) -> Option<(f32, f32)> {
         self.mode_layout().1

@@ -26,8 +26,14 @@ pub(super) unsafe fn run_deferred(hwnd: HWND, d: Deferred) {
         Deferred::ShowSettings => unsafe { settings_dialog::show(hwnd) },
         Deferred::ColMenu => unsafe {
             if let Some(Some(menu)) = with_app(|app| app.build_col_menu()) {
+                // 「対象の列」の欄の真下から開く（ドロップダウン）。欄が見えないときだけ、マウスの位置
                 let mut pt = POINT::default();
-                let _ = GetCursorPos(&mut pt);
+                match with_app(|app| app.colpick_anchor()).flatten() {
+                    Some(p) => pt = p,
+                    None => {
+                        let _ = GetCursorPos(&mut pt);
+                    }
+                }
                 let _ = TrackPopupMenu(menu, TPM_LEFTALIGN | TPM_TOPALIGN, pt.x, pt.y, None, hwnd, None);
                 let _ = DestroyMenu(menu);
             }

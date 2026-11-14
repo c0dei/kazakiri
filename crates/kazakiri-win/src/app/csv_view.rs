@@ -590,7 +590,7 @@ impl App {
                 };
                 let w = wide(&label);
                 let checked = v.target == Some(i) || (v.target.is_none() && i == cur);
-                let _ = AppendMenuW(m, MF_STRING | if checked && v.target.is_some() { MF_CHECKED } else { MF_UNCHECKED }, (menu::ID_COL_BASE + i as u32) as usize, PCWSTR(w.as_ptr()));
+                let _ = AppendMenuW(m, MF_STRING | if checked { MF_CHECKED } else { MF_UNCHECKED }, (menu::ID_COL_BASE + i as u32) as usize, PCWSTR(w.as_ptr()));
             }
             Some(m)
         }
