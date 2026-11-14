@@ -11,6 +11,19 @@ use super::*;
 /// アイコンの種類
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Icon {
+    // モードバー
+    CsvComma,
+    TsvTab,
+    Split,
+    Cells,
+    Header,
+    SortAsc,
+    SortDesc,
+    Funnel,
+    FilterLines,
+    Preview,
+    Design,
+    ColPick,
     Menu,
     New,
     Open,
@@ -77,26 +90,44 @@ const FKEYS: &[(&str, u32)] = &[
 pub(super) const ROW1_H: f32 = 34.0;
 pub(super) const MODE_H: f32 = 28.0;
 
+/// モードバーのボタンのアイコン（文字ではなくアイコンで出す。説明はツールチップ）
+fn mode_icon(id: u32) -> Option<Icon> {
+    Some(match id {
+        menu::ID_CSV_MODE => Icon::CsvComma,
+        menu::ID_TSV => Icon::TsvTab,
+        menu::ID_DELIM_FIELD => Icon::Split,
+        menu::ID_CELL_MODE => Icon::Cells,
+        menu::ID_CSV_HEADER => Icon::Header,
+        menu::ID_SORT_ASC => Icon::SortAsc,
+        menu::ID_SORT_DESC => Icon::SortDesc,
+        menu::ID_FILTER => Icon::Funnel,
+        menu::ID_FILTER_LINES => Icon::FilterLines,
+        menu::ID_MD_SPLIT => Icon::Preview,
+        menu::ID_MD_DESIGN => Icon::Design,
+        _ => return None,
+    })
+}
+
 /// モードバーの並び：ボタンの位置 (x0, x1, MODES の番号) と、「対象の列」の欄の位置 (x0, x1)
 type ModeLayout = (Vec<(f32, f32, usize)>, Option<(f32, f32)>);
 
 /// モードバーのボタン。(表示, コマンドの ID, 説明)
 const MODES: &[Option<(&str, u32, &str)>] = &[
-    Some(("CSV", menu::ID_CSV_MODE, "カンマ区切り（CSV）の表として表示。TSV や指定した区切りのときは、カンマに切り替える")),
-    Some(("TSV", menu::ID_TSV, "タブ区切り（TSV）の表として表示")),
-    Some(("区切り", menu::ID_DELIM_FIELD, "区切りにする記号を入力する（欄を押して、記号を 1 文字打つ。Tab キーでタブ）")),
+    Some(("CSV", menu::ID_CSV_MODE, "CSV（カンマ区切り）の表として表示。TSV や指定した区切りのときは、カンマに切り替える")),
+    Some(("TSV", menu::ID_TSV, "TSV（タブ区切り）の表として表示")),
+    Some(("区切り", menu::ID_DELIM_FIELD, "区切り文字：欄を押して、区切りにする記号を 1 文字打つ（Tab キーでタブ、Esc で取消）")),
     None,
-    Some(("セル選択", menu::ID_CELL_MODE, "ドラッグでセルの四角を選ぶ（Excel のように）。コピー・削除・入力は選んだセルの全行に効く")),
-    Some(("見出し", menu::ID_CSV_HEADER, "1 行目を見出しにして、上に固定する")),
+    Some(("セル選択", menu::ID_CELL_MODE, "セル選択：ドラッグでセルの四角を選ぶ（Excel のように）。コピー・削除・入力は選んだセルの全行に効く")),
+    Some(("見出し", menu::ID_CSV_HEADER, "見出し：1 行目を見出しにして、上に固定する")),
     None,
-    Some(("列で昇順", menu::ID_SORT_ASC, "対象の列（見出しをクリックして選ぶ）で昇順に並べ替え")),
-    Some(("列で降順", menu::ID_SORT_DESC, "対象の列（見出しをクリックして選ぶ）で降順に並べ替え")),
-    Some(("列フィルタ", menu::ID_FILTER, "CSV/TSV：対象の列（見出しをクリックして選ぶ）の条件で行を絞り込む")),
+    Some(("列で昇順", menu::ID_SORT_ASC, "昇順に並べ替え：対象の列（見出しをクリックして選ぶ）で")),
+    Some(("列で降順", menu::ID_SORT_DESC, "降順に並べ替え：対象の列（見出しをクリックして選ぶ）で")),
+    Some(("列フィルタ", menu::ID_FILTER, "列フィルタ：対象の列（見出しをクリックして選ぶ）の条件で行を絞り込む")),
     None,
-    Some(("行フィルター", menu::ID_FILTER_LINES, "検索語を入力して、一致した行だけを新しいタブに出す (Ctrl+Shift+L)")),
+    Some(("行フィルター", menu::ID_FILTER_LINES, "行フィルター：検索語を入力して、一致した行だけを新しいタブに出す (Ctrl+Shift+L)")),
     None,
-    Some(("MDプレビュー", menu::ID_MD_SPLIT, "Markdown を右に整形して並べて表示 (Ctrl+Shift+V)")),
-    Some(("デザインビュー", menu::ID_MD_DESIGN, "Markdown を整形して表示（編集には Esc で戻る） (Ctrl+Shift+G)")),
+    Some(("MDプレビュー", menu::ID_MD_SPLIT, "Markdown プレビュー：右に整形して並べて表示 (Ctrl+Shift+V)")),
+    Some(("デザインビュー", menu::ID_MD_DESIGN, "デザインビュー：Markdown を整形して表示（編集には Esc で戻る） (Ctrl+Shift+G)")),
 ];
 
 /// MODES のうち、ここから後ろは Markdown 用（先頭は CSV 用との間の区切り）
@@ -167,8 +198,7 @@ impl App {
 
     /// 「対象の列」の欄の左に出す、小さな題の幅
     fn colpick_title_w(&self) -> f32 {
-        let units: Vec<u16> = "対象の列".encode_utf16().collect();
-        unsafe { self.ui_text_width(&units) }.unwrap_or(48.0) + 8.0
+        26.0
     }
 
     /// モードバーのボタンの位置 (x0, x1, 番号) と、「対象の列」ドロップダウンの位置 (x0, x1)。
@@ -195,10 +225,9 @@ impl App {
                             x += w + 8.0;
                         }
                     }
-                    let units: Vec<u16> = label.encode_utf16().collect();
-                    let tw = unsafe { self.ui_text_width(&units) }.unwrap_or(units.len() as f32 * self.ui_char_w);
-                    // 区切り文字の欄は、題のあとに記号を入れる枠を足した幅
-                    let w = if *id == menu::ID_DELIM_FIELD { tw + 8.0 + DELIM_BOX_W + 18.0 } else { tw + 18.0 };
+                    let _ = label;
+                    // 区切り文字の欄は、アイコンのあとに記号を入れる枠を足した幅。ほかはアイコン 1 つの幅
+                    let w = if *id == menu::ID_DELIM_FIELD { 7.0 + 16.0 + 6.0 + DELIM_BOX_W + 9.0 } else { BTN_W };
                     out.push((x, x + w, i));
                     x += w + 2.0;
                 }
@@ -509,7 +538,8 @@ impl App {
                 rt.FillRoundedRectangle(&rrect(x0, 3.0, x1, h - 3.0, 4.0), brush);
             }
             brush.SetColor(&t.text);
-            self.draw_ui_str(rt, brush, label, x0 + 9.0, (h - self.ui_line_h) / 2.0, x1)?;
+            let _ = label;
+            self.draw_icon(rt, brush, Icon::Split, x0 + 7.0, (h - 16.0) / 2.0);
             let (bx1, by0, by1) = (x1 - 9.0, 3.0, h - 3.0);
             let bx0 = bx1 - DELIM_BOX_W;
             // 入力待ち、または、カンマ・タブ以外の区切りを指定しているときは、アクセントカラーの枠
@@ -574,12 +604,15 @@ impl App {
                     rt.FillRoundedRectangle(&rrect(x0, 3.0, x1, h - 3.0, 4.0), brush);
                 }
                 brush.SetColor(&t.text);
-                self.draw_ui_str(rt, brush, label, x0 + 9.0, (h - self.ui_line_h) / 2.0, x1)?;
+                let _ = label;
+                if let Some(icon) = mode_icon(id) {
+                    self.draw_icon(rt, brush, icon, x0 + (x1 - x0 - 16.0) / 2.0, (h - 16.0) / 2.0);
+                }
             }
             // CSV 表示のあいだ、並べ替え・列フィルタの対象の列を、ドロップダウンの形で見せる（押すと列の一覧が欄の下に開く）
             if let (Some(label), Some((x0, x1))) = (self.colpick_label(), self.colpick_box()) {
                 brush.SetColor(&t.gutter_text);
-                self.draw_ui_str(rt, brush, "対象の列", x0 - self.colpick_title_w() + 2.0, (h - self.ui_line_h) / 2.0, x0)?;
+                self.draw_icon(rt, brush, Icon::ColPick, x0 - self.colpick_title_w() + 2.0, (h - 16.0) / 2.0);
                 let open = self.col_drop.is_some();
                 let hovered = self.hover == Some(Hover::ColPick);
                 // 枠：開いているあいだはアクセントカラー
@@ -639,6 +672,91 @@ impl App {
             let ci = |cx: f32, cy: f32, r: f32| rt.DrawEllipse(&D2D1_ELLIPSE { point: p(cx, cy), radiusX: r, radiusY: r }, brush, sw, None);
             let dot = |cx: f32, cy: f32, r: f32| rt.FillEllipse(&D2D1_ELLIPSE { point: p(cx, cy), radiusX: r, radiusY: r }, brush);
             match icon {
+                Icon::CsvComma => {
+                    rc(1.5, 2.5, 11.0, 11.5);
+                    ln(1.5, 6.0, 11.0, 6.0);
+                    ln(5.0, 2.5, 5.0, 11.5);
+                    ln(8.0, 2.5, 8.0, 11.5);
+                    // カンマ
+                    dot(13.0, 12.5, 1.0);
+                    ln(13.0, 13.0, 12.0, 15.0);
+                }
+                Icon::TsvTab => {
+                    rc(1.5, 2.5, 11.0, 11.5);
+                    ln(1.5, 6.0, 11.0, 6.0);
+                    ln(5.0, 2.5, 5.0, 11.5);
+                    ln(8.0, 2.5, 8.0, 11.5);
+                    // タブ（→|）
+                    ln(10.5, 13.5, 14.0, 13.5);
+                    ln(12.5, 12.0, 14.0, 13.5);
+                    ln(12.5, 15.0, 14.0, 13.5);
+                    ln(15.0, 12.0, 15.0, 15.0);
+                }
+                Icon::Split => {
+                    ln(5.0, 2.5, 5.0, 13.5);
+                    ln(11.0, 2.5, 11.0, 13.5);
+                    dot(8.0, 5.0, 0.9);
+                    dot(8.0, 8.0, 0.9);
+                    dot(8.0, 11.0, 0.9);
+                }
+                Icon::Cells => {
+                    rc(2.0, 2.0, 12.0, 12.0);
+                    ln(7.0, 2.0, 7.0, 12.0);
+                    ln(2.0, 7.0, 12.0, 7.0);
+                    fr(11.0, 11.0, 15.0, 15.0);
+                }
+                Icon::Header => {
+                    rc(2.0, 3.0, 14.0, 13.0);
+                    fr(2.0, 3.0, 14.0, 6.5);
+                    ln(8.0, 6.5, 8.0, 13.0);
+                }
+                Icon::SortAsc => {
+                    ln(2.5, 4.0, 6.5, 4.0);
+                    ln(2.5, 8.0, 8.5, 8.0);
+                    ln(2.5, 12.0, 10.5, 12.0);
+                    ln(13.0, 13.0, 13.0, 3.0);
+                    ln(13.0, 3.0, 11.0, 5.0);
+                    ln(13.0, 3.0, 15.0, 5.0);
+                }
+                Icon::SortDesc => {
+                    ln(2.5, 4.0, 10.5, 4.0);
+                    ln(2.5, 8.0, 8.5, 8.0);
+                    ln(2.5, 12.0, 6.5, 12.0);
+                    ln(13.0, 3.0, 13.0, 13.0);
+                    ln(13.0, 13.0, 11.0, 11.0);
+                    ln(13.0, 13.0, 15.0, 11.0);
+                }
+                Icon::Funnel => {
+                    ln(2.0, 3.0, 14.0, 3.0);
+                    ln(14.0, 3.0, 9.5, 8.5);
+                    ln(9.5, 8.5, 9.5, 13.0);
+                    ln(9.5, 13.0, 6.5, 11.5);
+                    ln(6.5, 11.5, 6.5, 8.5);
+                    ln(6.5, 8.5, 2.0, 3.0);
+                }
+                Icon::FilterLines => {
+                    ln(2.0, 4.0, 14.0, 4.0);
+                    ln(4.0, 8.0, 12.0, 8.0);
+                    ln(6.0, 12.0, 10.0, 12.0);
+                }
+                Icon::Preview => {
+                    rc(2.0, 3.0, 14.0, 13.0);
+                    ln(8.0, 3.0, 8.0, 13.0);
+                    ln(10.0, 6.0, 12.5, 6.0);
+                    ln(10.0, 9.0, 12.5, 9.0);
+                }
+                Icon::Design => {
+                    rc(3.0, 2.0, 13.0, 14.0);
+                    fr(5.0, 4.5, 9.0, 6.0);
+                    ln(5.0, 8.5, 11.0, 8.5);
+                    ln(5.0, 11.0, 11.0, 11.0);
+                }
+                Icon::ColPick => {
+                    rc(2.0, 3.0, 14.0, 13.0);
+                    ln(6.0, 3.0, 6.0, 13.0);
+                    ln(10.0, 3.0, 10.0, 13.0);
+                    fr(6.0, 3.0, 10.0, 13.0);
+                }
                 Icon::Menu => {
                     ln(2.5, 4.0, 13.5, 4.0);
                     ln(2.5, 8.0, 13.5, 8.0);
