@@ -110,6 +110,10 @@ pub(super) enum Hover {
     Mode(usize),
     /// モードバーの「対象の列」ドロップダウン
     ColPick,
+    /// タブ
+    Tab(usize),
+    /// ステータスバーのクリックできる部分（`status_segments` の種類）
+    Status(u8),
 }
 
 impl App {
@@ -122,7 +126,17 @@ impl App {
     }
 
     fn mode_h(&self) -> f32 {
-        if self.settings.toolbar && self.settings.modebar { MODE_H } else { 0.0 }
+        if self.settings.toolbar && self.settings.modebar && self.modebar_relevant() { MODE_H } else { 0.0 }
+    }
+
+    /// モードバーが役に立つ場面か（CSV の表示中・CSV/TSV や Markdown のファイル・Markdown のプレビュー中）。
+    /// ログやテキストでは出さずに、本文を広く使う。CSV の表示は、ツールバーの表のボタンか Ctrl+Shift+C で切り替える
+    fn modebar_relevant(&self) -> bool {
+        if self.csv.is_some() || self.md.is_some() {
+            return true;
+        }
+        let ext = self.doc.as_ref().and_then(|d| d.path()).and_then(|p| p.extension()).map(|e| e.to_string_lossy().to_ascii_lowercase());
+        matches!(ext.as_deref(), Some("csv" | "tsv" | "md" | "markdown"))
     }
 
     /// モードバーのボタンの位置 (x0, x1, 番号) と、「対象の列」ドロップダウンの位置 (x0, x1)。
@@ -226,6 +240,9 @@ impl App {
     /// マウスの位置（本文の座標。タブバーの上が負）にあるボタン
     pub(super) fn hover_at(&self, x: f32, y: f32) -> Option<Hover> {
         let tb = self.tb_h();
+        if (-self.tab_h()..0.0).contains(&y) {
+            return self.tab_hover(x);
+        }
         if tb > 0.0 && (-(self.tab_h() + tb)..-self.tab_h()).contains(&y) {
             // 上の行はツールバー、下の行はモードバー
             if y < -(self.tab_h() + self.mode_h()) {
@@ -239,6 +256,9 @@ impl App {
             return self.mode_boxes().into_iter().find(|&(x0, x1, _)| x >= x0 && x < x1).map(|(_, _, i)| Hover::Mode(i));
         }
         let (w, h) = self.client_size();
+        if y >= h - self.status_base_h() && y < h {
+            return self.status_hit(x).map(Hover::Status);
+        }
         let fk = self.fkey_h();
         if fk > 0.0 && y >= h - self.status_h() && y < h - self.status_base_h() {
             let i = (x / (w / FKEYS.len() as f32)) as usize;
@@ -253,6 +273,7 @@ impl App {
             Hover::Mode(i) => MODES.get(i).copied().flatten().map(|(_, id, tip)| (id, tip)),
             Hover::ColPick => Some((menu::ID_COLPICK, "並べ替え・列フィルタの対象の列を選ぶ（見出しのクリックでも選べる）")),
             Hover::Fkey(i) => FKEYS.get(i).map(|&(label, id)| (id, label)),
+            Hover::Tab(_) | Hover::Status(_) => None,
         }
     }
 

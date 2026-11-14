@@ -513,7 +513,7 @@ impl App {
     fn update_ime_position_prompt(&self) {
         let scale = unsafe { GetDpiForWindow(self.hwnd) } as f32 / 96.0;
         let units: Vec<u16> = self.input.encode_utf16().collect();
-        let x = 14.0 + unsafe { self.ui_text_width(&units) }.unwrap_or(0.0);
+        let x = self.prompt_input_rect().0 + 8.0 + unsafe { self.ui_text_width(&units) }.unwrap_or(0.0);
         let y = self.chrome_h() + self.prompt_input_top();
         let pt = POINT { x: (x * scale) as i32, y: (y * scale) as i32 };
         let comp_w = self.comp.as_ref().map_or(0, |c| (unsafe { self.ui_text_width(&c.units) }.unwrap_or(0.0) * scale) as i32);

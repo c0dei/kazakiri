@@ -331,7 +331,7 @@ impl App {
     // ---- タブバー ----
 
     pub(super) fn tab_h(&self) -> f32 {
-        self.ui_line_h + 8.0
+        self.ui_line_h + 12.0
     }
 
     /// タブの並び（横スクロールを引く前の位置）
@@ -341,7 +341,7 @@ impl App {
             .map(|i| {
                 let doc = if i == self.active { self.doc.as_ref() } else { self.tabs[i].doc.as_ref() };
                 let title = title_of(doc);
-                let shown = if self.tab_modified(i) { format!("* {title}") } else { title };
+                let shown = title;
                 let units: Vec<u16> = shown.encode_utf16().collect();
                 let tw = unsafe { self.ui_text_width(&units) }.unwrap_or(units.len() as f32 * self.ui_char_w);
                 let w = (PAD + tw + CLOSE_W).max(MIN_W);
@@ -372,6 +372,11 @@ impl App {
         let boxes = self.tab_boxes();
         let i = boxes.iter().position(|b| x >= b.x0 && x < b.x1)?;
         Some((i, x >= boxes[i].x1 - CLOSE_W))
+    }
+
+    /// タブバーの中の x 座標にあるタブ（ホバーの強調用）
+    pub(super) fn tab_hover(&self, x: f32) -> Option<super::toolbar::Hover> {
+        self.tab_at(x).map(|(i, _)| super::toolbar::Hover::Tab(i))
     }
 
     /// タブバーのクリック。`close` なら（中ボタンなど）閉じる
@@ -484,31 +489,35 @@ impl App {
         unsafe {
             brush.SetColor(&t.gutter_bg);
             rt.FillRectangle(&rect(0.0, 0.0, w, h), brush);
-            // 本文との境目（表示中のタブの下だけは塗りつぶして、本文とつながって見えるようにする）
-            brush.SetColor(&t.dim);
-            rt.FillRectangle(&rect(0.0, h - 1.0, w, h), brush);
             for (i, b) in self.tab_boxes().iter().enumerate() {
                 let (x0, x1) = (b.x0 - self.tab_scroll, b.x1 - self.tab_scroll);
                 if x1 < 0.0 || x0 > w {
                     continue;
                 }
                 let active = i == self.active;
+                let hovered = self.hover == Some(super::toolbar::Hover::Tab(i));
                 if active {
-                    // 角を丸めたタブ（下は本文とつなげる）と、アクセントカラーの短い印
+                    // 上の角を丸めたカード（下は本文とつなげる）
                     brush.SetColor(&t.bg);
-                    rt.FillRoundedRectangle(&rrect(x0 + 2.0, 3.0, x1 - 2.0, h + 8.0, 7.0), brush);
-                    rt.FillRectangle(&rect(x0 + 2.0, h - 6.0, x1 - 2.0, h), brush);
-                    brush.SetColor(&theme::accent(self.settings.dark));
-                    rt.FillRoundedRectangle(&rrect((x0 + x1) / 2.0 - 10.0, h - 3.0, (x0 + x1) / 2.0 + 10.0, h, 1.5), brush);
-                } else if i + 1 != self.active {
-                    // タブの境目（選択中のタブのとなりでは描かない）
-                    brush.SetColor(&t.dim);
-                    rt.FillRectangle(&rect(x1 - 1.0, 7.0, x1, h - 7.0), brush);
+                    rt.FillRoundedRectangle(&rrect(x0 + 2.0, 4.0, x1 - 2.0, h + 8.0, 8.0), brush);
+                } else if hovered {
+                    brush.SetColor(&t.panel_head);
+                    rt.FillRoundedRectangle(&rrect(x0 + 2.0, 6.0, x1 - 2.0, h - 2.0, 6.0), brush);
                 }
                 brush.SetColor(if active { &t.text } else { &t.gutter_text });
-                self.draw_ui_str(rt, brush, &b.title, x0 + PAD, 4.0, x1 - CLOSE_W)?;
-                brush.SetColor(&t.gutter_text);
-                self.draw_ui_str(rt, brush, "x", x1 - CLOSE_W + 6.0, 4.0, x1 - 2.0)?;
+                let ty = (h - self.ui_line_h) / 2.0 + 1.0;
+                self.draw_ui_str(rt, brush, &b.title, x0 + PAD, ty, x1 - CLOSE_W)?;
+                // 右端：変更ありは丸（ホバー中は ✕）、そうでなければ選択中かホバー中のときだけ ✕
+                let (cx, cy) = (x1 - CLOSE_W / 2.0 - 2.0, h / 2.0 + 1.0);
+                if self.tab_modified(i) && !hovered {
+                    brush.SetColor(&theme::accent(self.settings.dark));
+                    rt.FillEllipse(&D2D1_ELLIPSE { point: Vector2 { X: cx, Y: cy }, radiusX: 3.0, radiusY: 3.0 }, brush);
+                } else if active || hovered {
+                    brush.SetColor(&t.gutter_text);
+                    for (a, b) in [((-3.5, -3.5), (3.5, 3.5)), ((-3.5, 3.5), (3.5, -3.5))] {
+                        rt.DrawLine(Vector2 { X: cx + a.0, Y: cy + a.1 }, Vector2 { X: cx + b.0, Y: cy + b.1 }, brush, 1.2, None);
+                    }
+                }
             }
         }
         Ok(())

@@ -56,7 +56,7 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { font: String::new(), font_size: 14.0, ui_font: String::new(), ui_font_size: 13.0, dark: false, whitespace: false, log_colors: true, tab_width: 4, wrap: false, grep_backup: true, ime_inline: true, syntax: true, mica: true, tray: true, grep_close: false, wheel_lines: 3, md_auto: false, backup_save: false, backup_dir: String::new(), backup_numbered: false, autosave_min: 0, toolbar: true, modebar: true, fkeys: true, window: None }
+        Settings { font: String::new(), font_size: 14.0, ui_font: String::new(), ui_font_size: 13.0, dark: false, whitespace: false, log_colors: true, tab_width: 4, wrap: false, grep_backup: true, ime_inline: true, syntax: true, mica: true, tray: true, grep_close: false, wheel_lines: 3, md_auto: false, backup_save: false, backup_dir: String::new(), backup_numbered: false, autosave_min: 0, toolbar: true, modebar: true, fkeys: false, window: None }
     }
 }
 

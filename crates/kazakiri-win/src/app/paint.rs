@@ -470,44 +470,73 @@ impl App {
         }
     }
 
-    /// 入力欄の文字の上端（ツールバーとタブバーを除いた座標）
-    pub(super) fn prompt_input_top(&self) -> f32 {
-        let bar_h = self.ui_line_h * 2.0 + 14.0;
-        self.client_size().1 - self.status_h() - bar_h + 7.0 + self.ui_line_h + 2.0
+    /// 入力欄のカード（本文の右上に浮かせる）の位置。(x0, y0, x1, y1)。ツールバーとタブバーを除いた座標
+    pub(super) fn prompt_card(&self) -> (f32, f32, f32, f32) {
+        let w = self.client_size().0;
+        let cw = (w - 40.0).clamp(280.0, 560.0).min(w);
+        let (x0, y0) = ((w - cw - 20.0).max(0.0), self.pin_h() + 10.0);
+        (x0, y0, x0 + cw, y0 + 14.0 + self.ui_line_h * 3.0 + 14.0 + 10.0 + 6.0)
     }
 
-    /// 入力欄（行へ移動・列フィルタ・分割・連番）を、ステータスバーの上に 2 行の枠で出す。1 行目は説明、2 行目は入力
-    pub(super) unsafe fn draw_prompt_bar(&self, rt: &ID2D1RenderTarget, brush: &ID2D1SolidColorBrush, w: f32, h: f32) -> Result<()> {
+    /// 入力欄（カードの中の入力の枠）の位置。(x0, y0, x1, y1)
+    pub(super) fn prompt_input_rect(&self) -> (f32, f32, f32, f32) {
+        let (x0, y0, x1, _) = self.prompt_card();
+        let top = y0 + 10.0 + self.ui_line_h + 6.0;
+        (x0 + 12.0, top, x1 - 12.0, top + self.ui_line_h + 8.0)
+    }
+
+    /// 入力欄の文字の上端（ツールバーとタブバーを除いた座標）
+    pub(super) fn prompt_input_top(&self) -> f32 {
+        self.prompt_input_rect().1 + 4.0
+    }
+
+    /// 入力欄（行へ移動・列フィルタ・分割・連番）を、本文の右上に浮かせたカードで出す。1 行目は題と操作、2 行目は入力、3 行目は説明
+    pub(super) unsafe fn draw_prompt_bar(&self, rt: &ID2D1RenderTarget, brush: &ID2D1SolidColorBrush, _w: f32, _h: f32) -> Result<()> {
         let Some(prompt) = self.prompt else { return Ok(()) };
         let t = self.theme;
         let (title, hint) = match prompt {
-            Prompt::GotoLine => ("行へ移動".to_string(), "行番号を入力して Enter（Esc で取消）".to_string()),
-            Prompt::LineFilter => ("行フィルター".to_string(), format!("検索語を入力して Enter（Esc で取消）。一致した行だけを新しいタブに出します（大文字小文字・正規表現は検索のオプションに従います: {}{}）", if self.opts.case_sensitive { "[大文字小文字を区別]" } else { "[区別しない]" }, if self.opts.regex { "[正規表現]" } else { "" })),
-            Prompt::Sequence => ("連番を挿入".to_string(), "開始値,増分,桁数（例: 1,1,3 → 001, 002…）を入力して Enter（Esc で取消）".to_string()),
-            Prompt::Split => ("ファイルを分割".to_string(), "1 ファイルの行数、またはサイズ（例: 1000000 / 512MB / 2GB）を入力して Enter（Esc で取消）".to_string()),
+            Prompt::GotoLine => ("行へ移動".to_string(), "行番号を入力して Enter".to_string()),
+            Prompt::LineFilter => ("行フィルター".to_string(), format!("検索語を入力して Enter。一致した行だけを新しいタブに出します（{}{}）", if self.opts.case_sensitive { "大文字小文字を区別" } else { "大文字小文字を区別しない" }, if self.opts.regex { "・正規表現" } else { "" })),
+            Prompt::Sequence => ("連番を挿入".to_string(), "開始値,増分,桁数（例: 1,1,3 → 001, 002…）を入力して Enter".to_string()),
+            Prompt::Split => ("ファイルを分割".to_string(), "1 ファイルの行数、またはサイズ（例: 1000000 / 512MB / 2GB）を入力して Enter".to_string()),
             Prompt::ColumnFilter => {
                 let names: Vec<String> = self.csv_column_names(12).iter().enumerate().map(|(i, n)| format!("{}:{n}", i + 1)).collect();
                 let cols = if names.is_empty() { String::new() } else { format!("　列 {}", names.join("  ")) };
-                ("列フィルタ".to_string(), format!("「列番号 演算子 値」で入力して Enter（Esc で取消）。演算子: = != : ~ > < >= <= empty（例: 3 = ERROR / 2 : 語 / 4 >= 100）{cols}"))
+                ("列フィルタ".to_string(), format!("「列番号 演算子 値」で入力して Enter。演算子: = != : ~ > < >= <= empty（例: 3 = ERROR / 2 : 語 / 4 >= 100）{cols}"))
             }
         };
-        let bar_h = self.ui_line_h * 2.0 + 14.0;
-        let top = h - self.status_h() - bar_h;
+        let (cx0, cy0, cx1, cy1) = self.prompt_card();
+        let (ix0, iy0, ix1, iy1) = self.prompt_input_rect();
         unsafe {
+            // 影・枠・面
+            brush.SetColor(&D2D1_COLOR_F { r: 0.0, g: 0.0, b: 0.0, a: 0.22 });
+            rt.FillRoundedRectangle(&rrect(cx0 - 1.0, cy0 + 2.0, cx1 + 1.0, cy1 + 4.0, 10.0), brush);
+            brush.SetColor(&t.dim);
+            rt.FillRoundedRectangle(&rrect(cx0 - 1.0, cy0 - 1.0, cx1 + 1.0, cy1 + 1.0, 9.0), brush);
             brush.SetColor(&t.panel_head);
-            rt.FillRectangle(&rect(0.0, top, w, top + bar_h), brush);
-            brush.SetColor(&theme::accent(self.settings.dark));
-            rt.FillRectangle(&rect(0.0, top, w, top + 2.0), brush);
+            rt.FillRoundedRectangle(&rrect(cx0, cy0, cx1, cy1, 8.0), brush);
+            // 題と、閉じ方
+            brush.SetColor(&t.text);
+            self.draw_ui_str(rt, brush, &title, cx0 + 14.0, cy0 + 8.0, cx1 - 120.0)?;
             brush.SetColor(&t.gutter_text);
-            self.draw_ui_str(rt, brush, &format!("{title}　{hint}"), 10.0, top + 5.0, w - 10.0)?;
-            // 入力欄
-            let iy = top + 7.0 + self.ui_line_h;
+            let esc: Vec<u16> = "Esc で閉じる".encode_utf16().collect();
+            let ew = self.ui_text_width(&esc)?;
+            self.draw_ui_str(rt, brush, "Esc で閉じる", cx1 - 14.0 - ew, cy0 + 8.0, cx1 - 8.0)?;
+            // 説明（2 行まで折り返す）
+            let hint_units: Vec<u16> = hint.encode_utf16().collect();
+            brush.SetColor(&t.gutter_text);
+            rt.DrawText(&hint_units, &self.ui_format, &rect(cx0 + 14.0, iy1 + 8.0, cx1 - 14.0, cy1 - 4.0), brush, D2D1_DRAW_TEXT_OPTIONS_CLIP, DWRITE_MEASURING_MODE_NATURAL);
+            // 入力欄の枠（アクセントカラー）
+            brush.SetColor(&theme::accent(self.settings.dark));
+            rt.FillRoundedRectangle(&rrect(ix0, iy0, ix1, iy1, 5.0), brush);
             brush.SetColor(&t.bg);
-            rt.FillRoundedRectangle(&rrect(8.0, iy, w - 8.0, iy + self.ui_line_h + 4.0, 4.0), brush);
+            rt.FillRoundedRectangle(&rrect(ix0 + 1.0, iy0 + 1.0, ix1 - 1.0, iy1 - 1.0, 4.0), brush);
+            // 入力した文字（文字の上端は iy + 2）
+            let (iy, w) = (iy0 + 2.0, ix1 + 8.0);
             brush.SetColor(&t.text);
             let units: Vec<u16> = self.input.encode_utf16().collect();
-            let x = 14.0 + self.ui_text_width(&units)?;
-            self.draw_ui_str(rt, brush, &self.input, 14.0, iy + 2.0, w - 14.0)?;
+            let x = ix0 + 8.0 + self.ui_text_width(&units)?;
+            self.draw_ui_str(rt, brush, &self.input, ix0 + 8.0, iy + 2.0, ix1 - 8.0)?;
             match self.comp.as_ref().filter(|_| self.ime_inline_on()) {
                 Some(comp) => {
                     // 変換中の文字：変換対象は背景、下線で状態を示す
@@ -613,7 +642,8 @@ impl App {
             brush.SetColor(&self.theme.status_text);
         }
         let left = self.status_left();
-        let right: String = self.status_segments().into_iter().map(|(s, _)| s).collect();
+        let segs = self.status_segments();
+        let right: String = segs.iter().map(|(s, _)| s.as_str()).collect();
         unsafe {
             // 右側（ファイルの情報）を優先し、左側（メッセージ）は残りの幅で切る
             let units: Vec<u16> = right.encode_utf16().collect();
@@ -621,7 +651,22 @@ impl App {
             let mut m = DWRITE_TEXT_METRICS::default();
             layout.GetMetrics(&mut m)?;
             let rw = m.widthIncludingTrailingWhitespace.min(w * 0.75);
-            rt.DrawTextLayout(Vector2 { X: w - rw - 8.0, Y: top + 3.0 }, &layout, brush, D2D1_DRAW_TEXT_OPTIONS_CLIP);
+            // クリックできる部分は、ホバーしたときに角丸の背景（チップ）を出す。位置は status_hit と同じ並べ方
+            let mut x0 = w - rw - 8.0;
+            for (text, kind) in &segs {
+                let u: Vec<u16> = text.encode_utf16().collect();
+                let x1 = x0 + self.ui_text_width(&u)?;
+                if let Some(k) = kind {
+                    if self.hover == Some(super::toolbar::Hover::Status(*k)) {
+                        brush.SetColor(&self.theme.panel_head);
+                        rt.FillRoundedRectangle(&rrect(x0 - 5.0, top + 2.0, x1 + 5.0, h - 2.0, 5.0), brush);
+                    }
+                }
+                brush.SetColor(&self.theme.status_text);
+                self.draw_ui_str(rt, brush, text, x0, top + 3.0, x1 + 1.0)?;
+                x0 = x1;
+            }
+            brush.SetColor(&self.theme.status_text);
             // 右側と重ならないように切り取る（文字の切り取り指定が効かない環境もあるので領域で切る）
             rt.PushAxisAlignedClip(&rect(0.0, top, (w - rw - 24.0).max(0.0), h), D2D1_ANTIALIAS_MODE_ALIASED);
             self.draw_ui_str(rt, brush, &left, 8.0, top + 3.0, w - rw - 24.0)?;
