@@ -676,7 +676,7 @@ impl App {
                     } else if GetKeyState(VK_SHIFT.0 as i32) < 0 {
                         self.hscroll_by(-(delta as f32) / 120.0 * self.char_w * 8.0);
                     } else {
-                        self.scroll_by(-delta * 3 / 120);
+                        self.scroll_by(-delta * self.settings.wheel_lines as i64 / 120);
                     }
                     (DONE, None)
                 }

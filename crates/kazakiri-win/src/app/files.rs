@@ -19,6 +19,7 @@ impl App {
                     self.x_off = 0.0;
                     self.sel = None;
                     self.auto_csv();
+                    self.auto_md();
                 }
                 if self.sel.is_none() {
                     let start = self.doc.as_ref().map_or(0, |d| d.text_start() as u64);

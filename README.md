@@ -67,7 +67,7 @@ EmEditor の「大きいファイルが速い」体験を、買い切り不要�
 - 本文のフォントが等幅でない場合（Noto Sans JP など）、CSV/TSV の表示のあいだだけ、列がそろうよう既定の等幅フォント（BIZ UDゴシック → MS ゴシック → Consolas）に自動で替える。CSV でなくなれば元のフォントに戻る
 - フォントは 2 系統：本文（font / font_size）と、画面の部品＝メニュー・タブ・ツールバー・ステータスバー（ui_font / ui_font_size。既定は Yu Gothic UI → Meiryo UI → Segoe UI）。設定ダイアログで別々に変えられる
 - 設定ダイアログ（ファイル → 設定）で、外観・編集・表示の主な項目を画面から変えられる（Mica のオン／オフ、フォント、タブ幅など）
-- 設定は `%APPDATA%\kazakiri\settings.ini` に自動で保存（font, font_size, dark, whitespace, log_colors, tab_width, wrap, grep_backup, grep_close, ime_inline, syntax, mica, toolbar, fkeys, ui_font, ui_font_size, window。テキストエディタで直接編集もできる）
+- 設定は `%APPDATA%\kazakiri\settings.ini` に自動で保存（font, font_size, dark, whitespace, log_colors, tab_width, wrap, grep_backup, grep_close, wheel_lines, md_auto, ime_inline, syntax, mica, toolbar, fkeys, ui_font, ui_font_size, window。テキストエディタで直接編集もできる）
 
 ![空白の表示とログの色分け（ダークテーマ）](docs/screenshot-whitespace.png)
 
@@ -83,6 +83,10 @@ EmEditor の「大きいファイルが速い」体験を、買い切り不要�
 - 引用符で囲んだフィールドの中の区切り文字は区切りとみなさない（引用符の中の改行には未対応）
 
 ![CSV モード](docs/screenshot-csv.png)
+
+### 設定ダイアログ
+- ファイル → 設定：左に分類（基本・スクロール・外観・表示・検索・GREP・Markdown・キーボード）と検索欄、右に選んだ分類のページ（EmEditor の「すべての設定のプロパティ」のような形）。検索欄に語を入れると、その語を含む項目のある分類だけに絞られる。変更はすぐ反映され、settings.ini に保存される
+- マウスホイール 1 回で動かす行数、Markdown ファイルを開いたときにプレビューを並べるか、も設定できる
 
 ### Markdown のプレビュー
 - 表示 → 「Markdown プレビュー（右に並べる）」（Ctrl+Shift+V）：編集する窓の右半分に、整形した姿を出す。入力するとすぐ更新され、エディタをスクロールするとプレビューも付いてくる。プレビューをクリックすると、エディタのその位置へ移る
