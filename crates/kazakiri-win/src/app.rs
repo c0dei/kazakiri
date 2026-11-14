@@ -597,6 +597,11 @@ impl App {
                     let l = LPARAM(lparam.0 & !(edit::ISC_SHOWUICOMPOSITIONWINDOW as isize));
                     (Some(DefWindowProcW(self.hwnd, msg, wparam, l)), None)
                 }
+                // 検索や設定のウィンドウは同じスレッドの IME の状態を使うので、本文用に決めた変換ウィンドウ・候補ウィンドウの位置を残さない
+                WM_KILLFOCUS => {
+                    self.reset_ime_forms();
+                    (None, None)
+                }
                 WM_IME_STARTCOMPOSITION => {
                     self.update_ime_position();
                     if self.ime_inline_on() { (DONE, None) } else { (None, None) }

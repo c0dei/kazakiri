@@ -96,6 +96,9 @@ const MODES: &[Option<(&str, u32, &str)>] = &[
     Some(("デザインビュー", menu::ID_MD_DESIGN, "Markdown を整形して表示（編集には Esc で戻る） (Ctrl+Shift+G)")),
 ];
 
+/// MODES のうち、ここから後ろは Markdown 用（先頭は CSV 用との間の区切り）
+const MD_FROM: usize = 15;
+
 const BTN_W: f32 = 30.0;
 const SEP_W: f32 = 20.0;
 /// MODES のうち、区切り文字の 4 つ（枠で囲んで 1 つのグループに見せる）
@@ -129,14 +132,30 @@ impl App {
         if self.settings.toolbar && self.settings.modebar && self.modebar_relevant() { MODE_H } else { 0.0 }
     }
 
-    /// モードバーが役に立つ場面か（CSV の表示中・CSV/TSV や Markdown のファイル・Markdown のプレビュー中）。
-    /// ログやテキストでは出さずに、本文を広く使う。CSV の表示は、ツールバーの表のボタンか Ctrl+Shift+C で切り替える
+    /// 開いているファイルの拡張子（小文字）
+    fn doc_ext(&self) -> Option<String> {
+        self.doc.as_ref().and_then(|d| d.path()).and_then(|p| p.extension()).map(|e| e.to_string_lossy().to_ascii_lowercase())
+    }
+
+    /// CSV 用のボタンを出す場面（CSV の表示中、または CSV/TSV のファイル）
+    fn csv_context(&self) -> bool {
+        self.csv.is_some() || matches!(self.doc_ext().as_deref(), Some("csv" | "tsv"))
+    }
+
+    /// Markdown 用のボタンを出す場面（プレビュー中、または Markdown のファイル）
+    fn md_context(&self) -> bool {
+        !self.csv.is_some() && (self.md.is_some() || matches!(self.doc_ext().as_deref(), Some("md" | "markdown")))
+    }
+
+    /// モードバーが役に立つ場面か。ログやテキストでは出さずに、本文を広く使う。
+    /// CSV の表示は、ツールバーの表のボタンか Ctrl+Shift+C で切り替える
     fn modebar_relevant(&self) -> bool {
-        if self.csv.is_some() || self.md.is_some() {
-            return true;
-        }
-        let ext = self.doc.as_ref().and_then(|d| d.path()).and_then(|p| p.extension()).map(|e| e.to_string_lossy().to_ascii_lowercase());
-        matches!(ext.as_deref(), Some("csv" | "tsv" | "md" | "markdown"))
+        self.csv_context() || self.md_context()
+    }
+
+    /// MODES の番号 i のボタン（区切りを含む）を、いまの場面で出すか
+    fn mode_shown(&self, i: usize) -> bool {
+        if i < MD_FROM { self.csv_context() } else { self.md_context() && i > MD_FROM }
     }
 
     /// モードバーのボタンの位置 (x0, x1, 番号) と、「対象の列」ドロップダウンの位置 (x0, x1)。
@@ -150,6 +169,9 @@ impl App {
         let mut out = Vec::new();
         let mut pick = None;
         for (i, b) in MODES.iter().enumerate() {
+            if !self.mode_shown(i) {
+                continue;
+            }
             match b {
                 Some((label, id, _)) => {
                     if *id == menu::ID_SORT_ASC {
@@ -406,9 +428,9 @@ impl App {
             let boxes = self.mode_boxes();
             // グループの境目に細い縦線
             brush.SetColor(&t.dim);
-            for &(_, x1, i) in &boxes {
-                if MODES.get(i + 1).is_some_and(|m| m.is_none()) && i + 2 < MODES.len() {
-                    let cx = (x1 + 2.0 + SEP_W / 2.0).floor() + 0.5;
+            for pair in boxes.windows(2) {
+                if pair[1].2 > pair[0].2 + 1 {
+                    let cx = (pair[0].1 + 2.0 + SEP_W / 2.0).floor() + 0.5;
                     rt.FillRectangle(&rect(cx, 7.0, cx + 1.0, h - 7.0), brush);
                 }
             }

@@ -509,6 +509,23 @@ impl App {
         }
     }
 
+    /// 変換ウィンドウ・候補ウィンドウの位置を既定（IME まかせ）に戻す
+    pub(super) fn reset_ime_forms(&self) {
+        unsafe {
+            let himc = ImmGetContext(self.hwnd);
+            if himc.is_invalid() {
+                return;
+            }
+            let cf = COMPOSITIONFORM { dwStyle: CFS_DEFAULT, ..Default::default() };
+            let _ = ImmSetCompositionWindow(himc, &cf);
+            for i in 0..4 {
+                let cand = CANDIDATEFORM { dwIndex: i, dwStyle: CFS_DEFAULT, ..Default::default() };
+                let _ = ImmSetCandidateWindow(himc, &cand);
+            }
+            let _ = ImmReleaseContext(self.hwnd, himc);
+        }
+    }
+
     /// 入力欄（行へ移動・列フィルタなど）が開いているとき、変換中の文字と候補ウィンドウを入力欄の文字の末尾に出す
     fn update_ime_position_prompt(&self) {
         let scale = unsafe { GetDpiForWindow(self.hwnd) } as f32 / 96.0;
