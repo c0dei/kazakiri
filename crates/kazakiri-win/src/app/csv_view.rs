@@ -516,6 +516,12 @@ impl App {
     pub(super) fn csv_measure(&self, lines: &[Line]) {
         if let Some(v) = &self.csv {
             let mut changed = false;
+            // 固定した見出し行は、見える行に入っていなくても、その幅も数える（見出しのほうが長いと、見出しだけ列がずれるため）
+            if v.header {
+                if let Some(h) = self.doc.as_ref().and_then(|d| d.lines(0, 1).into_iter().next()) {
+                    changed |= v.measure(&h.text);
+                }
+            }
             for l in lines {
                 // 続きの行（列に分けない行）は、列の幅に数えない
                 if !self.is_continuation(l.number) {
