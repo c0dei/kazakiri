@@ -230,13 +230,8 @@ impl App {
 
     /// フィルター：検索（検索語・オプションは、いまの設定）に一致した行だけを、新しいタブに出す
     pub(super) fn start_filter_lines(&mut self) {
-        if self.last_find.is_empty() {
-            self.message = "フィルターする文字列を入力して「検索」を押すか、先に検索語を決めてください".into();
-            self.want_dialog = Some(0);
-            return self.invalidate();
-        }
-        self.filter_pending = true;
-        self.find_all();
+        // 検索語を入力する欄を出す（Enter で、一致した行だけを新しいタブに出す）
+        self.start_prompt(Prompt::LineFilter);
     }
 
     fn filter_to_tab(&mut self) {

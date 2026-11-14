@@ -459,6 +459,7 @@ impl App {
         let t = self.theme;
         let (title, hint) = match prompt {
             Prompt::GotoLine => ("行へ移動".to_string(), "行番号を入力して Enter（Esc で取消）".to_string()),
+            Prompt::LineFilter => ("行フィルター".to_string(), format!("検索語を入力して Enter（Esc で取消）。一致した行だけを新しいタブに出します（大文字小文字・正規表現は検索のオプションに従います: {}{}）", if self.opts.case_sensitive { "[大文字小文字を区別]" } else { "[区別しない]" }, if self.opts.regex { "[正規表現]" } else { "" })),
             Prompt::Sequence => ("連番を挿入".to_string(), "開始値,増分,桁数（例: 1,1,3 → 001, 002…）を入力して Enter（Esc で取消）".to_string()),
             Prompt::Split => ("ファイルを分割".to_string(), "1 ファイルの行数、またはサイズ（例: 1000000 / 512MB / 2GB）を入力して Enter（Esc で取消）".to_string()),
             Prompt::ColumnFilter => {
