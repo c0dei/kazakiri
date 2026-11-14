@@ -80,6 +80,7 @@ pub(super) unsafe fn run_inner() -> std::result::Result<(), (&'static str, windo
             markers: Vec::new(),
             diffview: None,
             md: None,
+            md_hover: false,
             tracking_leave: false,
             line_h,
             char_w,

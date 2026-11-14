@@ -265,6 +265,8 @@ struct App {
     diffview: Option<diffview::DiffView>,
     /// Markdown のプレビュー（分割／デザインビュー）
     md: Option<mdview::MdView>,
+    /// プレビューのリンクの飛び先をステータスバーに出している
+    md_hover: bool,
     tracking_leave: bool,
     line_h: f32,
     char_w: f32,
@@ -435,9 +437,10 @@ impl App {
                     let _ = cw;
                     // 本文の中だけ I ビーム。ツールバー・タブ・行番号・結果一覧・ステータスバー・機能ボタンは、ボタンも含めて通常の矢印
                     let in_text = self.diffview.is_none() && !self.md_hit(x, y) && y >= 0.0 && x >= self.gutter_width() && y < ch - self.status_h() - self.panel_h();
+                    let on_link = self.md_link_hover(x, y);
                     let id = if in_text {
                         IDC_IBEAM
-                    } else if self.md_link_under(x, y) {
+                    } else if on_link {
                         IDC_HAND
                     } else {
                         IDC_ARROW
