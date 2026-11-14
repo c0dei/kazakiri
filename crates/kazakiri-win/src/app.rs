@@ -466,7 +466,9 @@ impl App {
                     // 本文の中だけ I ビーム。ツールバー・タブ・行番号・結果一覧・ステータスバー・機能ボタンは、ボタンも含めて通常の矢印
                     let in_text = self.diffview.is_none() && !self.md_hit(x, y) && y >= 0.0 && x >= self.gutter_width() && y < ch - self.status_h() - self.panel_h();
                     let on_link = self.md_link_hover(x, y);
-                    let id = if in_text {
+                    let id = if let Some(c) = self.prompt_cursor(x, y) {
+                        c
+                    } else if in_text {
                         IDC_IBEAM
                     } else if on_link {
                         IDC_HAND

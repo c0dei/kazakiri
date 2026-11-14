@@ -51,6 +51,26 @@ impl App {
         FindLayout { card: (x0, y0, x0 + cw, hint_y + self.ui_line_h + 8.0), find, repl, buttons, hint_y }
     }
 
+    /// 入力欄のカード（検索・置換バーなど）の上にあるときのカーソルの形。カードの外なら None
+    pub(super) fn prompt_cursor(&self, x: f32, y: f32) -> Option<PCWSTR> {
+        self.prompt?;
+        if !inside(self.prompt_card(), x, y) {
+            return None;
+        }
+        if self.is_find_bar() {
+            let l = self.find_layout();
+            if l.buttons.iter().any(|(r, _)| inside(*r, x, y)) {
+                return Some(IDC_HAND);
+            }
+            if inside(l.find, x, y) || l.repl.is_some_and(|r| inside(r, x, y)) {
+                return Some(IDC_IBEAM);
+            }
+        } else if inside(self.prompt_input_rect(), x, y) {
+            return Some(IDC_IBEAM);
+        }
+        Some(IDC_ARROW)
+    }
+
     /// 検索・置換バーのクリック。バーの上なら true（本文は処理しない）。バーの外を押したら、バーを閉じて本文の操作に進む
     pub(super) fn find_bar_click(&mut self, x: f32, y: f32) -> bool {
         if !self.is_find_bar() {
@@ -184,11 +204,20 @@ impl App {
                     rt.FillRoundedRectangle(&rrect(x0, y0, x1, y1, 5.0), brush);
                     brush.SetColor(&accent);
                     rt.DrawRoundedRectangle(&rrect(x0 + 0.5, y0 + 0.5, x1 - 0.5, y1 - 0.5, 5.0), brush, 1.0, None);
+                } else if act == FindAct::ReplAll {
+                    // 主な操作：アクセントカラーで塗る
+                    brush.SetColor(&accent);
+                    rt.FillRoundedRectangle(&rrect(x0, y0, x1, y1, 5.0), brush);
                 } else if text_btn {
+                    // 入力欄と同じ面に枠を付けて、ボタンに見せる
                     brush.SetColor(&t.dim);
-                    rt.DrawRoundedRectangle(&rrect(x0 + 0.5, y0 + 0.5, x1 - 0.5, y1 - 0.5, 5.0), brush, 1.0, None);
+                    rt.FillRoundedRectangle(&rrect(x0, y0, x1, y1, 5.0), brush);
+                    brush.SetColor(&t.bg);
+                    rt.FillRoundedRectangle(&rrect(x0 + 1.0, y0 + 1.0, x1 - 1.0, y1 - 1.0, 4.0), brush);
                 }
-                brush.SetColor(&t.text);
+                // アクセントで塗ったボタンの上の文字は、暗いテーマでは黒、明るいテーマでは白
+                let on_accent = act == FindAct::ReplAll;
+                brush.SetColor(if on_accent { if self.settings.dark { &D2D1_COLOR_F { r: 0.05, g: 0.05, b: 0.05, a: 1.0 } } else { &D2D1_COLOR_F { r: 1.0, g: 1.0, b: 1.0, a: 1.0 } } } else { &t.text });
                 let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
                 let label = match act {
                     FindAct::Case => Some("Aa"),
