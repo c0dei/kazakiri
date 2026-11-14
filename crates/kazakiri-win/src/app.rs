@@ -138,6 +138,8 @@ enum Deferred {
     ShowSettings,
     /// 本文の右クリックメニュー
     ContextMenu,
+    /// 並べ替え・列フィルタの対象の列を選ぶメニュー
+    ColMenu,
     /// トレイアイコンのメニュー（true なら右クリック用）
     TrayMenu(bool),
     ShowKeys,

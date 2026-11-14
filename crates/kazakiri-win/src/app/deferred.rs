@@ -24,6 +24,14 @@ pub(super) unsafe fn run_deferred(hwnd: HWND, d: Deferred) {
         }
         Deferred::ShowFind(tab) => unsafe { find_dialog::show(hwnd, tab) },
         Deferred::ShowSettings => unsafe { settings_dialog::show(hwnd) },
+        Deferred::ColMenu => unsafe {
+            if let Some(Some(menu)) = with_app(|app| app.build_col_menu()) {
+                let mut pt = POINT::default();
+                let _ = GetCursorPos(&mut pt);
+                let _ = TrackPopupMenu(menu, TPM_LEFTALIGN | TPM_TOPALIGN, pt.x, pt.y, None, hwnd, None);
+                let _ = DestroyMenu(menu);
+            }
+        },
         Deferred::ContextMenu => unsafe {
             if let Some(Ok(menu)) = with_app(|app| menu::build_context(&app.keymap)) {
                 let mut pt = POINT::default();
