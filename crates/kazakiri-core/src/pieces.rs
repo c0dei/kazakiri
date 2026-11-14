@@ -125,7 +125,29 @@ pub(crate) struct Pieces {
     nls: Vec<u64>,
     len: u64,
     total_nl: u64,
+    /// 追加した文字列の中の行頭を、前に調べた場所から続けて探すための覚え書き
+    scan: ScanCache,
 }
+
+/// （ピースの番号, ピースの中の何番目の改行か, その次の行頭の位置）の覚え書き。
+/// 順に行を読んでいくとき、毎回ピースの先頭から数え直す（行数の 2 乗の時間）のを避ける。
+/// 同時に何本かのスレッドが違う場所を読んでもよいよう、いくつか覚える
+#[derive(Default)]
+struct ScanCache(std::sync::Mutex<Vec<(usize, u64, usize)>>);
+
+impl Clone for ScanCache {
+    fn clone(&self) -> Self {
+        ScanCache::default()
+    }
+}
+
+impl std::fmt::Debug for ScanCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ScanCache")
+    }
+}
+
+const SCAN_SLOTS: usize = 16;
 
 impl Piece {
     fn bytes<'a>(&'a self, ctx: &Ctx<'a>) -> &'a [u8] {
@@ -141,7 +163,7 @@ impl Pieces {
     /// 元ファイル全体をひとつのピースにする（行インデックスが完成している必要がある）
     pub fn new(ctx: &Ctx) -> Pieces {
         let len = ctx.data.len() as u64;
-        let mut p = Pieces { pieces: Vec::new(), starts: Vec::new(), nls: Vec::new(), len: 0, total_nl: 0 };
+        let mut p = Pieces { pieces: Vec::new(), starts: Vec::new(), nls: Vec::new(), len: 0, total_nl: 0, scan: ScanCache::default() };
         if len > 0 {
             p.pieces.push(Piece { src: Src::Orig, start: 0, len, nl: ctx.orig_nl(0, len) });
         }
@@ -149,7 +171,15 @@ impl Pieces {
         p
     }
 
+    /// 行頭の覚え書きを捨てる（ピースを書き換えるとき）
+    fn forget(&mut self) {
+        if let Ok(c) = self.scan.0.get_mut() {
+            c.clear();
+        }
+    }
+
     fn rebuild(&mut self) {
+        self.forget();
         // 大きく縮んだら（すべて置換の取り消しなど）確保していた領域を返す
         if self.pieces.capacity() > 1024 && self.pieces.capacity() > self.pieces.len() * 4 {
             self.pieces.shrink_to_fit();
@@ -219,6 +249,7 @@ impl Pieces {
 
     /// `pos` にピースの境目を作り、`pos` から始まるピースの番号を返す
     fn split(&mut self, ctx: &Ctx, pos: u64) -> usize {
+        self.forget();
         if pos >= self.len {
             return self.pieces.len();
         }
@@ -240,6 +271,7 @@ impl Pieces {
 
     /// [a, b) を `new` のピース列で置き換え、取り除いたピース列を返す
     pub fn splice(&mut self, ctx: &Ctx, a: u64, b: u64, new: Vec<Piece>) -> Vec<Piece> {
+        self.forget();
         let b = b.min(self.len);
         let ja = self.split(ctx, a);
         let jb = if b > a { self.split(ctx, b) } else { ja };
@@ -252,6 +284,7 @@ impl Pieces {
     /// `ranges` は重ならず位置の順。置換後のバイト列はひとつの追加文字列にまとめる。
     /// 取り除いたピース列（`ranges` の最初の開始〜最後の終了の範囲ぶん）を返す
     pub fn replace_many(&mut self, ctx: &Ctx, ranges: &[(u64, u64)], repls: Repls) -> Vec<Piece> {
+        self.forget();
         let Some(&(first, _)) = ranges.first() else { return Vec::new() };
         let last = ranges.last().unwrap().1.min(self.len);
         let removed = self.splice(ctx, first, last, Vec::new());
@@ -307,12 +340,14 @@ impl Pieces {
 
     /// [a, b) を `bytes` で置き換え、取り除いたピース列を返す
     pub fn replace(&mut self, ctx: &Ctx, a: u64, b: u64, bytes: &[u8]) -> Vec<Piece> {
+        self.forget();
         let removed = if b > a { self.splice(ctx, a, b, Vec::new()) } else { Vec::new() };
         self.insert(ctx, a, bytes);
         removed
     }
 
     pub fn insert(&mut self, ctx: &Ctx, pos: u64, bytes: &[u8]) {
+        self.forget();
         if bytes.is_empty() {
             return;
         }
@@ -373,9 +408,27 @@ impl Pieces {
             }
             Src::Add(chunk) => {
                 let bytes = &chunk[p.start as usize..(p.start + p.len) as usize];
-                let mut pos = 0;
-                for _ in 0..=local {
+                // 同じピースで、これより前の改行まで調べてあれば、そこから続ける
+                let mut cache = self.scan.0.try_lock().ok();
+                let slot = cache.as_ref().and_then(|c| c.iter().enumerate().filter(|(_, e)| e.0 == i && e.1 <= local).max_by_key(|(_, e)| e.1).map(|(k, e)| (k, e.1, e.2)));
+                let (mut at, mut pos) = slot.map_or((0, 0), |(_, l, p)| (l + 1, p));
+                if let Some((_, l, p)) = slot {
+                    if l == local {
+                        return Some(self.starts[i] + p as u64);
+                    }
+                    at = l + 1;
+                    pos = p;
+                }
+                while at <= local {
                     pos = next_line_start(bytes, pos, ctx.kind)?;
+                    at += 1;
+                }
+                if let Some(c) = cache.as_mut() {
+                    match slot {
+                        Some((k, ..)) => c[k] = (i, local, pos),
+                        None if c.len() < SCAN_SLOTS => c.push((i, local, pos)),
+                        None => c[(local as usize) % SCAN_SLOTS] = (i, local, pos),
+                    }
                 }
                 pos as u64
             }

@@ -613,6 +613,11 @@ impl App {
         if !self.check_editable() {
             return;
         }
+        // 並べ替え中に押されても、最初からやり直さない（クリックのたびに止めて始め直すと、いつまでも終わらない）
+        if matches!(self.rjob.as_ref().map(|j| &j.what), Some(results::JobKind::Sort { .. })) {
+            self.message = "並べ替え中です。終わるまでお待ちください（Esc で中止）".into();
+            return self.invalidate();
+        }
         let Some((col, _, name)) = self.target_column() else { return };
         let opts = SortOptions { column: col, delim, descending: desc, header };
         // 行が多すぎてメモリに載らないときは、並べ替えた結果を別のファイルへ書き出す（外部ソート）
