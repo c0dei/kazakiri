@@ -832,6 +832,15 @@ impl App {
         self.invalidate();
     }
 
+    /// Markdown ファイルを開いたとき、設定によってプレビューを並べる
+    pub(super) fn auto_md(&mut self) {
+        let is_md = self.doc.as_ref().and_then(|d| d.path()).and_then(|p| p.extension()).is_some_and(|e| matches!(e.to_string_lossy().to_lowercase().as_str(), "md" | "markdown" | "mdown"));
+        if is_md && self.settings.md_auto && self.md.is_none() && self.csv.is_none() {
+            self.md_toggle(MdMode::Split);
+            self.message.clear();
+        }
+    }
+
     pub(super) fn md_close(&mut self) {
         if self.md.is_none() {
             return;
@@ -895,7 +904,7 @@ impl App {
     }
 
     pub(super) fn md_wheel(&mut self, delta: i64) {
-        self.md_scroll_by(-(delta as f32) / 120.0 * self.line_h * 3.0);
+        self.md_scroll_by(-(delta as f32) / 120.0 * self.line_h * self.settings.wheel_lines as f32);
     }
 
     /// デザインビューのキー。処理したら true
