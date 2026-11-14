@@ -236,6 +236,7 @@ impl Disp {
         let mut units = Vec::with_capacity(src.len() + fields.len() * 4);
         let mut segs = Vec::with_capacity(fields.len() * 2);
         let mut cols = Vec::with_capacity(fields.len());
+        let mut effects = Vec::new();
         let mut src_pos = 0u32;
         let n = fields.len();
         for (k, r) in fields.into_iter().enumerate() {
@@ -251,6 +252,8 @@ impl Disp {
                 cols.push((disp_start, units.len() as u32));
                 // 区切り文字（元は 1 文字）を │ で表示する
                 segs.push((src_pos, units.len() as u32, 1));
+                // 区切りの線は、控えめな色（空白の印と同じ）にする
+                effects.push((units.len() as u32, units.len() as u32 + 1, Effect::Mark));
                 units.push(0x2502);
                 units.push(b' ' as u16);
                 src_pos += 1;
@@ -262,7 +265,7 @@ impl Disp {
         if cut {
             units.extend("  …(省略)".encode_utf16());
         }
-        Disp { units, shown, segs: Some(segs), cols, effects: Vec::new() }
+        Disp { units, shown, segs: Some(segs), cols, effects }
     }
 
     /// 元の文字列の位置（UTF-16）→ 表示の位置
@@ -445,7 +448,6 @@ impl App {
         unsafe {
             brush.SetColor(&self.theme.header_bg);
             rt.FillRectangle(&rect(0.0, 0.0, w, self.line_h), brush);
-            brush.SetColor(&self.theme.gutter_bg);
             rt.FillRectangle(&rect(0.0, 0.0, gutter, self.line_h), brush);
             brush.SetColor(&self.theme.gutter_text);
             // ほかの行番号と同じ桁数に右揃えする
@@ -453,7 +455,7 @@ impl App {
             self.draw_str(rt, brush, &format!("{:>width$}", 1, width = digits), self.char_w * 0.5, 0.0, gutter)?;
             // 本文の下との境目
             brush.SetColor(&theme::accent(self.settings.dark));
-            rt.FillRectangle(&rect(gutter, self.line_h - 2.0, w, self.line_h), brush);
+            rt.FillRectangle(&rect(gutter, self.line_h - 1.0, w, self.line_h), brush);
             rt.PushAxisAlignedClip(&rect(gutter, 0.0, w, self.line_h), D2D1_ANTIALIAS_MODE_ALIASED);
             let disp = self.display(&line);
             let layout = self.dw.CreateTextLayout(&disp.units, &self.format, 1.0e6, self.line_h)?;

@@ -117,8 +117,8 @@ impl App {
                 None => Vec::new(),
             };
 
-            // 行番号の欄
-            brush.SetColor(&self.theme.gutter_bg);
+            // 行番号の欄（本文と同じ背景。番号の色だけで区別する）
+            brush.SetColor(&self.theme.bg);
             rt.FillRectangle(&rect(0.0, 0.0, gutter, text_h), brush);
 
             // 本文

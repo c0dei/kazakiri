@@ -3,7 +3,7 @@
 use super::*;
 
 pub(super) const FONT_CANDIDATES: [&str; 4] = ["BIZ UDGothic", "BIZ UDゴシック", "MS Gothic", "Consolas"];
-pub(super) const UI_FONT_CANDIDATES: [&str; 3] = ["Yu Gothic UI", "Meiryo UI", "Segoe UI"];
+pub(super) const UI_FONT_CANDIDATES: [&str; 4] = ["Segoe UI Variable Text", "Yu Gothic UI", "Meiryo UI", "Segoe UI"];
 
 pub(super) unsafe fn create_format(dw: &IDWriteFactory, font: &str, size: f32) -> Result<IDWriteTextFormat> {
     unsafe { create_format_from(dw, font, size, &FONT_CANDIDATES) }

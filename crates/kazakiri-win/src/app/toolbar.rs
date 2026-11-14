@@ -391,7 +391,7 @@ impl App {
         let h = ROW1_H;
         let t = self.theme;
         unsafe {
-            brush.SetColor(&t.gutter_bg);
+            brush.SetColor(&t.toolbar_bg);
             rt.FillRectangle(&rect(0.0, 0.0, w, h), brush);
             for &(x0, x1, i) in &self.tool_boxes() {
                 let Some((icon, id, _)) = BUTTONS[i] else { continue };

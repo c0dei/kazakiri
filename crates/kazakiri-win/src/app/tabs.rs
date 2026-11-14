@@ -487,7 +487,7 @@ impl App {
         let h = self.tab_h();
         let t = self.theme;
         unsafe {
-            brush.SetColor(&t.gutter_bg);
+            brush.SetColor(&t.status_bg);
             rt.FillRectangle(&rect(0.0, 0.0, w, h), brush);
             for (i, b) in self.tab_boxes().iter().enumerate() {
                 let (x0, x1) = (b.x0 - self.tab_scroll, b.x1 - self.tab_scroll);
