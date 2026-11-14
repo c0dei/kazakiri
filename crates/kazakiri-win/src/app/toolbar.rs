@@ -86,9 +86,9 @@ const MODES: &[Option<(&str, u32, &str)>] = &[
     Some(("見出し", menu::ID_CSV_HEADER, "1 行目を見出しにして、上に固定する")),
     Some(("列で昇順", menu::ID_SORT_ASC, "対象の列（見出しをクリックして選ぶ）で昇順に並べ替え")),
     Some(("列で降順", menu::ID_SORT_DESC, "対象の列（見出しをクリックして選ぶ）で降順に並べ替え")),
-    Some(("列フィルタ", menu::ID_FILTER, "対象の列（見出しをクリックして選ぶ）の条件で行を絞り込む")),
+    Some(("列フィルタ", menu::ID_FILTER, "CSV/TSV：対象の列（見出しをクリックして選ぶ）の条件で行を絞り込む")),
     None,
-    Some(("フィルター", menu::ID_FILTER_LINES, "検索語に一致した行だけを新しいタブに出す (Ctrl+Shift+L)")),
+    Some(("行フィルター", menu::ID_FILTER_LINES, "検索語を入力して、一致した行だけを新しいタブに出す (Ctrl+Shift+L)")),
 ];
 
 const BTN_W: f32 = 30.0;

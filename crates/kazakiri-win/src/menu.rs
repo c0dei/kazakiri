@@ -350,7 +350,7 @@ pub unsafe fn build(km: &Keymap) -> Result<Menus> {
         item(km, search, ID_LONGEST, "最長の行を検索(&2)")?;
         item(km, search, ID_SHORTEST, "最短の行（空行を除く）を検索(&3)")?;
         item(km, search, ID_FREQUENT, "頻出する行を抽出（新しいタブ）(&4)")?;
-        item(km, search, ID_FILTER_LINES, "フィルター（一致した行だけを新しいタブに）(&I)\tCtrl+Shift+L")?;
+        item(km, search, ID_FILTER_LINES, "行フィルター（一致した行だけを新しいタブに）(&I)\tCtrl+Shift+L")?;
         sep(search)?;
         // フォルダ内を検索（GREP）
         let grep = CreatePopupMenu()?;
@@ -450,7 +450,7 @@ pub unsafe fn build_context(km: &Keymap) -> Result<HMENU> {
     unsafe {
         let m = CreatePopupMenu()?;
         item(km, m, ID_MARK_BASE, "カラーマーカーに追加／解除(&M)")?;
-        item(km, m, ID_FILTER_LINES, "フィルター（一致した行だけを新しいタブに）(&F)")?;
+        item(km, m, ID_FILTER_LINES, "行フィルター（一致した行だけを新しいタブに）(&F)")?;
         item(km, m, ID_ADD_NEXT, "次の同じ文字列を選択に追加(&X)\tCtrl+D")?;
         sep(m)?;
         item(km, m, ID_UNDO, "元に戻す(&U)\tCtrl+Z")?;
