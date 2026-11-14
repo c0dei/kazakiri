@@ -115,6 +115,7 @@ pub const ID_CSV_LETTERS: u32 = 921;
 pub const ID_DIFF_TAB_BASE: u32 = 1000;
 pub const ID_MODEBAR: u32 = 922;
 pub const ID_COLPICK: u32 = 923;
+pub const ID_CELL_MODE: u32 = 925;
 pub const ID_COL_FOLLOW: u32 = 924;
 /// 対象の列を選ぶメニューの項目（列番号 0 から 199）
 pub const ID_COL_BASE: u32 = 1200;
@@ -403,6 +404,7 @@ pub unsafe fn build(km: &Keymap) -> Result<Menus> {
         let csv = CreatePopupMenu()?;
         item(km, csv, ID_CSV, "CSV/TSV を表として表示(&C)\tCtrl+Shift+C")?;
         item(km, csv, ID_CSV_HEADER, "1 行目は見出し(&H)")?;
+        item(km, csv, ID_CELL_MODE, "セル選択モード（ドラッグでセルの四角を選ぶ）(&M)")?;
         item(km, csv, ID_COLPICK, "対象の列を選ぶ（並べ替え・列フィルタ）(&T)...")?;
         item(km, csv, ID_CSV_LETTERS, "列の位置を A, B, C… で表示(&L)")?;
         sep(csv)?;
@@ -531,7 +533,7 @@ pub unsafe fn build_context(km: &Keymap) -> Result<HMENU> {
 
 impl Menus {
     /// 表示メニューのチェック状態（`csv` は CSV モードのときの (区切り, 見出しあり)）
-    pub unsafe fn refresh_view(&self, csv: Option<(char, bool)>, split: bool, flags: [bool; 4], s: &crate::settings::Settings) {
+    pub unsafe fn refresh_view(&self, csv: Option<(char, bool)>, split: bool, flags: [bool; 5], s: &crate::settings::Settings) {
         unsafe {
             let check = |on: bool| if on { MF_CHECKED.0 } else { MF_UNCHECKED.0 };
             CheckMenuItem(self.view, ID_WHITESPACE, check(s.whitespace));
@@ -543,6 +545,7 @@ impl Menus {
             CheckMenuItem(self.search, ID_DIFF_IGN_CASE, check(flags[1]));
             CheckMenuItem(self.view, ID_SPLIT_SYNC, check(flags[2]));
             CheckMenuItem(self.csv, ID_CSV_LETTERS, check(flags[3]));
+            CheckMenuItem(self.csv, ID_CELL_MODE, check(flags[4]));
             CheckMenuItem(self.view, ID_TOOLBAR, check(s.toolbar));
             CheckMenuItem(self.view, ID_MODEBAR, check(s.modebar));
             CheckMenuItem(self.view, ID_FKEYS, check(s.fkeys));

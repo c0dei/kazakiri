@@ -83,6 +83,7 @@ const MODES: &[Option<(&str, u32, &str)>] = &[
     Some(("セミコロン", menu::ID_DELIM_BASE + 2, "セミコロン区切りで表示")),
     Some(("パイプ", menu::ID_DELIM_BASE + 3, "パイプ（|）区切りで表示")),
     None,
+    Some(("セル選択", menu::ID_CELL_MODE, "ドラッグでセルの四角を選ぶ（Excel のように）。コピー・削除・入力は選んだセルの全行に効く")),
     Some(("見出し", menu::ID_CSV_HEADER, "1 行目を見出しにして、上に固定する")),
     Some(("列で昇順", menu::ID_SORT_ASC, "対象の列（見出しをクリックして選ぶ）で昇順に並べ替え")),
     Some(("列で降順", menu::ID_SORT_DESC, "対象の列（見出しをクリックして選ぶ）で降順に並べ替え")),
@@ -157,6 +158,7 @@ impl App {
         match id {
             menu::ID_CSV => true,
             menu::ID_CSV_HEADER => v.header,
+            menu::ID_CELL_MODE => self.cell_mode,
             id if (menu::ID_DELIM_BASE..menu::ID_DELIM_BASE + 4).contains(&id) => menu::DELIMS[(id - menu::ID_DELIM_BASE) as usize].1 == v.delim,
             _ => false,
         }
