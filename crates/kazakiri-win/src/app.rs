@@ -66,6 +66,7 @@ mod rect;
 mod dark;
 mod find_dialog;
 mod findbar;
+mod coldrop;
 mod bookmarks;
 mod diffview;
 mod autosave;
@@ -334,6 +335,8 @@ struct App {
     /// 検索・置換バーの置換欄と、いま入力している欄（0 = 検索、1 = 置換）
     input2: String,
     prompt_focus: u8,
+    /// 「対象の列」のドロップダウン（開いているとき）
+    col_drop: Option<coldrop::ColDrop>,
     last_find: String,
     last_filter: String,
     /// 検索語・置換語の履歴
@@ -622,6 +625,7 @@ impl App {
                 }
                 // 検索や設定のウィンドウは同じスレッドの IME の状態を使うので、本文用に決めた変換ウィンドウ・候補ウィンドウの位置を残さない
                 WM_KILLFOCUS => {
+                    self.col_drop = None;
                     self.reset_ime_forms();
                     (None, None)
                 }
@@ -699,6 +703,9 @@ impl App {
                 }
                 WM_MOUSEWHEEL => {
                     let delta = hiword(wparam.0) as i16 as i64;
+                    if self.col_drop_wheel(delta) {
+                        return (DONE, None);
+                    }
                     // ホイールの座標は画面座標
                     let mut pt = POINT { x: loword(lparam.0 as usize) as i16 as i32, y: hiword(lparam.0 as usize) as i16 as i32 };
                     let _ = ScreenToClient(self.hwnd, &mut pt);
@@ -726,6 +733,10 @@ impl App {
                 }
                 WM_LBUTTONDOWN => {
                     let (x, y) = self.mouse_pos(lparam);
+                    // 「対象の列」のドロップダウンが開いているあいだは、その操作だけ
+                    if self.col_drop_click(x, y) {
+                        return (DONE, None);
+                    }
                     // ツールバー・機能ボタン・メニューバー・ステータスバー
                     if let Some(r) = self.chrome_press(x, y) {
                         return (DONE, r);
@@ -771,6 +782,9 @@ impl App {
                 }
                 WM_LBUTTONDBLCLK => {
                     let (x, y) = self.mouse_pos(lparam);
+                    if self.col_drop_click(x, y) {
+                        return (DONE, None);
+                    }
                     // 素早く続けて押したときも、1 回目と同じボタンの操作として扱う（ダブルクリックとして無視しない）
                     if let Some(r) = self.chrome_press(x, y) {
                         return (DONE, r);
@@ -814,6 +828,9 @@ impl App {
                 }
                 WM_MOUSEMOVE if !self.dragging && self.tab_drag.is_none() => {
                     let (x, y) = self.mouse_pos(lparam);
+                    if self.col_drop_move(x, y) {
+                        return (DONE, None);
+                    }
                     self.update_hover(x, y);
                     (DONE, None)
                 }

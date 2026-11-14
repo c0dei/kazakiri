@@ -222,6 +222,7 @@ impl App {
             self.draw_prompt_bar(&rt, brush, w, h)?;
             rt.SetTransform(&Matrix3x2::identity());
             self.draw_tip(&rt, brush, w)?;
+            self.draw_col_drop(&rt, brush)?;
             rt.EndDraw(None, None)
         }
     }

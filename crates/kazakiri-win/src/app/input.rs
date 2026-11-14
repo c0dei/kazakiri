@@ -27,6 +27,10 @@ impl App {
     }
 
     pub(super) unsafe fn on_key(&mut self, vk: VIRTUAL_KEY) -> Option<Deferred> {
+        // 「対象の列」のドロップダウンが開いているあいだは、その操作だけ
+        if unsafe { self.col_drop_key(vk) } {
+            return None;
+        }
         let ctrl = unsafe { GetKeyState(VK_CONTROL.0 as i32) } < 0;
         let shift = unsafe { GetKeyState(VK_SHIFT.0 as i32) } < 0;
         if self.md_key(vk, ctrl) || self.diff_key(vk, ctrl, shift) {
@@ -132,6 +136,9 @@ impl App {
     }
 
     pub(super) fn on_char(&mut self, ch: u32) {
+        if self.col_drop.is_some() {
+            return;
+        }
         if self.diffview.is_some() || self.md_mode() == Some(mdview::MdMode::Design) {
             return;
         }

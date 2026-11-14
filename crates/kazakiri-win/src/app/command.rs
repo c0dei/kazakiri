@@ -50,7 +50,7 @@ impl App {
             }
             menu::ID_COLPICK => {
                 if self.csv.is_some() {
-                    return Some(Deferred::ColMenu);
+                    return self.toggle_col_drop();
                 }
                 self.message = "対象の列を選べるのは CSV/TSV モードのときです（Ctrl+Shift+C）".into();
                 self.invalidate();

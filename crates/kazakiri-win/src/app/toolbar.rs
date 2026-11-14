@@ -71,8 +71,8 @@ const FKEYS: &[(&str, u32)] = &[
 ];
 
 /// ツールバーの 1 行目の高さと、モードバー（2 行目）の高さ
-const ROW1_H: f32 = 34.0;
-const MODE_H: f32 = 28.0;
+pub(super) const ROW1_H: f32 = 34.0;
+pub(super) const MODE_H: f32 = 28.0;
 
 /// モードバーのボタン。(表示, コマンドの ID, 説明)
 const MODES: &[Option<(&str, u32, &str)>] = &[
@@ -214,7 +214,7 @@ impl App {
     }
 
     /// 「対象の列」ドロップダウンの位置。(x0, x1)
-    fn colpick_box(&self) -> Option<(f32, f32)> {
+    pub(super) fn colpick_box(&self) -> Option<(f32, f32)> {
         self.mode_layout().1
     }
 
