@@ -13,7 +13,7 @@ use windows::Win32::UI::Controls::Dialogs::{ChooseFontW, CHOOSEFONTW, CF_INITTOL
 use windows::Win32::UI::Controls::*;
 use windows::Win32::UI::HiDpi::{GetDpiForWindow, SystemParametersInfoForDpi};
 
-use super::find_dialog::{make_child, rgb_ref, wide};
+use super::find_dialog::{make_child, pick_folder_titled, rgb_ref, wide};
 use super::*;
 
 /// ダイアログのウィンドウ（0 ならまだない）。メッセージループの `IsDialogMessage` が見る
@@ -50,6 +50,11 @@ const ID_MDAUTO: i32 = 231;
 const ID_TITLE: i32 = 18;
 const ID_SEARCH: i32 = 300;
 const ID_CATS: i32 = 301;
+const ID_BKSAVE: i32 = 232;
+const ID_BKDIR: i32 = 233;
+const ID_BKDIR_PICK: i32 = 234;
+const ID_BKNUM: i32 = 235;
+const ID_AUTOMIN: i32 = 236;
 const ID_KEYS: i32 = 240;
 const ID_CLOSE: i32 = 241;
 
@@ -68,7 +73,7 @@ const CHECKS: &[(i32, &str, u32)] = &[
 ];
 
 /// 分類（左の一覧）
-const CATS: [&str; 7] = ["基本", "スクロール", "外観", "表示", "検索・GREP", "Markdown", "キーボード"];
+const CATS: [&str; 9] = ["基本", "スクロール", "外観", "表示", "検索・GREP", "バックアップ", "自動保存", "Markdown", "キーボード"];
 const EN_CHANGE_CODE: u32 = 0x0300;
 const LBN_SELCHANGE_CODE: u32 = 1;
 
@@ -124,6 +129,14 @@ fn sync() {
     set_checked(ID_MODEBAR, s.modebar);
     set_checked(ID_BACKUP, s.grep_backup);
     set_checked(ID_MDAUTO, s.md_auto);
+    set_checked(ID_BKSAVE, s.backup_save);
+    set_checked(ID_BKNUM, s.backup_numbered);
+    if unsafe { GetFocus() } != ctl(ID_BKDIR) {
+        set_text(ID_BKDIR, &s.backup_dir);
+    }
+    if unsafe { GetFocus() } != ctl(ID_AUTOMIN) {
+        set_text(ID_AUTOMIN, &s.autosave_min.to_string());
+    }
     if unsafe { GetFocus() } != ctl(ID_WHEEL) {
         set_text(ID_WHEEL, &s.wheel_lines.to_string());
     }
@@ -215,7 +228,18 @@ fn commit_edits() {
     let ui_font = text_of(ID_UIFONT).trim().to_string();
     let ui_size = text_of(ID_UISIZE).trim().parse::<f32>().ok();
     let wheel = text_of(ID_WHEEL).trim().parse::<usize>().ok();
+    let bk_dir = text_of(ID_BKDIR).trim().to_string();
+    let auto_min = text_of(ID_AUTOMIN).trim().parse::<usize>().ok().map(|n| n.min(1440));
     with_app(|app| {
+        if bk_dir != app.settings.backup_dir {
+            app.settings.backup_dir = bk_dir.clone();
+            app.settings.save();
+        }
+        if let Some(n) = auto_min.filter(|&n| n != app.settings.autosave_min) {
+            app.settings.autosave_min = n;
+            app.settings.save();
+            app.restart_autosave_timer();
+        }
         if let Some(n) = wheel.map(|n| n.clamp(1, 30)).filter(|&n| n != app.settings.wheel_lines) {
             app.settings.wheel_lines = n;
             app.settings.save();
@@ -277,7 +301,7 @@ unsafe fn on_command(dlg: HWND, id: i32, code: u32) {
         if id == IDOK.0 && GetFocus() == ctl(ID_SEARCH) {
             return;
         }
-        if matches!(id, ID_FONT | ID_SIZE | ID_TAB | ID_UIFONT | ID_UISIZE | ID_WHEEL) {
+        if matches!(id, ID_FONT | ID_SIZE | ID_TAB | ID_UIFONT | ID_UISIZE | ID_WHEEL | ID_BKDIR | ID_AUTOMIN) {
             if code == EN_KILLFOCUS_CODE {
                 commit_edits();
             }
@@ -297,6 +321,23 @@ unsafe fn on_command(dlg: HWND, id: i32, code: u32) {
             ID_TRAY => {
                 let on = SendMessageW(ctl(ID_TRAY), BM_GETCHECK, None, None).0 == BST_CHECKED.0 as isize;
                 with_app(|app| app.set_tray(on));
+            }
+            ID_BKDIR_PICK => {
+                if let Some(d) = pick_folder_titled(dlg, "バックアップを置くフォルダを選んでください") {
+                    set_text(ID_BKDIR, &d);
+                    commit_edits();
+                }
+            }
+            ID_BKSAVE | ID_BKNUM => {
+                let on = SendMessageW(ctl(id), BM_GETCHECK, None, None).0 == BST_CHECKED.0 as isize;
+                with_app(|app| {
+                    if id == ID_BKSAVE {
+                        app.settings.backup_save = on;
+                    } else {
+                        app.settings.backup_numbered = on;
+                    }
+                    app.settings.save();
+                });
             }
             ID_MDAUTO => {
                 let on = SendMessageW(ctl(ID_MDAUTO), BM_GETCHECK, None, None).0 == BST_CHECKED.0 as isize;
@@ -443,12 +484,23 @@ unsafe fn create(owner: HWND) {
         put(3, ID_TRAY, w!("BUTTON"), "通知領域（タスクトレイ）にアイコンを表示（クリックで新規作成・開くなど）(&T)", check, 0, 0, 156, 440, 22);
         // 検索・GREP
         put(4, ID_BACKUP, w!("BUTTON"), CHECKS[9].1, check, 0, 0, 0, 440, 22);
+        // バックアップ
+        put(5, ID_BKSAVE, w!("BUTTON"), "上書き保存するとき、元のファイルをバックアップする(&B)", check, 0, 0, 0, 460, 22);
+        put(5, 40, w!("STATIC"), "バックアップを置くフォルダ（空欄で、元のファイルと同じフォルダ）", 0, 0, 0, 36, 460, 18);
+        put(5, ID_BKDIR, w!("EDIT"), "", edit, WS_EX_CLIENTEDGE.0, 0, 56, 360, 24);
+        put(5, ID_BKDIR_PICK, w!("BUTTON"), "参照...(&R)", push, 0, 368, 56, 80, 24);
+        put(5, ID_BKNUM, w!("BUTTON"), "古いバックアップを残す（.bak2、.bak3 … と番号を増やす。オフなら .bak を上書き）(&N)", check, 0, 0, 92, 470, 22);
+        put(5, 41, w!("STATIC"), "バックアップは、名前を付けて保存・変換して保存を含む、既存のファイルを書き換える保存の直前に作ります。", 0, 0, 0, 126, 470, 40);
+        // 自動保存
+        put(6, 42, w!("STATIC"), "自動保存の間隔（分。0 で自動保存しない）", 0, 0, 0, 4, 280, 18);
+        put(6, ID_AUTOMIN, w!("EDIT"), "", edit | ES_NUMBER as u32, WS_EX_CLIENTEDGE.0, 290, 0, 60, 24);
+        put(6, 43, w!("STATIC"), "未保存の編集を、『名前.autosave』に書き出します（元のファイルは書き換えません）。保存するか、通常どおり閉じると消え、異常終了したときだけ残ります。バックアップのフォルダを指定していれば、そこに書き出します。", 0, 0, 0, 38, 470, 70);
         // Markdown
-        put(5, ID_MDAUTO, w!("BUTTON"), "Markdown ファイル（.md）を開いたとき、右にプレビューを並べる(&A)", check, 0, 0, 0, 460, 22);
-        put(5, 16, w!("STATIC"), "プレビューは、表示メニューやモードバーのボタン（Ctrl+Shift+V：右に並べる、Ctrl+Shift+G：デザインビュー）でも切り替えられます。", 0, 0, 0, 34, 460, 40);
+        put(7, ID_MDAUTO, w!("BUTTON"), "Markdown ファイル（.md）を開いたとき、右にプレビューを並べる(&A)", check, 0, 0, 0, 460, 22);
+        put(7, 16, w!("STATIC"), "プレビューは、表示メニューやモードバーのボタン（Ctrl+Shift+V：右に並べる、Ctrl+Shift+G：デザインビュー）でも切り替えられます。", 0, 0, 0, 34, 460, 40);
         // キーボード
-        put(6, ID_KEYS, w!("BUTTON"), "キー割り当て...(&K)", push, 0, 0, 0, 200, 28);
-        put(6, 17, w!("STATIC"), "コマンドごとのキーを、一覧から選んで変えられます。", 0, 0, 0, 38, 460, 18);
+        put(8, ID_KEYS, w!("BUTTON"), "キー割り当て...(&K)", push, 0, 0, 0, 200, 28);
+        put(8, 17, w!("STATIC"), "コマンドごとのキーを、一覧から選んで変えられます。", 0, 0, 0, 38, 460, 18);
         put(ALL, ID_CLOSE, w!("BUTTON"), "閉じる", BS_DEFPUSHBUTTON as u32 | WS_TABSTOP.0, 0, 598, 436, 90, 28);
         let (bg, edit_bg) = (CreateSolidBrush(rgb_ref(&super::theme::DARK.gutter_bg)), CreateSolidBrush(rgb_ref(&super::theme::DARK.bg)));
         BG_BRUSH.store(bg.0 as isize, Ordering::Relaxed);

@@ -81,6 +81,8 @@ pub(super) unsafe fn run_inner() -> std::result::Result<(), (&'static str, windo
             diffview: None,
             md: None,
             md_hover: false,
+            autosave_busy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            autosave_done: HashMap::new(),
             tracking_leave: false,
             line_h,
             char_w,
@@ -176,6 +178,7 @@ pub(super) unsafe fn run_inner() -> std::result::Result<(), (&'static str, windo
         if app.settings.tray {
             app.tray_add();
         }
+        app.restart_autosave_timer();
         APP.with(|a| *a.borrow_mut() = Some(app));
         DragAcceptFiles(hwnd, true);
         let _ = ShowWindow(hwnd, SW_SHOW);

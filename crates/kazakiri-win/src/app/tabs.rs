@@ -72,6 +72,29 @@ impl App {
         if i == self.active { self.doc.clone() } else { self.tabs.get(i)?.doc.clone() }
     }
 
+    /// 未保存の編集があるファイル（パスのあるもの）と、編集の版。表示中のタブも含む
+    pub(super) fn modified_docs(&self) -> Vec<(Arc<Document>, PathBuf, u64)> {
+        let mut out = Vec::new();
+        let mut add = |doc: &Option<Arc<Document>>, ed: &Option<Editor>| {
+            if let (Some(d), Some(e)) = (doc, ed) {
+                if let (true, Some(p)) = (e.is_modified(), d.path()) {
+                    out.push((d.clone(), p.to_path_buf(), e.version()));
+                }
+            }
+        };
+        add(&self.doc, &self.editor);
+        for (i, t) in self.tabs.iter().enumerate() {
+            if i != self.active {
+                add(&t.doc, &t.editor);
+            }
+        }
+        out
+    }
+
+    pub(super) fn tab_paths(&self) -> Vec<PathBuf> {
+        (0..self.tabs.len()).filter_map(|i| self.tab_doc(i)).filter_map(|d| d.path().map(Path::to_path_buf)).collect()
+    }
+
     pub(super) fn tab_title(&self, i: usize) -> String {
         title_of(self.tab_doc(i).as_ref())
     }
@@ -258,6 +281,9 @@ impl App {
 
     /// 表示中のタブを取り除き、隣のタブを表示する（最後の 1 つなら無題にする）
     fn remove_active_tab(&mut self) {
+        if let Some(p) = self.doc.as_ref().and_then(|d| d.path()).map(Path::to_path_buf) {
+            self.remove_autosave(&p);
+        }
         self.leave_tab();
         drop(self.stash());
         if self.tabs.len() == 1 {

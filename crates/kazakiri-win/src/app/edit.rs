@@ -47,6 +47,8 @@ pub(super) struct SaveDone {
     target: PathBuf,
     /// 変換して保存したときの文字コード（保存後に開き直すときに使う）
     converted: Option<&'static Encoding>,
+    /// 保存の前に作ったバックアップ（失敗したときはその理由）
+    backup: Option<std::result::Result<Option<PathBuf>, String>>,
 }
 
 /// 「保存しますか？」のあとに行う操作
@@ -637,10 +639,13 @@ impl App {
         let cancel = Arc::new(AtomicBool::new(false));
         self.saving = Some(SaveJob { written: written.clone(), cancel: cancel.clone(), total: doc.len(), target: target.clone() });
         let hwnd = self.hwnd.0 as isize;
+        let bk = self.settings.backup_save.then(|| ((!self.settings.backup_dir.trim().is_empty()).then(|| PathBuf::from(self.settings.backup_dir.trim())), self.settings.backup_numbered));
         std::thread::spawn(move || {
+            // 上書きする前に、元のファイルをバックアップする（なければ何もしない）
+            let backup = bk.map(|(dir, numbered)| kazakiri_core::backup::make_backup(&target, dir.as_deref(), numbered).map_err(|e| e.to_string()));
             let result = doc.write_temp_with(&target, &written, &cancel, conv.as_ref()).map_err(|e| e.to_string());
             drop(doc);
-            let done = Box::into_raw(Box::new(SaveDone { result, target, converted: conv.map(|c| c.encoding) }));
+            let done = Box::into_raw(Box::new(SaveDone { result, target, converted: conv.map(|c| c.encoding), backup }));
             if unsafe { PostMessageW(Some(HWND(hwnd as *mut _)), WM_SAVE_DONE, WPARAM(0), LPARAM(done as isize)) }.is_err() {
                 drop(unsafe { Box::from_raw(done) });
             }
@@ -694,13 +699,23 @@ impl App {
             std::thread::sleep(Duration::from_millis(5));
         }
         let target = done.target;
-        let (open_path, msg) = match commit_save(&temp, &target) {
+        let backup = done.backup;
+        let (open_path, mut msg) = match commit_save(&temp, &target) {
             Ok(()) => (target.clone(), format!("保存しました（{}）", target.file_name().map_or_else(|| target.display().to_string(), |n| n.to_string_lossy().into_owned()))),
             Err(e) => (
                 temp.clone(),
                 format!("保存先を置き換えられませんでした（{e}）。内容は {} にあります。「名前を付けて保存」で保存し直してください", temp.display()),
             ),
         };
+        // 保存できたので、自動保存のファイルは要らない
+        if open_path == target {
+            self.remove_autosave(&target);
+        }
+        match backup {
+            Some(Ok(Some(b))) => msg.push_str(&format!("。バックアップ: {}", b.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned()))),
+            Some(Err(e)) => msg.push_str(&format!("。バックアップを作れませんでした（{e}）")),
+            _ => {}
+        }
         self.open_keep(open_path, forced, true);
         let (top, x_off, sel) = view;
         self.top = top.min(self.max_top());

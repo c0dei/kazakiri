@@ -67,6 +67,7 @@ mod dark;
 mod find_dialog;
 mod bookmarks;
 mod diffview;
+mod autosave;
 mod mdview;
 mod markers;
 mod complete;
@@ -97,6 +98,8 @@ const TIMER_SEARCH: usize = 2;
 const TIMER_FOLLOW: usize = 3;
 /// ツールバーのボタンの上にマウスを置いてから、説明（ツールチップ）を出すまでの待ち
 const TIMER_TIP: usize = 4;
+/// 自動保存
+const TIMER_AUTOSAVE: usize = 6;
 /// 長い行の横スクロールで取り出す窓の大きさの上限（バイト）。描画の上限（8192 UTF-16 単位）に収まる大きさ
 const LONG_LINE_WINDOW: usize = 8000;
 /// 検索スレッドからの完了通知
@@ -267,6 +270,10 @@ struct App {
     md: Option<mdview::MdView>,
     /// プレビューのリンクの飛び先をステータスバーに出している
     md_hover: bool,
+    /// 自動保存の書き出し中
+    autosave_busy: Arc<std::sync::atomic::AtomicBool>,
+    /// 自動保存した時点の編集の版（ファイル → 版）。変わっていなければ書き直さない
+    autosave_done: HashMap<PathBuf, u64>,
     tracking_leave: bool,
     line_h: f32,
     char_w: f32,
@@ -519,6 +526,10 @@ impl App {
                     }
                     self.update_scrollbars();
                     self.invalidate();
+                    (DONE, None)
+                }
+                WM_TIMER if wparam.0 == TIMER_AUTOSAVE => {
+                    self.autosave_tick();
                     (DONE, None)
                 }
                 WM_TIMER if wparam.0 == TIMER_TIP => {
@@ -827,6 +838,8 @@ impl App {
                     (DONE, None)
                 }
                 WM_DESTROY => {
+                    let _ = KillTimer(Some(self.hwnd), TIMER_AUTOSAVE);
+                    self.remove_all_autosaves();
                     self.tray_remove();
                     // ウィンドウの位置と大きさを覚える（最大化していれば、戻したときの大きさ）
                     let mut wp = WINDOWPLACEMENT { length: std::mem::size_of::<WINDOWPLACEMENT>() as u32, ..Default::default() };
