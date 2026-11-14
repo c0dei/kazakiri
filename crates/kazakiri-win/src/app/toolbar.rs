@@ -85,6 +85,7 @@ const MODES: &[Option<(&str, u32, &str)>] = &[
     None,
     Some(("セル選択", menu::ID_CELL_MODE, "ドラッグでセルの四角を選ぶ（Excel のように）。コピー・削除・入力は選んだセルの全行に効く")),
     Some(("見出し", menu::ID_CSV_HEADER, "1 行目を見出しにして、上に固定する")),
+    None,
     Some(("列で昇順", menu::ID_SORT_ASC, "対象の列（見出しをクリックして選ぶ）で昇順に並べ替え")),
     Some(("列で降順", menu::ID_SORT_DESC, "対象の列（見出しをクリックして選ぶ）で降順に並べ替え")),
     Some(("列フィルタ", menu::ID_FILTER, "CSV/TSV：対象の列（見出しをクリックして選ぶ）の条件で行を絞り込む")),
@@ -96,7 +97,9 @@ const MODES: &[Option<(&str, u32, &str)>] = &[
 ];
 
 const BTN_W: f32 = 30.0;
-const SEP_W: f32 = 12.0;
+const SEP_W: f32 = 20.0;
+/// MODES のうち、区切り文字の 4 つ（枠で囲んで 1 つのグループに見せる）
+const DELIM_GROUP: std::ops::RangeInclusive<usize> = 2..=5;
 const BTN_PAD: f32 = 8.0;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -122,13 +125,25 @@ impl App {
         if self.settings.toolbar && self.settings.modebar { MODE_H } else { 0.0 }
     }
 
-    /// モードバーのボタンの位置。(x0, x1, 番号)
-    fn mode_boxes(&self) -> Vec<(f32, f32, usize)> {
+    /// モードバーのボタンの位置 (x0, x1, 番号) と、「対象の列」ドロップダウンの位置 (x0, x1)。
+    /// ドロップダウンは、並べ替え・列フィルタのボタンの直前に置く
+    fn mode_layout(&self) -> (Vec<(f32, f32, usize)>, Option<(f32, f32)>) {
+        let pick_w = self.colpick_label().map(|label| {
+            let units: Vec<u16> = label.encode_utf16().collect();
+            unsafe { self.ui_text_width(&units) }.unwrap_or(units.len() as f32 * self.ui_char_w) + 34.0
+        });
         let mut x = BTN_PAD;
         let mut out = Vec::new();
+        let mut pick = None;
         for (i, b) in MODES.iter().enumerate() {
             match b {
-                Some((label, _, _)) => {
+                Some((label, id, _)) => {
+                    if *id == menu::ID_SORT_ASC {
+                        if let Some(w) = pick_w {
+                            pick = Some((x, x + w));
+                            x += w + 8.0;
+                        }
+                    }
                     let units: Vec<u16> = label.encode_utf16().collect();
                     let w = unsafe { self.ui_text_width(&units) }.unwrap_or(units.len() as f32 * self.ui_char_w) + 18.0;
                     out.push((x, x + w, i));
@@ -137,7 +152,11 @@ impl App {
                 None => x += SEP_W,
             }
         }
-        out
+        (out, pick)
+    }
+
+    fn mode_boxes(&self) -> Vec<(f32, f32, usize)> {
+        self.mode_layout().0
     }
 
     /// 「対象の列」の表示（CSV 表示のとき）。ボタンの文字
@@ -149,11 +168,7 @@ impl App {
 
     /// 「対象の列」ドロップダウンの位置。(x0, x1)
     fn colpick_box(&self) -> Option<(f32, f32)> {
-        let label = self.colpick_label()?;
-        let last = self.mode_boxes().last().map(|b| b.1)?;
-        let units: Vec<u16> = label.encode_utf16().collect();
-        let w = unsafe { self.ui_text_width(&units) }.unwrap_or(units.len() as f32 * self.ui_char_w) + 34.0;
-        Some((last + 14.0, last + 14.0 + w))
+        self.mode_layout().1
     }
 
     fn mode_checked(&self, id: u32) -> bool {
@@ -367,7 +382,22 @@ impl App {
         unsafe {
             brush.SetColor(&t.gutter_bg);
             rt.FillRectangle(&rect(0.0, 0.0, w, h), brush);
-            for &(x0, x1, i) in &self.mode_boxes() {
+            let boxes = self.mode_boxes();
+            // グループの境目に細い縦線
+            brush.SetColor(&t.dim);
+            for &(_, x1, i) in &boxes {
+                if MODES.get(i + 1).is_some_and(|m| m.is_none()) && i + 2 < MODES.len() {
+                    let cx = (x1 + 2.0 + SEP_W / 2.0).floor() + 0.5;
+                    rt.FillRectangle(&rect(cx, 7.0, cx + 1.0, h - 7.0), brush);
+                }
+            }
+            // 区切り文字のグループを枠で囲む
+            let first = boxes.iter().find(|b| b.2 == *DELIM_GROUP.start());
+            let last = boxes.iter().find(|b| b.2 == *DELIM_GROUP.end());
+            if let (Some(a), Some(b)) = (first, last) {
+                rt.DrawRoundedRectangle(&rrect(a.0 - 2.5, 2.5, b.1 + 2.5, h - 2.5, 5.0), brush, 1.0, None);
+            }
+            for &(x0, x1, i) in &boxes {
                 let Some((label, id, _)) = MODES[i] else { continue };
                 let hovered = self.hover == Some(Hover::Mode(i));
                 let on = self.mode_checked(id);

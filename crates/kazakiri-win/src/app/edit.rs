@@ -464,6 +464,9 @@ impl App {
 
     /// 変換中の文字と候補ウィンドウをカーソルの位置に出す
     pub(super) fn update_ime_position(&self) {
+        if self.prompt.is_some() {
+            return self.update_ime_position_prompt();
+        }
         let Some(doc) = self.doc.clone() else { return };
         let c = self.caret();
         let Some(line) = doc.line_of_offset(c) else { return };
@@ -506,9 +509,35 @@ impl App {
         }
     }
 
-    /// 確定した文字列をまとめて受け取る（1 文字ずつの WM_CHAR より速く、元に戻すも 1 回）
+    /// 入力欄（行へ移動・列フィルタなど）が開いているとき、変換中の文字と候補ウィンドウを入力欄の文字の末尾に出す
+    fn update_ime_position_prompt(&self) {
+        let scale = unsafe { GetDpiForWindow(self.hwnd) } as f32 / 96.0;
+        let units: Vec<u16> = self.input.encode_utf16().collect();
+        let x = 14.0 + unsafe { self.ui_text_width(&units) }.unwrap_or(0.0);
+        let y = self.chrome_h() + self.prompt_input_top();
+        let pt = POINT { x: (x * scale) as i32, y: (y * scale) as i32 };
+        let comp_w = self.comp.as_ref().map_or(0, |c| (unsafe { self.ui_text_width(&c.units) }.unwrap_or(0.0) * scale) as i32);
+        unsafe {
+            let himc = ImmGetContext(self.hwnd);
+            if himc.is_invalid() {
+                return;
+            }
+            let cf = COMPOSITIONFORM { dwStyle: CFS_POINT, ptCurrentPos: pt, rcArea: RECT::default() };
+            let _ = ImmSetCompositionWindow(himc, &cf);
+            let cand = CANDIDATEFORM {
+                dwIndex: 0,
+                dwStyle: CFS_EXCLUDE,
+                ptCurrentPos: pt,
+                rcArea: RECT { left: pt.x, top: pt.y, right: pt.x + 1 + comp_w, bottom: pt.y + (self.ui_line_h * scale) as i32 },
+            };
+            let _ = ImmSetCandidateWindow(himc, &cand);
+            let _ = ImmReleaseContext(self.hwnd, himc);
+        }
+    }
+
+    /// 変換中の文字を本文（入力欄でなく）に描くか
     pub(super) fn ime_inline_on(&self) -> bool {
-        self.settings.ime_inline && self.prompt.is_none()
+        self.settings.ime_inline
     }
 
     /// 変換中の文字列・文字ごとの状態・カーソルを IME から読む
@@ -573,7 +602,7 @@ impl App {
     }
 
     pub(super) fn ime_result(&mut self, lparam: LPARAM) -> bool {
-        if lparam.0 as u32 & GCS_RESULTSTR.0 == 0 || self.prompt.is_some() {
+        if lparam.0 as u32 & GCS_RESULTSTR.0 == 0 {
             return false;
         }
         unsafe {
@@ -590,6 +619,11 @@ impl App {
             }
             let _ = ImmReleaseContext(self.hwnd, himc);
             match s {
+                Some(s) if self.prompt.is_some() => {
+                    // 入力欄は 1 行。改行は入れない
+                    self.input.extend(s.chars().filter(|c| !c.is_control()));
+                    true
+                }
                 Some(s) => {
                     self.type_text(&s, EditKind::Typing);
                     true

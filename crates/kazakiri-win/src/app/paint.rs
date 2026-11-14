@@ -470,6 +470,12 @@ impl App {
         }
     }
 
+    /// 入力欄の文字の上端（ツールバーとタブバーを除いた座標）
+    pub(super) fn prompt_input_top(&self) -> f32 {
+        let bar_h = self.ui_line_h * 2.0 + 14.0;
+        self.client_size().1 - self.status_h() - bar_h + 7.0 + self.ui_line_h + 2.0
+    }
+
     /// 入力欄（行へ移動・列フィルタ・分割・連番）を、ステータスバーの上に 2 行の枠で出す。1 行目は説明、2 行目は入力
     pub(super) unsafe fn draw_prompt_bar(&self, rt: &ID2D1RenderTarget, brush: &ID2D1SolidColorBrush, w: f32, h: f32) -> Result<()> {
         let Some(prompt) = self.prompt else { return Ok(()) };
@@ -499,7 +505,42 @@ impl App {
             brush.SetColor(&t.bg);
             rt.FillRoundedRectangle(&rrect(8.0, iy, w - 8.0, iy + self.ui_line_h + 4.0, 4.0), brush);
             brush.SetColor(&t.text);
-            self.draw_ui_str(rt, brush, &format!("{}|", self.input), 14.0, iy + 2.0, w - 14.0)?;
+            let units: Vec<u16> = self.input.encode_utf16().collect();
+            let x = 14.0 + self.ui_text_width(&units)?;
+            self.draw_ui_str(rt, brush, &self.input, 14.0, iy + 2.0, w - 14.0)?;
+            match self.comp.as_ref().filter(|_| self.ime_inline_on()) {
+                Some(comp) => {
+                    // 変換中の文字：変換対象は背景、下線で状態を示す
+                    let cw = self.ui_text_width(&comp.units)?;
+                    let mut i = 0;
+                    while i < comp.units.len() {
+                        let a = comp.attrs.get(i).copied().unwrap_or(0);
+                        let mut j = i + 1;
+                        while j < comp.units.len() && comp.attrs.get(j).copied().unwrap_or(0) == a {
+                            j += 1;
+                        }
+                        let (x0, x1) = (x + self.ui_text_width(&comp.units[..i])?, x + self.ui_text_width(&comp.units[..j])?);
+                        let target = matches!(a, 1 | 3);
+                        if target {
+                            brush.SetColor(&t.select);
+                            rt.FillRectangle(&rect(x0, iy + 2.0, x1, iy + 2.0 + self.ui_line_h), brush);
+                        }
+                        brush.SetColor(&t.text);
+                        let th = if target { 2.0 } else { 1.0 };
+                        let by = iy + 2.0 + self.ui_line_h - 1.0;
+                        rt.FillRectangle(&rect(x0, by - th, x1, by), brush);
+                        i = j;
+                    }
+                    self.draw_ui_str(rt, brush, &String::from_utf16_lossy(&comp.units), x, iy + 2.0, (x + cw + 4.0).min(w - 8.0))?;
+                    let cx = x + self.ui_text_width(&comp.units[..comp.cursor.min(comp.units.len())])?;
+                    brush.SetColor(&t.caret);
+                    rt.FillRectangle(&rect(cx - 0.5, iy + 3.0, cx + 1.5, iy + 1.0 + self.ui_line_h), brush);
+                }
+                None => {
+                    brush.SetColor(&t.caret);
+                    rt.FillRectangle(&rect(x, iy + 3.0, x + 1.5, iy + 1.0 + self.ui_line_h), brush);
+                }
+            }
         }
         Ok(())
     }
