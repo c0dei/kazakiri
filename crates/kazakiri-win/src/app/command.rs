@@ -221,7 +221,11 @@ impl App {
                 self.invalidate();
             }
             menu::ID_ADD_NEXT => self.add_next_match(),
-            menu::ID_DARK => self.set_dark(!self.settings.dark),
+            menu::ID_DARK => {
+                // メニューやキーでの切り替えは、ライト／ダークのどちらかに固定する
+                self.settings.theme_mode = if self.settings.dark { 1 } else { 2 };
+                self.set_dark(!self.settings.dark);
+            }
             menu::ID_ZOOM_IN => self.zoom(1.0),
             menu::ID_ZOOM_OUT => self.zoom(-1.0),
             menu::ID_ZOOM_RESET => self.zoom(0.0),

@@ -554,6 +554,14 @@ impl App {
                     self.invalidate();
                     (DONE, None)
                 }
+                // Windows のテーマ（ライト／ダーク）が変わった
+                WM_SETTINGCHANGE => {
+                    let key = if lparam.0 != 0 { PCWSTR(lparam.0 as *const u16).to_string().unwrap_or_default() } else { String::new() };
+                    if key == "ImmersiveColorSet" {
+                        self.system_theme_changed();
+                    }
+                    (None, None)
+                }
                 WM_DPICHANGED => {
                     self.gfx = None;
                     let r = &*(lparam.0 as *const RECT);

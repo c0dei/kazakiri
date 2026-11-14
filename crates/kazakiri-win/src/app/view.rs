@@ -57,6 +57,41 @@ impl App {
         self.invalidate();
     }
 
+    /// テーマの選び方を変える（0 = Windows の設定に合わせる、1 = ライト、2 = ダーク）
+    pub(super) fn set_theme_mode(&mut self, mode: u8) {
+        self.settings.theme_mode = mode;
+        let dark = match mode {
+            1 => false,
+            2 => true,
+            _ => theme::system_prefers_dark(),
+        };
+        if dark != self.settings.dark {
+            self.set_dark(dark);
+        } else {
+            self.settings.save();
+            self.invalidate();
+        }
+    }
+
+    /// Windows のテーマが変わった：「Windows の設定に合わせる」のときだけ、追従する
+    pub(super) fn system_theme_changed(&mut self) {
+        if self.settings.theme_mode == 0 {
+            let dark = theme::system_prefers_dark();
+            if dark != self.settings.dark {
+                self.set_dark(dark);
+            }
+        }
+    }
+
+    /// アクセントカラーを変える（None なら Windows の設定の色）
+    pub(super) fn set_accent(&mut self, c: Option<u32>) {
+        self.settings.accent = c;
+        theme::set_accent_override(c);
+        self.gfx = None;
+        self.settings.save();
+        self.invalidate();
+    }
+
     /// ウィンドウの縁（DWM が描く細い枠線）とポップアップメニュー・スクロールバーを、テーマに合わせる（Windows 10 20H1 以降）
     pub(super) fn apply_title_theme(&mut self) {
         let v = BOOL::from(self.settings.dark);

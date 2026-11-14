@@ -455,10 +455,12 @@ impl App {
             brush.SetColor(&self.theme.header_bg);
             rt.FillRectangle(&rect(0.0, 0.0, w, self.line_h), brush);
             rt.FillRectangle(&rect(0.0, 0.0, gutter, self.line_h), brush);
-            brush.SetColor(&self.theme.gutter_text);
-            // ほかの行番号と同じ桁数に右揃えする
-            let digits = group(self.total_lines()).len().max(4);
-            self.draw_str(rt, brush, &format!("{:>width$}", 1, width = digits), self.char_w * 0.5, 0.0, gutter)?;
+            if self.settings.line_numbers {
+                brush.SetColor(&self.theme.gutter_text);
+                // ほかの行番号と同じ桁数に右揃えする
+                let digits = group(self.total_lines()).len().max(4);
+                self.draw_str(rt, brush, &format!("{:>width$}", 1, width = digits), self.char_w * 0.5, 0.0, gutter)?;
+            }
             // 本文の下との境目
             brush.SetColor(&theme::accent(self.settings.dark));
             rt.FillRectangle(&rect(gutter, self.line_h - 1.0, w, self.line_h), brush);

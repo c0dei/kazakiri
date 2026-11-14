@@ -109,9 +109,43 @@ pub(super) fn load_accent() {
     SYS_ACCENT.store(if ok { c | 0xFF00_0000 } else { 0 }, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// 設定で選んだアクセントカラー（0xFFRRGGBB。0 なら Windows の設定の色）
+static ACCENT_OVERRIDE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// アクセントカラーを、設定で選んだ色に（None で Windows の設定の色に戻す）
+pub(super) fn set_accent_override(c: Option<u32>) {
+    ACCENT_OVERRIDE.store(c.map_or(0, |c| c | 0xFF00_0000), std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Windows の設定のアクセントカラー（明るくする前の色）
+pub(super) fn system_accent() -> D2D1_COLOR_F {
+    let v = SYS_ACCENT.load(std::sync::atomic::Ordering::Relaxed);
+    if v == 0 { rgb(0x00, 0x67, 0xC0) } else { rgb(((v >> 16) & 0xFF) as u8, ((v >> 8) & 0xFF) as u8, (v & 0xFF) as u8) }
+}
+
+/// Windows のアプリのテーマがダークか（設定 → 個人用設定 → 色）
+pub(super) fn system_prefers_dark() -> bool {
+    use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD};
+    let mut data = 1u32;
+    let mut size = std::mem::size_of::<u32>() as u32;
+    let r = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            windows::core::w!(r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"),
+            windows::core::w!("AppsUseLightTheme"),
+            RRF_RT_REG_DWORD,
+            None,
+            Some(&mut data as *mut u32 as *mut _),
+            Some(&mut size),
+        )
+    };
+    r.is_ok() && data == 0
+}
+
 /// 選択中のタブの印などに使う色。ダークテーマでは見やすいよう明るくする
 pub(super) fn accent(dark: bool) -> D2D1_COLOR_F {
-    let v = SYS_ACCENT.load(std::sync::atomic::Ordering::Relaxed);
+    let o = ACCENT_OVERRIDE.load(std::sync::atomic::Ordering::Relaxed);
+    let v = if o != 0 { o } else { SYS_ACCENT.load(std::sync::atomic::Ordering::Relaxed) };
     let (r, g, b) = if v == 0 { (0x00, 0x67, 0xC0) } else { (((v >> 16) & 0xFF) as u8, ((v >> 8) & 0xFF) as u8, (v & 0xFF) as u8) };
     if dark {
         let up = |c: u8| (c as u32 + (255 - c as u32) * 40 / 100) as u8;

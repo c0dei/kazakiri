@@ -183,15 +183,19 @@ impl App {
             if self.wrap_on() {
                 for &(y, number) in &wrapped_numbers {
                     let num = format!("{:>width$}", group(number + 1), width = digits);
-                    brush.SetColor(&self.theme.gutter_text);
-                    self.draw_str(&rt, brush, &num, self.char_w * 0.5, y, gutter)?;
+                    if self.settings.line_numbers {
+                        brush.SetColor(&self.theme.gutter_text);
+                        self.draw_str(&rt, brush, &num, self.char_w * 0.5, y, gutter)?;
+                    }
                 }
             }
             for (i, line) in lines_nowrap.iter().enumerate() {
                 let y = i as f32 * self.line_h;
-                let num = format!("{:>width$}", group(line.number + 1), width = digits);
-                brush.SetColor(&self.theme.gutter_text);
-                self.draw_str(&rt, brush, &num, self.char_w * 0.5, y, gutter)?;
+                if self.settings.line_numbers {
+                    let num = format!("{:>width$}", group(line.number + 1), width = digits);
+                    brush.SetColor(&self.theme.gutter_text);
+                    self.draw_str(&rt, brush, &num, self.char_w * 0.5, y, gutter)?;
+                }
             }
             // ブックマークの印（行番号の欄の左端に帯）
             if !self.bookmarks.is_empty() {

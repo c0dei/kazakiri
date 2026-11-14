@@ -160,6 +160,9 @@ impl App {
     }
 
     pub(super) fn gutter_width(&self) -> f32 {
+        if !self.settings.line_numbers {
+            return 8.0;
+        }
         let digits = group(self.total_lines()).len().max(4);
         self.char_w * (digits as f32 + 2.0)
     }

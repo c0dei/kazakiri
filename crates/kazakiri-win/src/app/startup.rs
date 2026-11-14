@@ -45,7 +45,14 @@ pub(super) unsafe fn run_inner() -> std::result::Result<(), (&'static str, windo
 
         let d2d: ID2D1Factory = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None).map_err(|e| ("D2D1CreateFactory", e))?;
         let dw: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED).map_err(|e| ("DWriteCreateFactory", e))?;
-        let settings = Settings::load();
+        let mut settings = Settings::load();
+        // テーマは、選び方（Windows に合わせる／ライト／ダーク）から決める
+        settings.dark = match settings.theme_mode {
+            1 => false,
+            2 => true,
+            _ => theme::system_prefers_dark(),
+        };
+        theme::set_accent_override(settings.accent);
         let format = create_format(&dw, &settings.font, settings.font_size).map_err(|e| ("CreateTextFormat", e))?;
         // フォントが見つからない環境でも起動できるよう、計測失敗時は既定値
         let fs = settings.font_size;

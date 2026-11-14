@@ -10,7 +10,6 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 
 use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE};
-use windows::Win32::UI::Controls::Dialogs::{ChooseFontW, CHOOSEFONTW, CF_INITTOLOGFONTSTRUCT, CF_SCREENFONTS};
 use windows::Win32::UI::Controls::*;
 use windows::Win32::UI::HiDpi::{GetDpiForWindow, SystemParametersInfoForDpi};
 
@@ -30,14 +29,20 @@ static FIRST: AtomicBool = AtomicBool::new(true);
 const CLASS: PCWSTR = w!("KazakiriSettingsDialog");
 const EN_KILLFOCUS_CODE: u32 = 0x0200;
 
-const ID_DARK: i32 = 201;
+const ID_LINENUM: i32 = 214;
+/// テーマの選び方（システム・ライト・ダーク）と、アクセントカラーの見本の ID（先頭から連番）
+const ID_THEME_BASE: i32 = 250;
+const ID_ACCENT_BASE: i32 = 260;
+/// 大きさの − ＋ ボタン
+const ID_SIZE_DEC: i32 = 270;
+const ID_SIZE_INC: i32 = 271;
+const ID_UISIZE_DEC: i32 = 272;
+const ID_UISIZE_INC: i32 = 273;
 const ID_TRAY: i32 = 226;
 const ID_MODEBAR: i32 = 227;
 const ID_FONT: i32 = 204;
-const ID_FONT_PICK: i32 = 205;
 const ID_SIZE: i32 = 206;
 const ID_UIFONT: i32 = 207;
-const ID_UIFONT_PICK: i32 = 208;
 const ID_UISIZE: i32 = 209;
 const ID_WRAP: i32 = 210;
 const ID_IME: i32 = 211;
@@ -63,7 +68,6 @@ const ID_CLOSE: i32 = 241;
 
 /// チェックボックスの ID と、同じ働きの表示メニューのコマンド
 const CHECKS: &[(i32, &str, u32)] = &[
-    (ID_DARK, "ダークテーマ(&D)", menu::ID_DARK),
     (ID_WRAP, "長い行を折り返して表示(&W)", menu::ID_WRAP),
     (ID_IME, "IME の変換中の文字をエディタ内に表示(&M)", menu::ID_IME_INLINE),
     (ID_WS, "空白・タブ・改行を表示(&S)", menu::ID_WHITESPACE),
@@ -79,6 +83,10 @@ const CHECKS: &[(i32, &str, u32)] = &[
 const CATS: [&str; 9] = ["基本", "スクロール", "外観", "表示", "検索・GREP", "バックアップ", "自動保存", "Markdown", "キーボード"];
 const EN_CHANGE_CODE: u32 = 0x0300;
 const LBN_SELCHANGE_CODE: u32 = 1;
+const CBN_SELCHANGE_CODE: u32 = 1;
+const CBN_KILLFOCUS_CODE: u32 = 4;
+/// フォント名の一覧の先頭（空欄 = 自動）
+const AUTO_FONT: &str = "（自動）";
 
 /// 設定の 1 行（カード）。`toggle` があれば、右端にスイッチを出す
 struct Row {
@@ -92,6 +100,36 @@ struct Row {
     h: i32,
     /// フォントの見え方を見せる行
     preview: bool,
+    /// カードのない小見出し
+    heading: bool,
+    /// 選択肢（先頭の ID, 種類 0 = 切り替え・1 = 色の見本, 個数）
+    choice: Option<(i32, u8, usize)>,
+}
+
+/// アクセントカラーの見本（先頭の「Windows の設定の色」のあとに並べる）
+const ACCENTS: [u32; 5] = [0x0067C0, 0x107C10, 0xCA5010, 0xE3008C, 0x8764B8];
+
+/// コントロールの置き方：ウィンドウの大きさに合わせて置き直す（`relayout`）
+#[derive(Clone, Copy)]
+enum Anchor {
+    /// カードの右端から（右端までの距離）
+    CardRight(i32),
+    /// カードの幅いっぱい
+    CardWidth,
+    /// 下端の手前まで伸ばす
+    ListHeight,
+    /// 右下の隅から（右・下までの距離）
+    Corner(i32, i32),
+}
+
+#[derive(Clone, Copy)]
+struct Place {
+    id: i32,
+    anchor: Anchor,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
 }
 
 /// ダイアログの配色（Windows 11 の設定アプリに合わせた、背景・カード・文字・アクセント）
@@ -101,12 +139,105 @@ struct Pal {
     cardb: D2D1_COLOR_F,
     text: D2D1_COLOR_F,
     dim: D2D1_COLOR_F,
-    acc: D2D1_COLOR_F,
     knob: D2D1_COLOR_F,
 }
 
-const PAL_DARK: Pal = Pal { bg: rgb(0x20, 0x20, 0x20), card: rgb(0x2b, 0x2b, 0x2b), cardb: rgb(0x38, 0x38, 0x38), text: rgb(0xf2, 0xf2, 0xf2), dim: rgb(0x9a, 0x9a, 0x9a), acc: rgb(0x60, 0xcd, 0xff), knob: rgb(0x11, 0x11, 0x11) };
-const PAL_LIGHT: Pal = Pal { bg: rgb(0xf3, 0xf3, 0xf3), card: rgb(0xfb, 0xfb, 0xfb), cardb: rgb(0xe5, 0xe5, 0xe5), text: rgb(0x1a, 0x1a, 0x1a), dim: rgb(0x6b, 0x6b, 0x6b), acc: rgb(0x00, 0x67, 0xc0), knob: rgb(0xff, 0xff, 0xff) };
+const PAL_DARK: Pal = Pal { bg: rgb(0x20, 0x20, 0x20), card: rgb(0x2b, 0x2b, 0x2b), cardb: rgb(0x38, 0x38, 0x38), text: rgb(0xf2, 0xf2, 0xf2), dim: rgb(0x9a, 0x9a, 0x9a), knob: rgb(0x11, 0x11, 0x11) };
+const PAL_LIGHT: Pal = Pal { bg: rgb(0xf3, 0xf3, 0xf3), card: rgb(0xfb, 0xfb, 0xfb), cardb: rgb(0xe5, 0xe5, 0xe5), text: rgb(0x1a, 0x1a, 0x1a), dim: rgb(0x6b, 0x6b, 0x6b), knob: rgb(0xff, 0xff, 0xff) };
+
+/// いまのアクセントカラー（設定で選んだ色、なければ Windows の設定の色）
+fn accent_now() -> D2D1_COLOR_F {
+    super::theme::accent(DARK.load(Ordering::Relaxed))
+}
+
+/// 選択肢の各部品の位置（ダイアログ内。DIP）。(x0, y0, x1, y1)
+fn choice_rects(row_y: i32, row_h: i32, card_w: i32, kind: u8, n: usize) -> Vec<(i32, i32, i32, i32)> {
+    let right = PAGE_X + card_w - 16;
+    let top = PAGE_Y + row_y;
+    let (w, h, gap) = if kind == 0 { (78, 32, 0) } else { (28, 28, 10) };
+    let total = n as i32 * w + (n as i32 - 1).max(0) * gap;
+    (0..n as i32).map(|i| (right - total + i * (w + gap), top + (row_h - h) / 2, right - total + i * (w + gap) + w, top + (row_h - h) / 2 + h)).collect()
+}
+
+/// アクセントカラーの見本 i（0 は Windows の設定の色）
+fn swatch_color(i: usize) -> D2D1_COLOR_F {
+    if i == 0 {
+        return super::theme::system_accent();
+    }
+    let c = ACCENTS[(i - 1).min(ACCENTS.len() - 1)];
+    rgb((c >> 16) as u8, (c >> 8) as u8, c as u8)
+}
+
+/// ウィンドウの大きさに合わせて、カードの幅とコントロールの位置を置き直す
+fn relayout(dlg: HWND) {
+    unsafe {
+        let scale = GetDpiForWindow(dlg).max(96) as f32 / 96.0;
+        let mut rc = RECT::default();
+        let _ = GetClientRect(dlg, &mut rc);
+        let (cw, ch) = ((rc.right as f32 / scale) as i32, (rc.bottom as f32 / scale) as i32);
+        let new_w = (cw - PAGE_X - 24).max(440);
+        let (places, rows, ids) = CTRLS.with(|c| {
+            let mut c = c.borrow_mut();
+            let Some(ct) = c.as_mut() else { return (Vec::new(), Vec::new(), Vec::new()) };
+            ct.card_w = new_w;
+            (ct.places.clone(), ct.rows.iter().map(|r| (r.y, r.h, r.toggle, r.choice)).collect::<Vec<_>>(), ct.all.iter().map(|(i, _)| *i).collect::<Vec<_>>())
+        });
+        if ids.is_empty() {
+            return;
+        }
+        let p = |v: i32| (v as f32 * scale).round() as i32;
+        let put = |id: i32, x: i32, y: i32, w: i32, h: i32| {
+            let _ = SetWindowPos(ctl(id), None, p(x), p(y), p(w), p(h), SWP_NOZORDER | SWP_NOACTIVATE);
+        };
+        for pl in places {
+            match pl.anchor {
+                Anchor::CardRight(off) => put(pl.id, PAGE_X + new_w - off, pl.y, pl.w, pl.h),
+                Anchor::CardWidth => put(pl.id, pl.x, pl.y, new_w, pl.h),
+                Anchor::ListHeight => put(pl.id, pl.x, pl.y, pl.w, (ch - pl.y - 14).max(100)),
+                Anchor::Corner(dx, dy) => put(pl.id, cw - dx, ch - dy, pl.w, pl.h),
+            }
+        }
+        for (y, h, toggle, choice) in rows {
+            if let Some(id) = toggle {
+                put(id, PAGE_X + 4, PAGE_Y + y + 4, new_w - 8, h - 8);
+            }
+            if let Some((first, kind, n)) = choice {
+                for (i, (x0, y0, x1, y1)) in choice_rects(y, h, new_w, kind, n).into_iter().enumerate() {
+                    put(first + i as i32, x0, y0, x1 - x0, y1 - y0);
+                }
+            }
+        }
+        let _ = InvalidateRect(Some(dlg), None, true);
+    }
+}
+
+/// インストールされているフォントの名前（日本語名があればそれ）
+fn font_families() -> Vec<String> {
+    unsafe {
+        let Ok(dw) = DWriteCreateFactory::<IDWriteFactory>(DWRITE_FACTORY_TYPE_SHARED) else { return Vec::new() };
+        let mut coll = None;
+        if dw.GetSystemFontCollection(&mut coll, false).is_err() {
+            return Vec::new();
+        }
+        let Some(coll) = coll else { return Vec::new() };
+        let mut out = Vec::new();
+        for i in 0..coll.GetFontFamilyCount() {
+            let Ok(fam) = coll.GetFontFamily(i) else { continue };
+            let Ok(names) = fam.GetFamilyNames() else { continue };
+            let (mut idx, mut exists) = (0u32, BOOL(0));
+            let _ = names.FindLocaleName(w!("ja-jp"), &mut idx, &mut exists);
+            let idx = if exists.as_bool() { idx } else { 0 };
+            let Ok(len) = names.GetStringLength(idx) else { continue };
+            let mut buf = vec![0u16; len as usize + 1];
+            if names.GetString(idx, &mut buf).is_ok() {
+                out.push(String::from_utf16_lossy(&buf[..len as usize]));
+            }
+        }
+        out.sort_by_key(|s| s.to_lowercase());
+        out.dedup();
+        out
+    }
+}
 
 fn pal() -> &'static Pal {
     if DARK.load(Ordering::Relaxed) { &PAL_DARK } else { &PAL_LIGHT }
@@ -120,6 +251,11 @@ const PAGE_X: i32 = 184;
 const PAGE_Y: i32 = 56;
 
 struct Ctrls {
+    /// いまのカードの幅（DIP）
+    card_w: i32,
+    places: Vec<Place>,
+    /// 選択肢のいま選んでいるもの（先頭の ID → 番号）
+    sel: HashMap<i32, usize>,
     rows: Vec<Row>,
     /// スイッチの状態（ID → オン）
     toggles: HashMap<i32, bool>,
@@ -175,7 +311,7 @@ fn flip_checked(id: i32) {
 /// アプリの今の設定を、ダイアログの各部品に写す
 fn sync() {
     let Some(s) = with_app(|app| app.settings.clone()) else { return };
-    set_checked(ID_DARK, s.dark);
+    set_checked(ID_LINENUM, s.line_numbers);
     set_checked(ID_WRAP, s.wrap);
     set_checked(ID_IME, s.ime_inline);
     set_checked(ID_WS, s.whitespace);
@@ -215,6 +351,20 @@ fn sync() {
     if focus != ctl(ID_TAB) {
         set_text(ID_TAB, &s.tab_width.to_string());
     }
+    // 選択肢：テーマの選び方、アクセントカラー
+    let accent_idx = match s.accent {
+        None => Some(0),
+        Some(c) => ACCENTS.iter().position(|a| *a == c).map(|i| i + 1),
+    };
+    CTRLS.with(|c| {
+        if let Some(ct) = c.borrow_mut().as_mut() {
+            ct.sel.insert(ID_THEME_BASE, s.theme_mode.min(2) as usize);
+            match accent_idx {
+                Some(i) => ct.sel.insert(ID_ACCENT_BASE, i),
+                None => ct.sel.remove(&ID_ACCENT_BASE),
+            };
+        }
+    });
     set_theme(s.dark);
     let dlg = HWND(SET_DLG.load(Ordering::Relaxed) as *mut _);
     if !dlg.0.is_null() {
@@ -234,9 +384,11 @@ fn set_theme(dark: bool) {
         return;
     }
     unsafe {
-        let all: Vec<HWND> = CTRLS.with(|c| c.borrow().as_ref().map(|ct| ct.all.iter().map(|(_, h)| *h).collect()).unwrap_or_default());
-        for h in all {
-            let _ = SetWindowTheme(h, if dark { w!("DarkMode_Explorer") } else { PCWSTR::null() }, PCWSTR::null());
+        let all: Vec<(i32, HWND)> = CTRLS.with(|c| c.borrow().as_ref().map(|ct| ct.all.clone()).unwrap_or_default());
+        for (id, h) in all {
+            // フォントの選択（コンボボックス）は、専用のテーマ名
+            let name = if id == ID_FONT || id == ID_UIFONT { w!("DarkMode_CFD") } else { w!("DarkMode_Explorer") };
+            let _ = SetWindowTheme(h, if dark { name } else { PCWSTR::null() }, PCWSTR::null());
         }
         let v = BOOL::from(dark);
         let _ = DwmSetWindowAttribute(dlg, DWMWA_USE_IMMERSIVE_DARK_MODE, &v as *const BOOL as *const _, std::mem::size_of::<BOOL>() as u32);
@@ -322,30 +474,11 @@ fn commit_edits() {
     sync();
 }
 
-/// フォント選択ダイアログ
-unsafe fn pick_font(dlg: HWND, ui: bool) {
-    unsafe {
-        let (id_font, id_size) = if ui { (ID_UIFONT, ID_UISIZE) } else { (ID_FONT, ID_SIZE) };
-        let name = text_of(id_font);
-        let size = text_of(id_size).trim().parse::<f32>().unwrap_or(14.0);
-        let mut lf = LOGFONTW { lfHeight: -(size.round() as i32 * 96 / 72), lfCharSet: windows::Win32::Graphics::Gdi::SHIFTJIS_CHARSET, ..Default::default() };
-        for (i, c) in name.encode_utf16().take(31).enumerate() {
-            lf.lfFaceName[i] = c;
-        }
-        let mut cf = CHOOSEFONTW {
-            lStructSize: std::mem::size_of::<CHOOSEFONTW>() as u32,
-            hwndOwner: dlg,
-            lpLogFont: &mut lf,
-            Flags: CF_SCREENFONTS | CF_INITTOLOGFONTSTRUCT,
-            ..Default::default()
-        };
-        if ChooseFontW(&mut cf).as_bool() {
-            let n = lf.lfFaceName.iter().position(|&c| c == 0).unwrap_or(32);
-            set_text(id_font, &String::from_utf16_lossy(&lf.lfFaceName[..n]));
-            set_text(id_size, &format!("{}", (cf.iPointSize / 10).max(1)));
-            commit_edits();
-        }
-    }
+/// 大きさを `delta` だけ変える（− ＋ ボタン）
+fn step_size(id_size: i32, delta: f32, min: f32, max: f32) {
+    let cur = text_of(id_size).trim().parse::<f32>().unwrap_or(14.0);
+    set_text(id_size, &format!("{}", (cur + delta).clamp(min, max)));
+    commit_edits();
 }
 
 unsafe fn on_command(dlg: HWND, id: i32, code: u32) {
@@ -371,7 +504,25 @@ unsafe fn on_command(dlg: HWND, id: i32, code: u32) {
         if id == IDOK.0 && GetFocus() == ctl(ID_SEARCH) {
             return;
         }
-        if matches!(id, ID_FONT | ID_SIZE | ID_TAB | ID_UIFONT | ID_UISIZE | ID_WHEEL | ID_BKDIR | ID_AUTOMIN) {
+        // フォント名のコンボボックス：一覧から選んだら、その名前にして反映する（「（自動）」は空欄）
+        if matches!(id, ID_FONT | ID_UIFONT) {
+            if code == CBN_SELCHANGE_CODE {
+                let list = ctl(id);
+                let sel = SendMessageW(list, CB_GETCURSEL, None, None).0;
+                if sel >= 0 {
+                    let len = SendMessageW(list, CB_GETLBTEXTLEN, Some(WPARAM(sel as usize)), None).0.max(0) as usize;
+                    let mut buf = vec![0u16; len + 1];
+                    SendMessageW(list, CB_GETLBTEXT, Some(WPARAM(sel as usize)), Some(LPARAM(buf.as_mut_ptr() as isize)));
+                    let name = String::from_utf16_lossy(&buf[..len]);
+                    set_text(id, if name == AUTO_FONT { "" } else { &name });
+                    commit_edits();
+                }
+            } else if code == EN_KILLFOCUS_CODE || code == CBN_KILLFOCUS_CODE {
+                commit_edits();
+            }
+            return;
+        }
+        if matches!(id, ID_SIZE | ID_TAB | ID_UISIZE | ID_WHEEL | ID_BKDIR | ID_AUTOMIN) {
             if code == EN_KILLFOCUS_CODE {
                 commit_edits();
             }
@@ -386,8 +537,26 @@ unsafe fn on_command(dlg: HWND, id: i32, code: u32) {
             return;
         }
         match id {
-            ID_FONT_PICK => return pick_font(dlg, false),
-            ID_UIFONT_PICK => return pick_font(dlg, true),
+            ID_SIZE_DEC => return step_size(ID_SIZE, -1.0, settings::MIN_FONT, settings::MAX_FONT),
+            ID_SIZE_INC => return step_size(ID_SIZE, 1.0, settings::MIN_FONT, settings::MAX_FONT),
+            ID_UISIZE_DEC => return step_size(ID_UISIZE, -1.0, settings::MIN_FONT, 40.0),
+            ID_UISIZE_INC => return step_size(ID_UISIZE, 1.0, settings::MIN_FONT, 40.0),
+            i if (ID_THEME_BASE..ID_THEME_BASE + 3).contains(&i) => {
+                with_app(|app| app.set_theme_mode((i - ID_THEME_BASE) as u8));
+            }
+            i if (ID_ACCENT_BASE..ID_ACCENT_BASE + 1 + ACCENTS.len() as i32).contains(&i) => {
+                let n = (i - ID_ACCENT_BASE) as usize;
+                with_app(|app| app.set_accent(if n == 0 { None } else { Some(ACCENTS[n - 1]) }));
+            }
+            ID_LINENUM => {
+                let on = is_checked(ID_LINENUM);
+                with_app(|app| {
+                    app.settings.line_numbers = on;
+                    app.settings.save();
+                    app.layout_cache.borrow_mut().clear();
+                    app.invalidate();
+                });
+            }
             ID_TRAY => {
                 let on = is_checked(ID_TRAY);
                 with_app(|app| app.set_tray(on));
@@ -477,7 +646,7 @@ unsafe fn create(owner: HWND) {
             WINDOW_EX_STYLE(0),
             CLASS,
             w!("設定"),
-            WS_POPUP | WS_CAPTION | WS_SYSMENU,
+            WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MAXIMIZEBOX,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
             480,
@@ -491,6 +660,13 @@ unsafe fn create(owner: HWND) {
         };
         let dpi = GetDpiForWindow(dlg).max(96);
         let scale = dpi as f32 / 96.0;
+        // タイトルバーに、アプリのアイコン
+        for (kind, metric) in [(ICON_SMALL, SM_CXSMICON), (ICON_BIG, SM_CXICON)] {
+            let size = GetSystemMetricsForDpi(metric, dpi);
+            if let Ok(icon) = LoadImageW(Some(instance.into()), PCWSTR(std::ptr::without_provenance::<u16>(1)), IMAGE_ICON, size, size, LR_DEFAULTCOLOR) {
+                SendMessageW(dlg, WM_SETICON, Some(WPARAM(kind as usize)), Some(LPARAM(icon.0 as isize)));
+            }
+        }
         let mut ncm = NONCLIENTMETRICSW { cbSize: std::mem::size_of::<NONCLIENTMETRICSW>() as u32, ..Default::default() };
         let font = if SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS.0, ncm.cbSize, Some(&mut ncm as *mut _ as *mut _), 0, dpi).is_ok() {
             CreateFontIndirectW(&ncm.lfMessageFont)
@@ -499,9 +675,11 @@ unsafe fn create(owner: HWND) {
         };
         let push = BS_PUSHBUTTON as u32 | WS_TABSTOP.0;
         let edit = ES_AUTOHSCROLL as u32 | WS_TABSTOP.0;
+        let combo = (CBS_DROPDOWN as u32) | (CBS_AUTOHSCROLL as u32) | WS_VSCROLL.0 | WS_TABSTOP.0;
         let mut all: Vec<(i32, HWND)> = Vec::new();
         let mut pages: Vec<(i32, usize, String)> = Vec::new();
         let mut rows: Vec<Row> = Vec::new();
+        let mut places: Vec<Place> = Vec::new();
         let p = |v: i32| (v as f32 * scale).round() as i32;
         // page: 分類の番号（usize::MAX は、どの分類でも出す部品）。x, y はダイアログの左上から
         let mut put = |page: usize, id: i32, class: PCWSTR, text: &str, style: u32, ex: u32, x: i32, y: i32, w: i32, h: i32| {
@@ -513,67 +691,114 @@ unsafe fn create(owner: HWND) {
             }
         };
         const ALL: usize = usize::MAX;
+        // ページごとの、次の行の上端（ページの上端からの位置。DIP）
+        let mut cur = [0i32; 9];
         // 1 行（カード）を足す。戻り値は、その行の上端（ダイアログ内の座標）。検索用に、題と説明も覚える
-        let card = |rows: &mut Vec<Row>, page: usize, idx: i32, title: &'static str, desc: &'static str, toggle: Option<i32>| -> i32 {
-            let y = idx * (ROW_H + ROW_GAP);
-            rows.push(Row { page, y, title, desc, toggle, h: ROW_H, preview: false });
+        let card = |rows: &mut Vec<Row>, cur: &mut [i32; 9], page: usize, title: &'static str, desc: &'static str, toggle: Option<i32>, choice: Option<(i32, u8, usize)>| -> i32 {
+            let y = cur[page];
+            rows.push(Row { page, y, title, desc, toggle, h: ROW_H, preview: false, heading: false, choice });
+            cur[page] += ROW_H + ROW_GAP;
             PAGE_Y + y
+        };
+        // 小見出し
+        let heading = |rows: &mut Vec<Row>, cur: &mut [i32; 9], page: usize, title: &'static str| {
+            let y = cur[page];
+            rows.push(Row { page, y, title, desc: "", toggle: None, h: 26, preview: false, heading: true, choice: None });
+            cur[page] += 32;
         };
         // 入力欄の縦の位置（カードの中で縦中央）
         let mid = |top: i32, h: i32| top + (ROW_H - h) / 2;
         let right = PAGE_X + CARD_W - 16;
+        // カードの右端までの距離（右に寄せる部品の置き方）
+        let cr = |x: i32| Anchor::CardRight(PAGE_X + CARD_W - x);
         let flat = WS_BORDER.0;
         put(ALL, ID_SEARCH, w!("EDIT"), "", edit | flat, 0, 12, 14, 156, 26);
         put(ALL, ID_CATS, w!("LISTBOX"), "", (LBS_NOTIFY as u32) | (LBS_OWNERDRAWFIXED as u32) | (LBS_HASSTRINGS as u32) | WS_TABSTOP.0, 0, 12, 52, 164, 420);
+        places.push(Place { id: ID_CATS, anchor: Anchor::ListHeight, x: 12, y: 52, w: 164, h: 420 });
         put(ALL, ID_TITLE, w!("STATIC"), "", 0, 0, PAGE_X, 12, 480, 34);
         // 基本
-        card(&mut rows, 0, 0, "長い行を折り返して表示", "画面の幅で折り返す（文字単位）", Some(ID_WRAP));
-        card(&mut rows, 0, 1, "IME の変換中の文字をエディタ内に表示", "オフなら IME 標準の窓", Some(ID_IME));
-        let y = card(&mut rows, 0, 2, "タブの幅", "半角の文字数", None);
+        card(&mut rows, &mut cur, 0, "長い行を折り返して表示", "画面の幅で折り返す（文字単位）", Some(ID_WRAP), None);
+        card(&mut rows, &mut cur, 0, "IME の変換中の文字をエディタ内に表示", "オフなら IME 標準の窓", Some(ID_IME), None);
+        card(&mut rows, &mut cur, 0, "行番号", "本文の左の行番号の欄を出す", Some(ID_LINENUM), None);
+        let y = card(&mut rows, &mut cur, 0, "タブの幅", "半角の文字数", None, None);
         put(0, ID_TAB, w!("EDIT"), "", edit | ES_NUMBER as u32 | flat, 0, right - 60, mid(y, 26), 60, 26);
+        places.push(Place { id: ID_TAB, anchor: cr(right - 60), x: right - 60, y: mid(y, 26), w: 60, h: 26 });
         // スクロール
-        let y = card(&mut rows, 1, 0, "マウスホイール", "1 回で動かす行数", None);
+        let y = card(&mut rows, &mut cur, 1, "マウスホイール", "1 回で動かす行数", None, None);
         put(1, ID_WHEEL, w!("EDIT"), "", edit | ES_NUMBER as u32 | flat, 0, right - 60, mid(y, 26), 60, 26);
+        places.push(Place { id: ID_WHEEL, anchor: cr(right - 60), x: right - 60, y: mid(y, 26), w: 60, h: 26 });
         // 外観
-        card(&mut rows, 2, 0, "ダークテーマ", "タイトルバー・スクロールバー・メニューも暗くなる", Some(ID_DARK));
-        let y = card(&mut rows, 2, 1, "本文のフォント", "空欄で自動。右は大きさ (pt)", None);
-        put(2, ID_FONT, w!("EDIT"), "", edit | flat, 0, right - 60 - 8 - 72 - 8 - 150, mid(y, 26), 150, 26);
-        put(2, ID_FONT_PICK, w!("BUTTON"), "選択...", push, 0, right - 60 - 8 - 72, mid(y, 28), 72, 28);
-        put(2, ID_SIZE, w!("EDIT"), "", edit | ES_NUMBER as u32 | flat, 0, right - 60, mid(y, 26), 60, 26);
-        let y = card(&mut rows, 2, 2, "画面のフォント", "メニュー・タブなど。空欄で自動", None);
-        put(2, ID_UIFONT, w!("EDIT"), "", edit | flat, 0, right - 60 - 8 - 72 - 8 - 150, mid(y, 26), 150, 26);
-        put(2, ID_UIFONT_PICK, w!("BUTTON"), "選択...", push, 0, right - 60 - 8 - 72, mid(y, 28), 72, 28);
-        put(2, ID_UISIZE, w!("EDIT"), "", edit | ES_NUMBER as u32 | flat, 0, right - 60, mid(y, 26), 60, 26);
+        heading(&mut rows, &mut cur, 2, "テーマ");
+        card(&mut rows, &mut cur, 2, "アプリのテーマ", "Windows の設定に合わせる、または固定する", None, Some((ID_THEME_BASE, 0, 3)));
+        card(&mut rows, &mut cur, 2, "アクセントカラー", "選択・ボタン・フォーカスに使う色。左端は Windows の設定の色", None, Some((ID_ACCENT_BASE, 1, 1 + ACCENTS.len())));
+        heading(&mut rows, &mut cur, 2, "フォント");
+        // フォント名の欄（一覧から選ぶか、書く）と、大きさの − [数] ＋
+        for (title, desc, id_font, id_dec, id_size, id_inc) in [("本文のフォント", "空欄で自動。等幅のフォントがおすすめ", ID_FONT, ID_SIZE_DEC, ID_SIZE, ID_SIZE_INC), ("画面のフォント", "メニュー・タブなど。空欄で自動", ID_UIFONT, ID_UISIZE_DEC, ID_UISIZE, ID_UISIZE_INC)] {
+            let y = card(&mut rows, &mut cur, 2, title, desc, None, None);
+            let (xi, xs, xd, xf) = (right - 28, right - 28 - 4 - 48, right - 28 - 4 - 48 - 4 - 28, right - 28 - 4 - 48 - 4 - 28 - 8 - 190);
+            put(2, id_inc, w!("BUTTON"), "＋", push, 0, xi, mid(y, 28), 28, 28);
+            put(2, id_size, w!("EDIT"), "", edit | ES_NUMBER as u32 | ES_CENTER as u32 | flat, 0, xs, mid(y, 26), 48, 26);
+            put(2, id_dec, w!("BUTTON"), "－", push, 0, xd, mid(y, 28), 28, 28);
+            put(2, id_font, w!("COMBOBOX"), "", combo, 0, xf, mid(y, 26), 190, 320);
+            places.push(Place { id: id_inc, anchor: cr(xi), x: xi, y: mid(y, 28), w: 28, h: 28 });
+            places.push(Place { id: id_size, anchor: cr(xs), x: xs, y: mid(y, 26), w: 48, h: 26 });
+            places.push(Place { id: id_dec, anchor: cr(xd), x: xd, y: mid(y, 28), w: 28, h: 28 });
+            places.push(Place { id: id_font, anchor: cr(xf), x: xf, y: mid(y, 26), w: 190, h: 320 });
+        }
         // フォントの見え方（設定を変えると、すぐ変わる）
-        rows.push(Row { page: 2, y: 3 * (ROW_H + ROW_GAP), title: "プレビュー", desc: "", toggle: None, h: 92, preview: true });
+        let py = cur[2];
+        rows.push(Row { page: 2, y: py, title: "プレビュー", desc: "", toggle: None, h: 92, preview: true, heading: false, choice: None });
+        cur[2] += 98;
         // 表示
-        card(&mut rows, 3, 0, "空白・タブ・改行を表示", "印で見えるようにする（Ctrl+Shift+W）", Some(ID_WS));
-        card(&mut rows, 3, 1, "ログの色分け", "ERROR / WARN などに色を付ける", Some(ID_LOG));
-        card(&mut rows, 3, 2, "構文の色分け", "JSON・SQL・XML など", Some(ID_SYN));
-        card(&mut rows, 3, 3, "ツールバー", "画面の上のボタンの行", Some(ID_TOOLBAR));
-        card(&mut rows, 3, 4, "モードバー", "CSV・Markdown のときの操作の行", Some(ID_MODEBAR));
-        card(&mut rows, 3, 5, "機能ボタンの列", "ステータスバーの上の「検索 Ctrl+F …」", Some(ID_FKEYS));
-        card(&mut rows, 3, 6, "通知領域のアイコン", "クリックで新規作成・開くなど", Some(ID_TRAY));
+        heading(&mut rows, &mut cur, 3, "本文");
+        card(&mut rows, &mut cur, 3, "空白・タブ・改行を表示", "印で見えるようにする（Ctrl+Shift+W）", Some(ID_WS), None);
+        card(&mut rows, &mut cur, 3, "ログの色分け", "ERROR / WARN などに色を付ける", Some(ID_LOG), None);
+        card(&mut rows, &mut cur, 3, "構文の色分け", "JSON・SQL・XML など", Some(ID_SYN), None);
+        heading(&mut rows, &mut cur, 3, "画面の部品");
+        card(&mut rows, &mut cur, 3, "ツールバー", "画面の上のボタンの行", Some(ID_TOOLBAR), None);
+        card(&mut rows, &mut cur, 3, "モードバー", "CSV・Markdown のときの操作の行", Some(ID_MODEBAR), None);
+        card(&mut rows, &mut cur, 3, "機能ボタンの列", "ステータスバーの上の「検索 Ctrl+F …」", Some(ID_FKEYS), None);
+        card(&mut rows, &mut cur, 3, "通知領域のアイコン", "クリックで新規作成・開くなど", Some(ID_TRAY), None);
         // 検索・GREP
-        card(&mut rows, 4, 0, "GREP 置換の前にバックアップ", ".bak を作る", Some(ID_BACKUP));
+        card(&mut rows, &mut cur, 4, "GREP 置換の前にバックアップ", ".bak を作る", Some(ID_BACKUP), None);
         // バックアップ
-        card(&mut rows, 5, 0, "上書き保存の前にバックアップ", "元のファイルを残す", Some(ID_BKSAVE));
-        let y = card(&mut rows, 5, 1, "バックアップを置くフォルダ", "空欄で、元のファイルと同じ", None);
+        card(&mut rows, &mut cur, 5, "上書き保存の前にバックアップ", "元のファイルを残す", Some(ID_BKSAVE), None);
+        let y = card(&mut rows, &mut cur, 5, "バックアップを置くフォルダ", "空欄で、元のファイルと同じ", None, None);
         put(5, ID_BKDIR, w!("EDIT"), "", edit | flat, 0, right - 80 - 8 - 190, mid(y, 26), 190, 26);
         put(5, ID_BKDIR_PICK, w!("BUTTON"), "参照...", push, 0, right - 80, mid(y, 28), 80, 28);
-        card(&mut rows, 5, 2, "古いバックアップを残す", ".bak2、.bak3 … と番号を増やす（オフなら .bak を上書き）", Some(ID_BKNUM));
-        put(5, 41, w!("STATIC"), "バックアップは、名前を付けて保存・変換して保存を含む、既存のファイルを書き換える保存の直前に作ります。", 0, 0, PAGE_X, PAGE_Y + 3 * (ROW_H + ROW_GAP) + 4, CARD_W, 40);
+        places.push(Place { id: ID_BKDIR, anchor: cr(right - 80 - 8 - 190), x: right - 80 - 8 - 190, y: mid(y, 26), w: 190, h: 26 });
+        places.push(Place { id: ID_BKDIR_PICK, anchor: cr(right - 80), x: right - 80, y: mid(y, 28), w: 80, h: 28 });
+        card(&mut rows, &mut cur, 5, "古いバックアップを残す", ".bak2、.bak3 … と番号を増やす（オフなら .bak を上書き）", Some(ID_BKNUM), None);
+        put(5, 41, w!("STATIC"), "バックアップは、名前を付けて保存・変換して保存を含む、既存のファイルを書き換える保存の直前に作ります。", 0, 0, PAGE_X, PAGE_Y + cur[5] + 4, CARD_W, 40);
+        places.push(Place { id: 41, anchor: Anchor::CardWidth, x: PAGE_X, y: PAGE_Y + cur[5] + 4, w: CARD_W, h: 40 });
         // 自動保存
-        let y = card(&mut rows, 6, 0, "自動保存の間隔", "分。0 で自動保存しない", None);
+        let y = card(&mut rows, &mut cur, 6, "自動保存の間隔", "分。0 で自動保存しない", None, None);
         put(6, ID_AUTOMIN, w!("EDIT"), "", edit | ES_NUMBER as u32 | flat, 0, right - 60, mid(y, 26), 60, 26);
-        put(6, 43, w!("STATIC"), "未保存の編集を、『名前.autosave』に書き出します（元のファイルは書き換えません）。保存するか、通常どおり閉じると消え、異常終了したときだけ残ります。バックアップのフォルダを指定していれば、そこに書き出します。", 0, 0, PAGE_X, PAGE_Y + (ROW_H + ROW_GAP) + 4, CARD_W, 80);
+        places.push(Place { id: ID_AUTOMIN, anchor: cr(right - 60), x: right - 60, y: mid(y, 26), w: 60, h: 26 });
+        put(6, 43, w!("STATIC"), "未保存の編集を、『名前.autosave』に書き出します（元のファイルは書き換えません）。保存するか、通常どおり閉じると消え、異常終了したときだけ残ります。バックアップのフォルダを指定していれば、そこに書き出します。", 0, 0, PAGE_X, PAGE_Y + cur[6] + 4, CARD_W, 80);
+        places.push(Place { id: 43, anchor: Anchor::CardWidth, x: PAGE_X, y: PAGE_Y + cur[6] + 4, w: CARD_W, h: 80 });
         // Markdown
-        card(&mut rows, 7, 0, "開いたときにプレビューを並べる", "Markdown ファイル（.md）を開いたとき、右に並べる", Some(ID_MDAUTO));
-        put(7, 16, w!("STATIC"), "プレビューは、表示メニューやモードバーのボタン（Ctrl+Shift+V：右に並べる、Ctrl+Shift+G：デザインビュー）でも切り替えられます。", 0, 0, PAGE_X, PAGE_Y + (ROW_H + ROW_GAP) + 4, CARD_W, 40);
+        card(&mut rows, &mut cur, 7, "開いたときにプレビューを並べる", "Markdown ファイル（.md）を開いたとき、右に並べる", Some(ID_MDAUTO), None);
+        put(7, 16, w!("STATIC"), "プレビューは、表示メニューやモードバーのボタン（Ctrl+Shift+V：右に並べる、Ctrl+Shift+G：デザインビュー）でも切り替えられます。", 0, 0, PAGE_X, PAGE_Y + cur[7] + 4, CARD_W, 40);
+        places.push(Place { id: 16, anchor: Anchor::CardWidth, x: PAGE_X, y: PAGE_Y + cur[7] + 4, w: CARD_W, h: 40 });
         // キーボード
-        let y = card(&mut rows, 8, 0, "キー割り当て", "コマンドごとのキーを、一覧から選んで変える", None);
+        let y = card(&mut rows, &mut cur, 8, "キー割り当て", "コマンドごとのキーを、一覧から選んで変える", None, None);
         put(8, ID_KEYS, w!("BUTTON"), "変更...", push, 0, right - 90, mid(y, 28), 90, 28);
+        places.push(Place { id: ID_KEYS, anchor: cr(right - 90), x: right - 90, y: mid(y, 28), w: 90, h: 28 });
         put(ALL, ID_CLOSE, w!("BUTTON"), "閉じる", BS_DEFPUSHBUTTON as u32 | WS_TABSTOP.0, 0, 620, 520, 90, 30);
+        places.push(Place { id: ID_CLOSE, anchor: Anchor::Corner(100, 46), x: 620, y: 520, w: 90, h: 30 });
+        // フォント名の一覧（先頭は「（自動）」）
+        let fonts = font_families();
+        for id_font in [ID_FONT, ID_UIFONT] {
+            if let Some(&(_, h)) = all.iter().find(|(i, _)| *i == id_font) {
+                let auto = wide(AUTO_FONT);
+                SendMessageW(h, CB_ADDSTRING, None, Some(LPARAM(auto.as_ptr() as isize)));
+                for name in &fonts {
+                    let w = wide(name);
+                    SendMessageW(h, CB_ADDSTRING, None, Some(LPARAM(w.as_ptr() as isize)));
+                }
+            }
+        }
         // 本文より大きな見出しのフォント
         let mut big = font_lf(font);
         big.lfHeight = (big.lfHeight as f32 * 2.0) as i32;
@@ -586,14 +811,23 @@ unsafe fn create(owner: HWND) {
         if let Some(&(_, h)) = all.iter().find(|(i, _)| *i == ID_TITLE) {
             SendMessageW(h, WM_SETFONT, Some(WPARAM(big_font.0 as usize)), Some(LPARAM(1)));
         }
-        // スイッチの行ごとに、カードの上に透明なボタンを重ねる（Tab で止まり、Space で切り替わる。クリックもこのボタンが受ける）
+        // スイッチの行・選択肢ごとに、カードの上に透明なボタンを重ねる（Tab で止まり、Space で押せる。クリックもこのボタンが受ける）
         for r in &rows {
             if let Some(id) = r.toggle {
                 let hw = make_child(dlg, w!("BUTTON"), "", BS_OWNERDRAW as u32 | WS_TABSTOP.0, 0, id, font);
                 let (x, y) = (PAGE_X + 4, PAGE_Y + r.y + 4);
-                let _ = SetWindowPos(hw, None, p(x), p(y), p(CARD_W - 8), p(ROW_H - 8), SWP_NOZORDER | SWP_NOACTIVATE);
+                let _ = SetWindowPos(hw, None, p(x), p(y), p(CARD_W - 8), p(r.h - 8), SWP_NOZORDER | SWP_NOACTIVATE);
                 all.push((id, hw));
                 pages.push((id, r.page, String::new()));
+            }
+            if let Some((first, kind, n)) = r.choice {
+                for (i, (x0, y0, x1, y1)) in choice_rects(r.y, r.h, CARD_W, kind, n).into_iter().enumerate() {
+                    let id = first + i as i32;
+                    let hw = make_child(dlg, w!("BUTTON"), "", BS_OWNERDRAW as u32 | WS_TABSTOP.0, 0, id, font);
+                    let _ = SetWindowPos(hw, None, p(x0), p(y0), p(x1 - x0), p(y1 - y0), SWP_NOZORDER | SWP_NOACTIVATE);
+                    all.push((id, hw));
+                    pages.push((id, r.page, String::new()));
+                }
             }
         }
         // 検索欄の薄い案内文
@@ -611,7 +845,7 @@ unsafe fn create(owner: HWND) {
             BG_BRUSH[i].store(CreateSolidBrush(rgb_ref(&pal.bg)).0 as isize, Ordering::Relaxed);
             EDIT_BRUSH[i].store(CreateSolidBrush(rgb_ref(&edit_bg)).0 as isize, Ordering::Relaxed);
         }
-        CTRLS.with(|c| *c.borrow_mut() = Some(Ctrls { rows, toggles: HashMap::new(), all, pages, visible: Vec::new(), cur: 0 }));
+        CTRLS.with(|c| *c.borrow_mut() = Some(Ctrls { card_w: CARD_W, places, sel: HashMap::new(), rows, toggles: HashMap::new(), all, pages, visible: Vec::new(), cur: 0 }));
         fill_cats("");
         SET_DLG.store(dlg.0 as isize, Ordering::Relaxed);
         SendMessageW(ctl(ID_CATS), LB_SETITEMHEIGHT, Some(WPARAM(0)), Some(LPARAM(p(40) as isize)));
@@ -703,7 +937,7 @@ unsafe fn draw_cat_item(di: &DRAWITEMSTRUCT) {
             SelectObject(hdc, ob);
             SelectObject(hdc, op);
             let _ = DeleteObject(sel.into());
-            let acc = CreateSolidBrush(rgb_ref(&p.acc));
+            let acc = CreateSolidBrush(rgb_ref(&accent_now()));
             let bar = RECT { left: rc.left + px(2.0), top: rc.top + px(11.0), right: rc.left + px(5.0), bottom: rc.bottom - px(11.0) };
             FillRect(hdc, &bar, acc);
             let _ = DeleteObject(acc.into());
@@ -717,7 +951,8 @@ unsafe fn draw_cat_item(di: &DRAWITEMSTRUCT) {
         let lf = LOGFONTW { lfHeight: -px(16.0), lfCharSet: windows::Win32::Graphics::Gdi::DEFAULT_CHARSET, lfFaceName: name, ..Default::default() };
         let icon_font = CreateFontIndirectW(&lf);
         let old = SelectObject(hdc, icon_font.into());
-        SetTextColor(hdc, rgb_ref(if selected { &p.acc } else { &p.dim }));
+        let acc = accent_now();
+        SetTextColor(hdc, rgb_ref(if selected { &acc } else { &p.dim }));
         let mut g: Vec<u16> = ICONS[cat.min(8)].encode_utf16().collect();
         let mut r = RECT { left: rc.left + px(16.0), top: rc.top, right: rc.left + px(36.0), bottom: rc.bottom };
         DrawTextW(hdc, &mut g, &mut r, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
@@ -744,11 +979,12 @@ unsafe fn paint_bg(hwnd: HWND, hdc: HDC) {
         let mut rc = RECT::default();
         let _ = GetClientRect(hwnd, &mut rc);
         let pal = pal();
-        let (rows, toggles) = CTRLS.with(|c| {
-            c.borrow().as_ref().map_or((Vec::new(), HashMap::new()), |ct| {
-                (ct.rows.iter().filter(|r| r.page == ct.cur).map(|r| (r.y, r.title, r.desc, r.toggle, r.h, r.preview)).collect::<Vec<_>>(), ct.toggles.clone())
+        let (rows, toggles, card_w, sel) = CTRLS.with(|c| {
+            c.borrow().as_ref().map_or((Vec::new(), HashMap::new(), CARD_W, HashMap::new()), |ct| {
+                (ct.rows.iter().filter(|r| r.page == ct.cur).map(|r| (r.y, r.title, r.desc, r.toggle, r.h, r.preview, r.heading, r.choice)).collect::<Vec<_>>(), ct.toggles.clone(), ct.card_w, ct.sel.clone())
             })
         });
+        let acc = accent_now();
         let factory = FACTORY.with(|f| {
             let mut f = f.borrow_mut();
             if f.is_none() {
@@ -771,9 +1007,12 @@ unsafe fn paint_bg(hwnd: HWND, hdc: HDC) {
                     rt.BeginDraw();
                     rt.Clear(Some(&pal.bg));
                     if let Ok(brush) = rt.CreateSolidColorBrush(&pal.card, None) {
-                        for &(y, _, _, toggle, rh, _) in &rows {
+                        for &(y, _, _, toggle, rh, _, heading, choice) in &rows {
+                            if heading {
+                                continue;
+                            }
                             let (x0, y0) = (px(PAGE_X), px(PAGE_Y + y));
-                            let (x1, y1) = (x0 + px(CARD_W), y0 + px(rh));
+                            let (x1, y1) = (x0 + px(card_w), y0 + px(rh));
                             brush.SetColor(&pal.cardb);
                             rt.FillRoundedRectangle(&rrect(x0, y0, x1, y1, px(8)), &brush);
                             brush.SetColor(&pal.card);
@@ -784,7 +1023,7 @@ unsafe fn paint_bg(hwnd: HWND, hdc: HDC) {
                                 let (tx1, ty0) = (x1 - px(16), (y0 + y1) / 2.0 - th / 2.0);
                                 let tx0 = tx1 - tw;
                                 if on {
-                                    brush.SetColor(&pal.acc);
+                                    brush.SetColor(&acc);
                                     rt.FillRoundedRectangle(&rrect(tx0, ty0, tx1, ty0 + th, th / 2.0), &brush);
                                 } else {
                                     brush.SetColor(&pal.dim);
@@ -794,6 +1033,36 @@ unsafe fn paint_bg(hwnd: HWND, hdc: HDC) {
                                 let kx = if on { tx1 - px(10) - 1.0 } else { tx0 + px(10) + 1.0 };
                                 brush.SetColor(if on { &pal.knob } else { &pal.dim });
                                 rt.FillEllipse(&D2D1_ELLIPSE { point: Vector2 { X: kx, Y: ty0 + th / 2.0 }, radiusX: r, radiusY: r }, &brush);
+                            }
+                            // 選択肢：切り替え（システム・ライト・ダーク）と、色の見本
+                            if let Some((first, kind, n)) = choice {
+                                let selected = sel.get(&first).copied();
+                                let rects = choice_rects(y, rh, card_w, kind, n);
+                                if kind == 0 {
+                                    if let (Some(a), Some(b)) = (rects.first(), rects.last()) {
+                                        brush.SetColor(&pal.dim);
+                                        rt.DrawRoundedRectangle(&rrect(px(a.0) + 0.5, px(a.1) + 0.5, px(b.2) - 0.5, px(b.3) - 0.5, px(6)), &brush, 1.0, None);
+                                    }
+                                }
+                                for (i, &(a0, a1, a2, a3)) in rects.iter().enumerate() {
+                                    let on = selected == Some(i);
+                                    if kind == 0 {
+                                        if on {
+                                            brush.SetColor(&D2D1_COLOR_F { a: 0.28, ..acc });
+                                            rt.FillRoundedRectangle(&rrect(px(a0) + 2.0, px(a1) + 2.0, px(a2) - 2.0, px(a3) - 2.0, px(5)), &brush);
+                                            brush.SetColor(&acc);
+                                            rt.DrawRoundedRectangle(&rrect(px(a0) + 2.5, px(a1) + 2.5, px(a2) - 2.5, px(a3) - 2.5, px(5)), &brush, 1.0, None);
+                                        }
+                                    } else {
+                                        let (cx, cy, r) = ((px(a0) + px(a2)) / 2.0, (px(a1) + px(a3)) / 2.0, px(11));
+                                        brush.SetColor(&swatch_color(i));
+                                        rt.FillEllipse(&D2D1_ELLIPSE { point: Vector2 { X: cx, Y: cy }, radiusX: r, radiusY: r }, &brush);
+                                        if on {
+                                            brush.SetColor(&pal.text);
+                                            rt.DrawEllipse(&D2D1_ELLIPSE { point: Vector2 { X: cx, Y: cy }, radiusX: r + px(3), radiusY: r + px(3) }, &brush, 1.5, None);
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -813,7 +1082,23 @@ unsafe fn paint_bg(hwnd: HWND, hdc: HDC) {
             let _ = GetTextMetricsW(hdc, &mut tm);
             tm.tmHeight.max(12)
         };
-        for &(y, title, desc, toggle, rh, preview) in &rows {
+        for &(y, title, desc, toggle, rh, preview, heading, choice) in &rows {
+            if heading {
+                SetTextColor(hdc, rgb_ref(&pal.dim));
+                let mut t: Vec<u16> = title.encode_utf16().collect();
+                let mut r = RECT { left: px(PAGE_X + 4) as i32, top: px(PAGE_Y + y) as i32 + px(4) as i32, right: px(PAGE_X + card_w) as i32, bottom: px(PAGE_Y + y + 26) as i32 };
+                DrawTextW(hdc, &mut t, &mut r, DT_LEFT | DT_SINGLELINE | DT_NOPREFIX);
+                continue;
+            }
+            if let Some((_, 0, n)) = choice {
+                // 切り替えの文字
+                for (i, (a0, a1, a2, a3)) in choice_rects(y, rh, card_w, 0, n).into_iter().enumerate() {
+                    SetTextColor(hdc, rgb_ref(&pal.text));
+                    let mut t: Vec<u16> = ["システム", "ライト", "ダーク"][i.min(2)].encode_utf16().collect();
+                    let mut r = RECT { left: px(a0) as i32, top: px(a1) as i32, right: px(a2) as i32, bottom: px(a3) as i32 };
+                    DrawTextW(hdc, &mut t, &mut r, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+                }
+            }
             if preview {
                 draw_preview(hdc, px(PAGE_X + 16) as i32, px(PAGE_Y + y) as i32, px(rh) as i32, scale, pal);
                 continue;
@@ -822,7 +1107,7 @@ unsafe fn paint_bg(hwnd: HWND, hdc: HDC) {
             let y0 = px(PAGE_Y + y) as i32;
             let (ty, dy) = if desc.is_empty() { (y0 + (px(ROW_H) as i32 - lh) / 2, 0) } else { (y0 + px(10) as i32, y0 + px(10) as i32 + lh + px(2) as i32) };
             // スイッチの行はスイッチの手前まで、入力欄のある行は入力欄の手前まで
-            let limit = if toggle.is_some() { px(PAGE_X + CARD_W - 76) as i32 } else { x0 + px(CARD_W - 32 - 300) as i32 };
+            let limit = if toggle.is_some() { px(PAGE_X + card_w - 76) as i32 } else { x0 + px(card_w - 32 - 330) as i32 };
             SetTextColor(hdc, rgb_ref(&pal.text));
             let mut t: Vec<u16> = title.encode_utf16().collect();
             let mut r = RECT { left: x0, top: ty, right: limit.max(x0 + 40), bottom: ty + lh };
@@ -848,6 +1133,21 @@ unsafe extern "system" fn dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                     flip_checked(id);
                 }
                 on_command(hwnd, id, code);
+                LRESULT(0)
+            }
+            WM_SIZE => {
+                relayout(hwnd);
+                LRESULT(0)
+            }
+            WM_GETMINMAXINFO => {
+                // 小さくしすぎて、カードが崩れないように
+                let mmi = &mut *(lparam.0 as *mut MINMAXINFO);
+                let dpi = GetDpiForWindow(hwnd).max(96);
+                let scale = dpi as f32 / 96.0;
+                let style = WINDOW_STYLE(GetWindowLongW(hwnd, GWL_STYLE) as u32);
+                let mut rc = RECT { left: 0, top: 0, right: (640.0 * scale) as i32, bottom: (460.0 * scale) as i32 };
+                let _ = AdjustWindowRectExForDpi(&mut rc, style, false, WINDOW_EX_STYLE(0), dpi);
+                mmi.ptMinTrackSize = POINT { x: rc.right - rc.left, y: rc.bottom - rc.top };
                 LRESULT(0)
             }
             WM_CLOSE => {
@@ -878,7 +1178,8 @@ unsafe extern "system" fn dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                 }
                 let p = pal();
                 let focused = di.itemState.0 & ODS_FOCUS.0 != 0;
-                let brush = CreateSolidBrush(rgb_ref(if focused { &p.acc } else { &p.card }));
+                let acc = accent_now();
+                let brush = CreateSolidBrush(rgb_ref(if focused { &acc } else { &p.card }));
                 FrameRect(di.hDC, &di.rcItem, brush);
                 let _ = DeleteObject(brush.into());
                 LRESULT(1)
