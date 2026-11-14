@@ -157,6 +157,11 @@ impl App {
     }
 
     fn mode_checked(&self, id: u32) -> bool {
+        match id {
+            menu::ID_MD_SPLIT => return self.md_mode() == Some(mdview::MdMode::Split),
+            menu::ID_MD_DESIGN => return self.md_mode() == Some(mdview::MdMode::Design),
+            _ => {}
+        }
         let Some(v) = self.csv.as_ref() else { return false };
         match id {
             menu::ID_CSV => true,
