@@ -110,6 +110,8 @@ pub(super) unsafe fn run_inner() -> std::result::Result<(), (&'static str, windo
             x_off: 0.0,
             prompt: None,
             input: String::new(),
+            input2: String::new(),
+            prompt_focus: 0,
             last_find: String::new(),
             last_filter: String::new(),
             history: crate::history::History::load(),

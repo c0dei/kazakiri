@@ -150,7 +150,7 @@ impl App {
     pub(super) fn find_all(&mut self) {
         let Some(doc) = self.doc.clone() else { return };
         if self.last_find.is_empty() {
-            self.want_dialog = Some(0);
+            self.start_find_bar(false);
             return;
         }
         let query = match Query::new(&doc, &self.last_find, self.opts) {

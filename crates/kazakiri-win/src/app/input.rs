@@ -34,7 +34,8 @@ impl App {
         }
         // キー割り当て（keys.ini）。入力欄が開いているときはタブの切り替えだけ効く
         if let Some(id) = self.keymap.lookup(ctrl, shift, vk.0) {
-            if self.prompt.is_none() || matches!(id, menu::ID_NEXT_TAB | menu::ID_PREV_TAB) {
+            let bar_ok = self.is_find_bar() && matches!(id, menu::ID_FIND_NEXT | menu::ID_FIND_PREV | menu::ID_FIND | menu::ID_REPLACE);
+            if self.prompt.is_none() || bar_ok || matches!(id, menu::ID_NEXT_TAB | menu::ID_PREV_TAB) {
                 return unsafe { self.command(id) };
             }
         }
@@ -42,17 +43,35 @@ impl App {
             match vk {
                 VK_ESCAPE => {
                     self.prompt = None;
+                    self.comp = None;
+                    self.invalidate();
+                }
+                // 検索・置換バー：Enter で次を検索（置換欄では置換して次へ）、Shift+Enter で前を検索、Tab で欄を移る
+                VK_RETURN if self.is_find_bar() => {
+                    let act = if self.prompt_focus == 1 && self.prompt == Some(Prompt::Replace) {
+                        FindAct::ReplOne
+                    } else if shift {
+                        FindAct::Prev
+                    } else {
+                        FindAct::Next
+                    };
+                    self.find_bar_do(act);
+                }
+                VK_TAB if self.prompt == Some(Prompt::Replace) => {
+                    self.prompt_focus = if shift { 0 } else { 1 - self.prompt_focus.min(1) };
+                    self.comp = None;
                     self.invalidate();
                 }
                 VK_RETURN => return self.submit_prompt(),
                 VK_BACK => {
-                    self.input.pop();
-                    self.invalidate();
+                    self.prompt_buf().pop();
+                    self.find_bar_changed();
                 }
                 _ if ctrl && vk == VK_V => {
                     if let Some(s) = clipboard_text() {
-                        self.input.push_str(s.lines().next().unwrap_or(""));
-                        self.invalidate();
+                        let line = s.lines().next().unwrap_or("").to_string();
+                        self.prompt_buf().push_str(&line);
+                        self.find_bar_changed();
                     }
                 }
                 _ => {}
@@ -134,8 +153,8 @@ impl App {
         };
         let Some(c) = c else { return };
         if self.prompt.is_some() {
-            self.input.push(c);
-            self.invalidate();
+            self.prompt_buf().push(c);
+            self.find_bar_changed();
         } else {
             self.type_text(c.encode_utf8(&mut [0; 4]), EditKind::Typing);
         }
@@ -150,6 +169,9 @@ impl App {
     }
 
     pub(super) fn on_mouse_down(&mut self, x: f32, y: f32, shift: bool) {
+        if self.find_bar_click(x, y) {
+            return;
+        }
         let Some(doc) = self.doc.clone() else { return };
         if y >= self.text_height() {
             return;

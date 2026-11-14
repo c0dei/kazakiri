@@ -6,7 +6,7 @@ impl App {
     pub(super) fn find(&mut self, dir: Direction) {
         let Some(doc) = self.doc.clone() else { return };
         if self.last_find.is_empty() {
-            self.want_dialog = Some(0);
+            self.start_find_bar(false);
             return;
         }
         let query = match Query::new(&doc, &self.last_find, self.opts) {
@@ -140,6 +140,77 @@ impl App {
 
     // ---- マウス・選択 ----
 
+    /// 検索・置換バーを開く（すでに開いていれば、検索欄に戻る）。選択中の 1 行の文字列があれば検索語にする
+    pub(super) fn start_find_bar(&mut self, replace: bool) {
+        let was = self.is_find_bar();
+        let selected = self.selected_text(1024).filter(|s| !s.is_empty() && !s.contains('\n'));
+        self.prompt = Some(if replace { Prompt::Replace } else { Prompt::Find });
+        if !was || selected.is_some() {
+            self.input = selected.unwrap_or_else(|| self.last_find.clone());
+        }
+        if !was {
+            self.input2 = self.last_replace.clone();
+        }
+        self.prompt_focus = 0;
+        self.comp = None;
+        self.find_bar_changed();
+    }
+
+    pub(super) fn is_find_bar(&self) -> bool {
+        matches!(self.prompt, Some(Prompt::Find | Prompt::Replace))
+    }
+
+    /// 入力中の欄（検索・置換バーでは、いま入力している欄。それ以外は入力欄）
+    pub(super) fn prompt_buf(&mut self) -> &mut String {
+        if self.prompt == Some(Prompt::Replace) && self.prompt_focus == 1 { &mut self.input2 } else { &mut self.input }
+    }
+
+    /// 検索・置換バーの入力が変わった：F3 などでも同じ語で探せるように、検索語・置換語を更新する
+    pub(super) fn find_bar_changed(&mut self) {
+        if self.is_find_bar() {
+            self.last_find = self.input.clone();
+            self.last_replace = self.input2.clone();
+        }
+        self.invalidate();
+    }
+
+    /// 検索・置換バーの操作（Enter・ボタン）
+    pub(super) fn find_bar_do(&mut self, act: FindAct) {
+        self.find_bar_changed();
+        if self.last_find.is_empty() && !matches!(act, FindAct::Close | FindAct::Case | FindAct::Regex | FindAct::Word) {
+            self.message = "検索する文字列を入力してください".into();
+            self.invalidate();
+            return;
+        }
+        match act {
+            FindAct::Next => self.find_and_remember(Direction::Forward),
+            FindAct::Prev => self.find_and_remember(Direction::Backward),
+            FindAct::ReplOne => {
+                self.history.push(crate::history::Kind::Replace, &self.last_replace.clone());
+                self.replace_next(true);
+            }
+            FindAct::ReplAll => {
+                self.history.push(crate::history::Kind::Replace, &self.last_replace.clone());
+                self.replace_scope = None;
+                self.replace_all();
+            }
+            FindAct::Case => self.opts.case_sensitive = !self.opts.case_sensitive,
+            FindAct::Regex => self.opts.regex = !self.opts.regex,
+            FindAct::Word => self.opts.whole_word = !self.opts.whole_word,
+            FindAct::Close => {
+                self.prompt = None;
+                self.comp = None;
+            }
+        }
+        self.invalidate();
+    }
+
+    fn find_and_remember(&mut self, dir: Direction) {
+        let q = self.last_find.clone();
+        self.history.push(crate::history::Kind::Find, &q);
+        self.find(dir);
+    }
+
     pub(super) fn start_prompt(&mut self, p: Prompt) {
         self.prompt = Some(p);
         self.input = match p {
@@ -152,6 +223,7 @@ impl App {
             Prompt::Split => "1000000".into(),
             Prompt::Sequence => "1,1,0".into(),
             Prompt::LineFilter => self.last_find.clone(),
+            Prompt::Find | Prompt::Replace => self.last_find.clone(),
         };
         self.invalidate();
     }
@@ -167,6 +239,7 @@ impl App {
 
     pub(super) fn submit_prompt(&mut self) -> Option<Deferred> {
         match self.prompt.take() {
+            Some(Prompt::Find | Prompt::Replace) => {}
             Some(Prompt::ColumnFilter) => {
                 self.last_filter = std::mem::take(&mut self.input);
                 self.start_filter();

@@ -130,7 +130,7 @@ impl App {
                     self.invalidate();
                 }
             }
-            menu::ID_FIND => return Some(Deferred::ShowFind(0)),
+            menu::ID_FIND => self.start_find_bar(false),
             menu::ID_FIND_NEXT => self.find(Direction::Forward),
             menu::ID_FIND_PREV => self.find(Direction::Backward),
             menu::ID_CASE => {
@@ -205,7 +205,7 @@ impl App {
             id if (menu::ID_DELIM_BASE..menu::ID_DELIM_BASE + menu::DELIMS.len() as u32).contains(&id) => {
                 self.set_delim(menu::DELIMS[(id - menu::ID_DELIM_BASE) as usize].1)
             }
-            menu::ID_REPLACE => return Some(Deferred::ShowFind(1)),
+            menu::ID_REPLACE => self.start_find_bar(true),
             menu::ID_FIND_ALL => self.find_all(),
             menu::ID_GREP_REPLACE => self.start_grep_replace(),
             menu::ID_RESULTS_TAB => self.results_to_tab(),

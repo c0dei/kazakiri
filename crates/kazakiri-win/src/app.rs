@@ -65,6 +65,7 @@ mod tabs;
 mod rect;
 mod dark;
 mod find_dialog;
+mod findbar;
 mod bookmarks;
 mod diffview;
 mod autosave;
@@ -113,6 +114,19 @@ thread_local! {
     static APP: RefCell<Option<App>> = const { RefCell::new(None) };
 }
 
+/// 検索・置換バーの操作
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FindAct {
+    Next,
+    Prev,
+    ReplOne,
+    ReplAll,
+    Case,
+    Regex,
+    Word,
+    Close,
+}
+
 /// 入力欄（ステータスバー上の簡易プロンプト）
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Prompt {
@@ -125,6 +139,10 @@ enum Prompt {
     Sequence,
     /// 行フィルター（検索語に一致した行だけを新しいタブに）
     LineFilter,
+    /// 検索バー（本文の右上に浮かせる。Enter で次を検索）
+    Find,
+    /// 検索・置換バー（2 段。Tab で置換欄へ）
+    Replace,
 }
 
 /// 借用中に実行できない処理（モーダルダイアログはメッセージを再入させる）
@@ -313,6 +331,9 @@ struct App {
     x_off: f32,
     prompt: Option<Prompt>,
     input: String,
+    /// 検索・置換バーの置換欄と、いま入力している欄（0 = 検索、1 = 置換）
+    input2: String,
+    prompt_focus: u8,
     last_find: String,
     last_filter: String,
     /// 検索語・置換語の履歴

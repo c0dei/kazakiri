@@ -472,6 +472,9 @@ impl App {
 
     /// 入力欄のカード（本文の右上に浮かせる）の位置。(x0, y0, x1, y1)。ツールバーとタブバーを除いた座標
     pub(super) fn prompt_card(&self) -> (f32, f32, f32, f32) {
+        if self.is_find_bar() {
+            return self.find_layout().card;
+        }
         let w = self.client_size().0;
         let cw = (w - 40.0).clamp(280.0, 560.0).min(w);
         let (x0, y0) = ((w - cw - 20.0).max(0.0), self.pin_h() + 10.0);
@@ -480,6 +483,10 @@ impl App {
 
     /// 入力欄（カードの中の入力の枠）の位置。(x0, y0, x1, y1)
     pub(super) fn prompt_input_rect(&self) -> (f32, f32, f32, f32) {
+        if self.is_find_bar() {
+            let l = self.find_layout();
+            return if self.prompt_focus == 1 { l.repl.unwrap_or(l.find) } else { l.find };
+        }
         let (x0, y0, x1, _) = self.prompt_card();
         let top = y0 + 10.0 + self.ui_line_h + 6.0;
         (x0 + 12.0, top, x1 - 12.0, top + self.ui_line_h + 8.0)
@@ -493,8 +500,12 @@ impl App {
     /// 入力欄（行へ移動・列フィルタ・分割・連番）を、本文の右上に浮かせたカードで出す。1 行目は題と操作、2 行目は入力、3 行目は説明
     pub(super) unsafe fn draw_prompt_bar(&self, rt: &ID2D1RenderTarget, brush: &ID2D1SolidColorBrush, _w: f32, _h: f32) -> Result<()> {
         let Some(prompt) = self.prompt else { return Ok(()) };
+        if self.is_find_bar() {
+            return unsafe { self.draw_find_bar(rt, brush) };
+        }
         let t = self.theme;
         let (title, hint) = match prompt {
+            Prompt::Find | Prompt::Replace => (String::new(), String::new()),
             Prompt::GotoLine => ("行へ移動".to_string(), "行番号を入力して Enter".to_string()),
             Prompt::LineFilter => ("行フィルター".to_string(), format!("検索語を入力して Enter。一致した行だけを新しいタブに出します（{}{}）", if self.opts.case_sensitive { "大文字小文字を区別" } else { "大文字小文字を区別しない" }, if self.opts.regex { "・正規表現" } else { "" })),
             Prompt::Sequence => ("連番を挿入".to_string(), "開始値,増分,桁数（例: 1,1,3 → 001, 002…）を入力して Enter".to_string()),
@@ -526,50 +537,8 @@ impl App {
             let hint_units: Vec<u16> = hint.encode_utf16().collect();
             brush.SetColor(&t.gutter_text);
             rt.DrawText(&hint_units, &self.ui_format, &rect(cx0 + 14.0, iy1 + 8.0, cx1 - 14.0, cy1 - 4.0), brush, D2D1_DRAW_TEXT_OPTIONS_CLIP, DWRITE_MEASURING_MODE_NATURAL);
-            // 入力欄の枠（アクセントカラー）
-            brush.SetColor(&theme::accent(self.settings.dark));
-            rt.FillRoundedRectangle(&rrect(ix0, iy0, ix1, iy1, 5.0), brush);
-            brush.SetColor(&t.bg);
-            rt.FillRoundedRectangle(&rrect(ix0 + 1.0, iy0 + 1.0, ix1 - 1.0, iy1 - 1.0, 4.0), brush);
-            // 入力した文字（文字の上端は iy + 2）
-            let (iy, w) = (iy0 + 2.0, ix1 + 8.0);
-            brush.SetColor(&t.text);
-            let units: Vec<u16> = self.input.encode_utf16().collect();
-            let x = ix0 + 8.0 + self.ui_text_width(&units)?;
-            self.draw_ui_str(rt, brush, &self.input, ix0 + 8.0, iy + 2.0, ix1 - 8.0)?;
-            match self.comp.as_ref().filter(|_| self.ime_inline_on()) {
-                Some(comp) => {
-                    // 変換中の文字：変換対象は背景、下線で状態を示す
-                    let cw = self.ui_text_width(&comp.units)?;
-                    let mut i = 0;
-                    while i < comp.units.len() {
-                        let a = comp.attrs.get(i).copied().unwrap_or(0);
-                        let mut j = i + 1;
-                        while j < comp.units.len() && comp.attrs.get(j).copied().unwrap_or(0) == a {
-                            j += 1;
-                        }
-                        let (x0, x1) = (x + self.ui_text_width(&comp.units[..i])?, x + self.ui_text_width(&comp.units[..j])?);
-                        let target = matches!(a, 1 | 3);
-                        if target {
-                            brush.SetColor(&t.select);
-                            rt.FillRectangle(&rect(x0, iy + 2.0, x1, iy + 2.0 + self.ui_line_h), brush);
-                        }
-                        brush.SetColor(&t.text);
-                        let th = if target { 2.0 } else { 1.0 };
-                        let by = iy + 2.0 + self.ui_line_h - 1.0;
-                        rt.FillRectangle(&rect(x0, by - th, x1, by), brush);
-                        i = j;
-                    }
-                    self.draw_ui_str(rt, brush, &String::from_utf16_lossy(&comp.units), x, iy + 2.0, (x + cw + 4.0).min(w - 8.0))?;
-                    let cx = x + self.ui_text_width(&comp.units[..comp.cursor.min(comp.units.len())])?;
-                    brush.SetColor(&t.caret);
-                    rt.FillRectangle(&rect(cx - 0.5, iy + 3.0, cx + 1.5, iy + 1.0 + self.ui_line_h), brush);
-                }
-                None => {
-                    brush.SetColor(&t.caret);
-                    rt.FillRectangle(&rect(x, iy + 3.0, x + 1.5, iy + 1.0 + self.ui_line_h), brush);
-                }
-            }
+            // 入力欄
+            self.draw_field(rt, brush, (ix0, iy0, ix1, iy1), &self.input, true)?;
         }
         Ok(())
     }

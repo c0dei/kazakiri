@@ -529,7 +529,8 @@ impl App {
     /// 入力欄（行へ移動・列フィルタなど）が開いているとき、変換中の文字と候補ウィンドウを入力欄の文字の末尾に出す
     fn update_ime_position_prompt(&self) {
         let scale = unsafe { GetDpiForWindow(self.hwnd) } as f32 / 96.0;
-        let units: Vec<u16> = self.input.encode_utf16().collect();
+        let focused = if self.prompt == Some(Prompt::Replace) && self.prompt_focus == 1 { &self.input2 } else { &self.input };
+        let units: Vec<u16> = focused.encode_utf16().collect();
         let x = self.prompt_input_rect().0 + 8.0 + unsafe { self.ui_text_width(&units) }.unwrap_or(0.0);
         let y = self.chrome_h() + self.prompt_input_top();
         let pt = POINT { x: (x * scale) as i32, y: (y * scale) as i32 };
@@ -638,7 +639,9 @@ impl App {
             match s {
                 Some(s) if self.prompt.is_some() => {
                     // 入力欄は 1 行。改行は入れない
-                    self.input.extend(s.chars().filter(|c| !c.is_control()));
+                    let add: String = s.chars().filter(|c| !c.is_control()).collect();
+                    self.prompt_buf().push_str(&add);
+                    self.find_bar_changed();
                     true
                 }
                 Some(s) => {
