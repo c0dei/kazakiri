@@ -169,9 +169,6 @@ impl App {
     }
 
     pub(super) fn on_mouse_down(&mut self, x: f32, y: f32, shift: bool) {
-        if self.find_bar_click(x, y) {
-            return;
-        }
         let Some(doc) = self.doc.clone() else { return };
         if y >= self.text_height() {
             return;

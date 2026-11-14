@@ -735,6 +735,10 @@ impl App {
                         self.tab_drag_start(x);
                         return (DONE, d);
                     }
+                    // 検索・置換バー（本文の右上に浮かぶ）の上の操作。バーの外を押したら、バーは閉じて本文の操作に進む
+                    if self.find_bar_click(x, y) {
+                        return (DONE, None);
+                    }
                     if self.md_hit(x, y) {
                         return (DONE, self.md_click(x, y));
                     }
