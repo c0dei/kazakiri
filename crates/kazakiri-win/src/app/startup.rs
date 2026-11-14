@@ -28,11 +28,15 @@ pub(super) unsafe fn run_inner() -> std::result::Result<(), (&'static str, windo
             1100,
             760,
             None,
-            Some(menus.bar),
+            None,
             Some(instance.into()),
             None,
         )
         .map_err(|e| ("CreateWindow", e))?;
+        // 標準のタイトルバーはやめて、タブバーをタイトルバーにする（caption.rs）。影と角丸は DWM に出してもらう
+        let margins = windows::Win32::UI::Controls::MARGINS { cxLeftWidth: 0, cxRightWidth: 0, cyTopHeight: 1, cyBottomHeight: 0 };
+        let _ = windows::Win32::Graphics::Dwm::DwmExtendFrameIntoClientArea(hwnd, &margins);
+        let _ = SetWindowPos(hwnd, None, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
 
         // スクロールバーは子ウィンドウ（標準のスクロールバーは、タブバーやツールバーの高さまで伸びてしまうため）
         let make_bar = |style: i32| CreateWindowExW(WINDOW_EX_STYLE(0), w!("SCROLLBAR"), PCWSTR::null(), WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WINDOW_STYLE(style as u32), 0, 0, 16, 16, Some(hwnd), None, Some(instance.into()), None);
@@ -59,6 +63,8 @@ pub(super) unsafe fn run_inner() -> std::result::Result<(), (&'static str, windo
             vbar,
             hbar,
             hbar_on: Cell::new(true),
+            cap_hover: None,
+            cap_down: None,
             d2d,
             dw,
             ui_format,
@@ -200,6 +206,8 @@ pub(super) unsafe fn run_inner() -> std::result::Result<(), (&'static str, windo
         DragAcceptFiles(hwnd, true);
         let _ = ShowWindow(hwnd, SW_SHOW);
         // 表示してから、スクロールバーを置き直す（ウィンドウの大きさが決まってから）
+        // 標準のタイトルバーを外す計算（WM_NCCALCSIZE）をやり直させる（ウィンドウの作成中は、まだ App がなくて効かない）
+        let _ = SetWindowPos(hwnd, None, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
         with_app(|app| {
             app.layout_scrollbars();
             app.update_scrollbars();

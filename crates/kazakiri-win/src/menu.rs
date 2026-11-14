@@ -137,6 +137,8 @@ pub const ID_TSV: u32 = 927;
 pub const ID_DELIM_FIELD: u32 = 928;
 /// コマンドパレット（Ctrl+Shift+P）
 pub const ID_PALETTE: u32 = 929;
+/// ツールバー左端の ☰（メニューを開く）
+pub const ID_MENU: u32 = 930;
 /// 対象の列を選ぶメニューの項目（列番号 0 から 199）
 pub const ID_COL_BASE: u32 = 1200;
 pub const ID_TRAY_ACTIVATE: u32 = 950;
@@ -726,7 +728,7 @@ mod id_tests {
             }
         }
         // 単独のコマンドの ID が、範囲の中に入っていないこと
-        let single = [("TOOLBAR", ID_TOOLBAR), ("FKEYS", ID_FKEYS), ("OVERWRITE", ID_OVERWRITE), ("COMPLETE", ID_COMPLETE), ("MODEBAR", ID_MODEBAR), ("COLPICK", ID_COLPICK), ("MARK_CLEAR", ID_MARK_CLEAR), ("DIFF", ID_DIFF), ("SPLIT_VIEW", ID_SPLIT_VIEW), ("FILTER_LINES", ID_FILTER_LINES), ("CSV_MODE", ID_CSV_MODE), ("TSV", ID_TSV), ("DELIM_FIELD", ID_DELIM_FIELD), ("PALETTE", ID_PALETTE)];
+        let single = [("TOOLBAR", ID_TOOLBAR), ("FKEYS", ID_FKEYS), ("OVERWRITE", ID_OVERWRITE), ("COMPLETE", ID_COMPLETE), ("MODEBAR", ID_MODEBAR), ("COLPICK", ID_COLPICK), ("MARK_CLEAR", ID_MARK_CLEAR), ("DIFF", ID_DIFF), ("SPLIT_VIEW", ID_SPLIT_VIEW), ("FILTER_LINES", ID_FILTER_LINES), ("CSV_MODE", ID_CSV_MODE), ("TSV", ID_TSV), ("DELIM_FIELD", ID_DELIM_FIELD), ("PALETTE", ID_PALETTE), ("MENU", ID_MENU)];
         for (n, id) in single {
             for r in &ranges {
                 assert!(!(r.1..r.1 + r.2).contains(&id), "{n} ({id}) が {} の範囲に入っています", r.0);

@@ -24,6 +24,7 @@ const COMMANDS: &[(&str, u32)] = &[
     ("join", ID_JOIN),
     ("settings", ID_SETTINGS),
     ("command_palette", ID_PALETTE),
+    ("main_menu", ID_MENU),
     ("filter_lines", ID_FILTER_LINES),
     ("diff", ID_DIFF),
     ("split_view", ID_SPLIT_VIEW),
@@ -143,6 +144,7 @@ const DEFAULTS: &[(&str, &str)] = &[
     ("zoom_out", "Ctrl+Minus"),
     ("zoom_reset", "Ctrl+0"),
     ("command_palette", "Ctrl+Shift+P"),
+    ("main_menu", "F10"),
 ];
 
 /// 仮想キーコード

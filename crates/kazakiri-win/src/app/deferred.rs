@@ -24,6 +24,25 @@ pub(super) unsafe fn run_deferred(hwnd: HWND, d: Deferred) {
         }
         Deferred::ShowFind(tab) => unsafe { find_dialog::show(hwnd, tab) },
         Deferred::ShowSettings => unsafe { settings_dialog::show(hwnd) },
+        Deferred::MainMenu => unsafe {
+            // メニューバーの各メニュー（ファイル・編集 …）を、☰ の下に並べて開く
+            let Some((bar, pt)) = with_app(|app| (app.menus.bar, app.menu_anchor())) else { return };
+            if let Ok(pm) = CreatePopupMenu() {
+                let n = GetMenuItemCount(Some(bar)).max(0);
+                for i in 0..n {
+                    let sub = GetSubMenu(bar, i);
+                    let mut buf = [0u16; 64];
+                    let _ = GetMenuStringW(bar, i as u32, Some(&mut buf), MF_BYPOSITION);
+                    let _ = AppendMenuW(pm, MF_POPUP | MF_STRING, sub.0 as usize, PCWSTR(buf.as_ptr()));
+                }
+                let _ = TrackPopupMenu(pm, TPM_LEFTALIGN | TPM_TOPALIGN, pt.x, pt.y, None, hwnd, None);
+                // 取り付けた各メニューは、元のバーのもの。外してから捨てる
+                for _ in 0..n {
+                    let _ = RemoveMenu(pm, 0, MF_BYPOSITION);
+                }
+                let _ = DestroyMenu(pm);
+            }
+        },
         Deferred::ColMenu => unsafe {
             if let Some(Some(menu)) = with_app(|app| app.build_col_menu()) {
                 // 「対象の列」の欄の真下から開く（ドロップダウン）。欄が見えないときだけ、マウスの位置

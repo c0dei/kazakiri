@@ -68,6 +68,7 @@ mod find_dialog;
 mod findbar;
 mod coldrop;
 mod palette;
+mod caption;
 mod bookmarks;
 mod diffview;
 mod autosave;
@@ -166,6 +167,8 @@ enum Deferred {
     /// 検索・置換・GREP のダイアログを開く（タブの番号）
     ShowFind(usize),
     ShowSettings,
+    /// ツールバー左端の ☰ から、メニューを開く
+    MainMenu,
     /// 本文の右クリックメニュー
     ContextMenu,
     /// 並べ替え・列フィルタの対象の列を選ぶメニュー
@@ -255,6 +258,9 @@ struct App {
     hbar: HWND,
     /// 横のスクロールバーを出しているか
     hbar_on: Cell<bool>,
+    /// ウィンドウのボタン（最小化・最大化・閉じる）の、マウスが上にある／押しているもの
+    cap_hover: Option<u8>,
+    cap_down: Option<u8>,
     d2d: ID2D1Factory,
     dw: IDWriteFactory,
     format: IDWriteTextFormat,
@@ -652,6 +658,19 @@ impl App {
                     (Some(DefWindowProcW(self.hwnd, msg, wparam, l)), None)
                 }
                 // 検索や設定のウィンドウは同じスレッドの IME の状態を使うので、本文用に決めた変換ウィンドウ・候補ウィンドウの位置を残さない
+                WM_NCCALCSIZE if wparam.0 != 0 => (Some(self.nc_calc_size(msg, wparam, lparam)), None),
+                WM_NCHITTEST => (Some(self.nc_hit_test(lparam)), None),
+                WM_NCMOUSEMOVE => {
+                    self.cap_mouse_move(wparam.0 as u32);
+                    (None, None)
+                }
+                0x02A2 => {
+                    // WM_NCMOUSELEAVE
+                    self.cap_mouse_leave();
+                    (DONE, None)
+                }
+                WM_NCLBUTTONDOWN if self.cap_button_down(wparam.0 as u32) => (DONE, None),
+                WM_NCLBUTTONUP if self.cap_button_up(wparam.0 as u32) => (DONE, None),
                 WM_KILLFOCUS => {
                     self.col_drop = None;
                     self.delim_edit = false;

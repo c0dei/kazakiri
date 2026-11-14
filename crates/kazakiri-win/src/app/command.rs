@@ -5,6 +5,7 @@ use super::*;
 impl App {
     pub(super) unsafe fn command(&mut self, id: u32) -> Option<Deferred> {
         match id {
+            menu::ID_MENU => return Some(Deferred::MainMenu),
             menu::ID_PALETTE => {
                 if self.prompt == Some(Prompt::Palette) {
                     self.prompt = None;

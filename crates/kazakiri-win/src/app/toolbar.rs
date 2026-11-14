@@ -11,6 +11,7 @@ use super::*;
 /// アイコンの種類
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Icon {
+    Menu,
     New,
     Open,
     Save,
@@ -31,6 +32,8 @@ pub(super) enum Icon {
 
 /// ツールバーのボタン（None は区切り）。(アイコン, コマンドの ID, 説明)
 const BUTTONS: &[Option<(Icon, u32, &str)>] = &[
+    Some((Icon::Menu, menu::ID_MENU, "メニュー (F10)")),
+    None,
     Some((Icon::New, menu::ID_NEW, "新規作成 (Ctrl+N)")),
     Some((Icon::Open, menu::ID_OPEN, "開く (Ctrl+O)")),
     Some((Icon::Save, menu::ID_SAVE, "上書き保存 (Ctrl+S)")),
@@ -421,6 +424,17 @@ impl App {
     }
 
 
+    /// ☰ ボタンの左下（画面の座標）。メニューをここから開く
+    pub(super) fn menu_anchor(&self) -> POINT {
+        let x0 = self.tool_boxes().first().map_or(0.0, |b| b.0);
+        let scale = unsafe { GetDpiForWindow(self.hwnd) } as f32 / 96.0;
+        let mut pt = POINT { x: (x0 * scale) as i32, y: ((self.tab_h() + ROW1_H - 2.0) * scale) as i32 };
+        unsafe {
+            let _ = ClientToScreen(self.hwnd, &mut pt);
+        }
+        pt
+    }
+
     /// ツールバーの右端の、コマンドパレットを開く丸い欄（ツールバーの行の中の座標）。幅が足りないときは None
     pub(super) fn palette_pill(&self) -> Option<(f32, f32, f32, f32)> {
         let w = self.client_size().0;
@@ -622,6 +636,11 @@ impl App {
             let ci = |cx: f32, cy: f32, r: f32| rt.DrawEllipse(&D2D1_ELLIPSE { point: p(cx, cy), radiusX: r, radiusY: r }, brush, sw, None);
             let dot = |cx: f32, cy: f32, r: f32| rt.FillEllipse(&D2D1_ELLIPSE { point: p(cx, cy), radiusX: r, radiusY: r }, brush);
             match icon {
+                Icon::Menu => {
+                    ln(2.5, 4.0, 13.5, 4.0);
+                    ln(2.5, 8.0, 13.5, 8.0);
+                    ln(2.5, 12.0, 13.5, 12.0);
+                }
                 Icon::New => {
                     rc(3.0, 1.5, 12.0, 14.5);
                     ln(8.0, 1.5, 8.0, 6.0);
