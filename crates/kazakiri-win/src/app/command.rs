@@ -153,10 +153,10 @@ impl App {
                 }
             }
             menu::ID_CSV => self.toggle_csv(),
-            // モードバーの「CSV」：タブ区切りのときは、最後に使った区切り（なければカンマ）に切り替える
+            // モードバーの「CSV」：カンマ区切りで表示する（TSV や、区切りを指定していたときは、カンマに切り替える。カンマのときに押すと閉じる）
             menu::ID_CSV_MODE => match self.csv.as_ref().map(|v| v.delim) {
-                Some('\t') => self.set_delim(self.last_csv_delim),
-                _ => self.toggle_csv(),
+                Some(',') => self.toggle_csv(),
+                _ => self.set_delim(','),
             },
             menu::ID_TSV => match self.csv.as_ref().map(|v| v.delim) {
                 Some('\t') => self.toggle_csv(),

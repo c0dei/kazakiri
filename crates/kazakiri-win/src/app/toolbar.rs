@@ -76,7 +76,7 @@ pub(super) const MODE_H: f32 = 28.0;
 
 /// モードバーのボタン。(表示, コマンドの ID, 説明)
 const MODES: &[Option<(&str, u32, &str)>] = &[
-    Some(("CSV", menu::ID_CSV_MODE, "CSV を表として表示 (Ctrl+Shift+C)。タブ区切りのときは、最後に使った区切りに戻す")),
+    Some(("CSV", menu::ID_CSV_MODE, "カンマ区切り（CSV）の表として表示。TSV や指定した区切りのときは、カンマに切り替える")),
     Some(("TSV", menu::ID_TSV, "タブ区切り（TSV）の表として表示")),
     Some(("区切り", menu::ID_DELIM_FIELD, "区切りにする記号を入力する（欄を押して、記号を 1 文字打つ。Tab キーでタブ）")),
     None,
@@ -230,7 +230,8 @@ impl App {
         }
         let Some(v) = self.csv.as_ref() else { return false };
         match id {
-            menu::ID_CSV | menu::ID_CSV_MODE => v.delim != '\t' || id == menu::ID_CSV,
+            menu::ID_CSV => true,
+            menu::ID_CSV_MODE => v.delim == ',',
             menu::ID_TSV => v.delim == '\t',
             menu::ID_CSV_HEADER => v.header,
             menu::ID_CELL_MODE => self.cell_mode,
@@ -445,7 +446,9 @@ impl App {
             self.draw_ui_str(rt, brush, label, x0 + 9.0, (h - self.ui_line_h) / 2.0, x1)?;
             let (bx1, by0, by1) = (x1 - 9.0, 3.0, h - 3.0);
             let bx0 = bx1 - DELIM_BOX_W;
-            brush.SetColor(if editing { &theme::accent(self.settings.dark) } else { &t.dim });
+            // 入力待ち、または、カンマ・タブ以外の区切りを指定しているときは、アクセントカラーの枠
+            let custom = self.csv.as_ref().is_some_and(|v| !matches!(v.delim, ',' | '\t'));
+            brush.SetColor(if editing || custom { &theme::accent(self.settings.dark) } else { &t.dim });
             rt.FillRoundedRectangle(&rrect(bx0, by0, bx1, by1, 5.0), brush);
             brush.SetColor(&t.bg);
             rt.FillRoundedRectangle(&rrect(bx0 + 1.0, by0 + 1.0, bx1 - 1.0, by1 - 1.0, 4.0), brush);
