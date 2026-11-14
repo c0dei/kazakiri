@@ -67,7 +67,7 @@ EmEditor の「大きいファイルが速い」体験を、買い切り不要�
 - 本文のフォントが等幅でない場合（Noto Sans JP など）、CSV/TSV の表示のあいだだけ、列がそろうよう既定の等幅フォント（BIZ UDゴシック → MS ゴシック → Consolas）に自動で替える。CSV でなくなれば元のフォントに戻る
 - フォントは 2 系統：本文（font / font_size）と、画面の部品＝メニュー・タブ・ツールバー・ステータスバー（ui_font / ui_font_size。既定は Yu Gothic UI → Meiryo UI → Segoe UI）。設定ダイアログで別々に変えられる
 - 設定ダイアログ（ファイル → 設定）で、外観・編集・表示の主な項目を画面から変えられる（Mica のオン／オフ、フォント、タブ幅など）
-- 設定は `%APPDATA%\kazakiri\settings.ini` に自動で保存（font, font_size, dark, whitespace, log_colors, tab_width, wrap, grep_backup, grep_close, wheel_lines, md_auto, ime_inline, syntax, mica, toolbar, fkeys, ui_font, ui_font_size, window。テキストエディタで直接編集もできる）
+- 設定は `%APPDATA%\kazakiri\settings.ini` に自動で保存（font, font_size, dark, whitespace, log_colors, tab_width, wrap, grep_backup, grep_close, wheel_lines, md_auto, backup_save, backup_dir, backup_numbered, autosave_min, ime_inline, syntax, mica, toolbar, fkeys, ui_font, ui_font_size, window。テキストエディタで直接編集もできる）
 
 ![空白の表示とログの色分け（ダークテーマ）](docs/screenshot-whitespace.png)
 
@@ -83,6 +83,10 @@ EmEditor の「大きいファイルが速い」体験を、買い切り不要�
 - 引用符で囲んだフィールドの中の区切り文字は区切りとみなさない（引用符の中の改行には未対応）
 
 ![CSV モード](docs/screenshot-csv.png)
+
+### バックアップと自動保存
+- 設定 → バックアップ：上書き保存するとき、書き換える前の内容を `名前.拡張子.bak`（元のファイルと同じフォルダ。フォルダを指定すればそこへ）に残す。既定ではオフ。「古いバックアップを残す」をオンにすると、`.bak2`、`.bak3` … と番号を増やして上書きしない。バックアップを作れなくても保存は続け、メッセージで知らせる
+- 設定 → 自動保存：指定した分ごとに、未保存の編集のあるファイルを `名前.拡張子.autosave` に書き出す（元のファイルは書き換えず、編集の履歴にも触れない）。保存するか、通常どおり閉じると消え、異常終了したときだけ残る。次にそのファイルを開くと、新しい自動保存があることを知らせる。既定は 0（オフ）。パスのない新規のファイルは対象外
 
 ### 設定ダイアログ
 - ファイル → 設定：左に分類（基本・スクロール・外観・表示・検索・GREP・Markdown・キーボード）と検索欄、右に選んだ分類のページ（EmEditor の「すべての設定のプロパティ」のような形）。検索欄に語を入れると、その語を含む項目のある分類だけに絞られる。変更はすぐ反映され、settings.ini に保存される
@@ -250,6 +254,7 @@ crates/
     editor.rs      元に戻す・やり直す、変更の有無
     search.rs      並列検索（文字列・大文字小文字無視・正規表現、前方・後方、全件、置換後の文字列）
     grep.rs        フォルダ内のファイルの検索
+    backup.rs      保存時のバックアップ・自動保存のファイルの場所
     markdown.rs    Markdown の解析（ブロックと飾り）と HTML 書き出し
     csv.rs         CSV / TSV のフィールド分割、区切り文字の判定、表示幅、並べ替え
   kazakiri-win/    Windows UI（Win32 + Direct2D/DirectWrite）

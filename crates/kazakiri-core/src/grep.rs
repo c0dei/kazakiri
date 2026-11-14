@@ -298,16 +298,7 @@ pub fn grep(root: &Path, pattern: &str, opts: &GrepOptions, prog: &GrepProgress)
 
 /// バックアップの保存先：`名前.拡張子.bak`。すでにあれば `.bak2`、`.bak3` … と、上書きしない名前にする
 pub fn backup_path(path: &Path) -> PathBuf {
-    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "file".into());
-    let mut n = 1u32;
-    loop {
-        let suffix = if n == 1 { ".bak".to_string() } else { format!(".bak{n}") };
-        let candidate = path.with_file_name(format!("{name}{suffix}"));
-        if !candidate.exists() {
-            return candidate;
-        }
-        n += 1;
-    }
+    crate::backup::backup_path_in(path, None, true)
 }
 
 /// GREP 置換の結果

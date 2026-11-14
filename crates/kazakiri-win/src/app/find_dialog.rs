@@ -666,8 +666,12 @@ unsafe fn on_command(dlg: HWND, id: i32) {
 }
 
 unsafe fn pick_folder(owner: HWND) -> Option<String> {
+    unsafe { pick_folder_titled(owner, "GREP するフォルダを選んでください") }
+}
+
+pub(super) unsafe fn pick_folder_titled(owner: HWND, title: &str) -> Option<String> {
     unsafe {
-        let title = wide("GREP するフォルダを選んでください");
+        let title = wide(title);
         let bi = BROWSEINFOW { hwndOwner: owner, lpszTitle: PCWSTR(title.as_ptr()), ulFlags: BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE, ..Default::default() };
         let pidl = SHBrowseForFolderW(&bi);
         if pidl.is_null() {

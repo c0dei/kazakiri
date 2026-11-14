@@ -28,6 +28,7 @@ impl App {
                 self.hit = None;
                 self.opened_at = Some(Instant::now());
                 self.message.clear();
+                self.check_autosave(&path);
                 recent::push(&mut self.recent, &path);
                 let title = wide(&format!("{} - {APP_NAME}", path.display()));
                 unsafe {
