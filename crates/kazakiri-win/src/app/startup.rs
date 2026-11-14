@@ -22,7 +22,7 @@ pub(super) unsafe fn run_inner() -> std::result::Result<(), (&'static str, windo
             WS_EX_ACCEPTFILES,
             class,
             w!("kazakiri"),
-            WS_OVERLAPPEDWINDOW | WS_VSCROLL | WS_HSCROLL,
+            WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
             1100,
@@ -33,6 +33,11 @@ pub(super) unsafe fn run_inner() -> std::result::Result<(), (&'static str, windo
             None,
         )
         .map_err(|e| ("CreateWindow", e))?;
+
+        // スクロールバーは子ウィンドウ（標準のスクロールバーは、タブバーやツールバーの高さまで伸びてしまうため）
+        let make_bar = |style: i32| CreateWindowExW(WINDOW_EX_STYLE(0), w!("SCROLLBAR"), PCWSTR::null(), WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WINDOW_STYLE(style as u32), 0, 0, 16, 16, Some(hwnd), None, Some(instance.into()), None);
+        let vbar = make_bar(SBS_VERT as i32).map_err(|e| ("CreateScrollBar", e))?;
+        let hbar = make_bar(SBS_HORZ as i32).map_err(|e| ("CreateScrollBar", e))?;
 
         let d2d: ID2D1Factory = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None).map_err(|e| ("D2D1CreateFactory", e))?;
         let dw: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED).map_err(|e| ("DWriteCreateFactory", e))?;
@@ -51,6 +56,9 @@ pub(super) unsafe fn run_inner() -> std::result::Result<(), (&'static str, windo
         theme::load_accent();
         let mut app = App {
             hwnd,
+            vbar,
+            hbar,
+            hbar_on: Cell::new(true),
             d2d,
             dw,
             ui_format,
@@ -187,9 +195,15 @@ pub(super) unsafe fn run_inner() -> std::result::Result<(), (&'static str, windo
             app.tray_add();
         }
         app.restart_autosave_timer();
+        app.layout_scrollbars();
         APP.with(|a| *a.borrow_mut() = Some(app));
         DragAcceptFiles(hwnd, true);
         let _ = ShowWindow(hwnd, SW_SHOW);
+        // 表示してから、スクロールバーを置き直す（ウィンドウの大きさが決まってから）
+        with_app(|app| {
+            app.layout_scrollbars();
+            app.update_scrollbars();
+        });
 
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {

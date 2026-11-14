@@ -37,8 +37,15 @@ pub(super) unsafe fn apply(hwnd: HWND, dark: bool) {
         if let Some(f) = uxtheme_ordinal::<unsafe extern "system" fn(HWND, BOOL) -> BOOL>(133) {
             let _ = f(hwnd, BOOL::from(dark));
         }
-        // 窓のスクロールバー
+        // 窓のスクロールバー（子ウィンドウのスクロールバーも）
         let _ = SetWindowTheme(hwnd, if dark { windows::core::w!("DarkMode_Explorer") } else { PCWSTR::null() }, PCWSTR::null());
+        unsafe extern "system" fn theme_child(child: HWND, l: LPARAM) -> BOOL {
+            unsafe {
+                let _ = SetWindowTheme(child, if l.0 != 0 { windows::core::w!("DarkMode_Explorer") } else { PCWSTR::null() }, PCWSTR::null());
+            }
+            BOOL(1)
+        }
+        let _ = EnumChildWindows(Some(hwnd), Some(theme_child), LPARAM(dark as isize));
         // FlushMenuThemes
         if let Some(f) = uxtheme_ordinal::<unsafe extern "system" fn()>(136) {
             f();

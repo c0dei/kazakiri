@@ -74,7 +74,7 @@ impl App {
         let widest = d.items.iter().map(|(s, _)| unsafe { self.ui_text_width(&s.encode_utf16().collect::<Vec<_>>()) }.unwrap_or(0.0)).fold(0.0f32, f32::max);
         let width = (bx1 - bx0).max(widest + 56.0).min((w - 8.0).max(120.0));
         let x0 = bx0.min((w - width - 4.0).max(0.0));
-        let y0 = super::toolbar::ROW1_H + super::toolbar::MODE_H - 1.0;
+        let y0 = self.tab_h() + super::toolbar::ROW1_H + super::toolbar::MODE_H - 1.0;
         let rows = d.items.len().min(MAX_ROWS);
         Some(DropRect { x0, y0, x1: x0 + width, y1: y0 + rows as f32 * row_h + 8.0, row_h, rows })
     }

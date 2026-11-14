@@ -11,7 +11,8 @@ impl App {
             self.hide_tip();
             return Some(self.command(id));
         }
-        if y < -self.tab_h() {
+        // ツールバー・モードバーの、ボタンのないところ
+        if y >= -self.tb_h() && y < 0.0 {
             return Some(None);
         }
         // ステータスバーの文字コード・改行コード・行桁・タブ幅・挿入／上書き

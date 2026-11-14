@@ -217,7 +217,7 @@ impl App {
     pub(super) fn colpick_anchor(&self) -> Option<POINT> {
         let (x0, _) = self.colpick_box()?;
         let scale = unsafe { GetDpiForWindow(self.hwnd) } as f32 / 96.0;
-        let mut pt = POINT { x: (x0 * scale) as i32, y: ((ROW1_H + MODE_H - 2.0) * scale) as i32 };
+        let mut pt = POINT { x: (x0 * scale) as i32, y: ((self.tab_h() + ROW1_H + MODE_H - 2.0) * scale) as i32 };
         unsafe {
             let _ = ClientToScreen(self.hwnd, &mut pt);
         }
@@ -288,7 +288,8 @@ impl App {
     /// マウスの位置（本文の座標。タブバーの上が負）にあるボタン
     pub(super) fn hover_at(&self, x: f32, y: f32) -> Option<Hover> {
         let tb = self.tb_h();
-        if (-self.tab_h()..0.0).contains(&y) {
+        // いちばん上がタブバー、その下がツールバー（1 行目）とモードバー（2 行目）
+        if (-(self.tab_h() + tb)..-tb).contains(&y) {
             return self.tab_hover(x);
         }
         if let Some((x0, y0, x1, y1)) = self.palette_pill() {
@@ -297,9 +298,9 @@ impl App {
                 return Some(Hover::Palette);
             }
         }
-        if tb > 0.0 && (-(self.tab_h() + tb)..-self.tab_h()).contains(&y) {
+        if tb > 0.0 && (-tb..0.0).contains(&y) {
             // 上の行はツールバー、下の行はモードバー
-            if y < -(self.tab_h() + self.mode_h()) {
+            if y < -self.mode_h() {
                 return self.tool_boxes().into_iter().find(|&(x0, x1, _)| x >= x0 && x < x1).map(|(_, _, i)| Hover::Tool(i));
             }
             if let Some((x0, x1)) = self.colpick_box() {
@@ -408,7 +409,7 @@ impl App {
             let tw = self.ui_text_width(&units)?;
             let (bw, bh) = (tw + 16.0, self.ui_line_h + 8.0);
             let x = x0.min((w - bw - 4.0).max(0.0));
-            let y = self.tb_h() + 4.0 - if *second_row { 0.0 } else { self.mode_h() };
+            let y = self.tab_h() + self.tb_h() + 4.0 - if *second_row { 0.0 } else { self.mode_h() };
             brush.SetColor(&t.dim);
             rt.FillRoundedRectangle(&rrect(x, y, x + bw, y + bh, 4.0), brush);
             brush.SetColor(&t.panel_bg);
@@ -431,7 +432,7 @@ impl App {
 
     /// ツールバーの行（1 行目）の座標 → 本文の座標の y からの変換用：ツールバーの上端
     pub(super) fn toolbar_top(&self) -> f32 {
-        -(self.tab_h() + self.tb_h())
+        -self.tb_h()
     }
 
     pub(super) unsafe fn draw_toolbar(&self, rt: &ID2D1RenderTarget, brush: &ID2D1SolidColorBrush, w: f32) -> Result<()> {
@@ -475,7 +476,7 @@ impl App {
             }
         }
         if self.mode_h() > 0.0 {
-            rt.SetTransform(&Matrix3x2::translation(0.0, ROW1_H));
+            rt.SetTransform(&Matrix3x2::translation(0.0, self.tab_h() + ROW1_H));
             self.draw_modebar(rt, brush, w)?;
             rt.SetTransform(&Matrix3x2::identity());
         }

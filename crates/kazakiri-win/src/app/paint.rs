@@ -79,13 +79,13 @@ impl App {
             rt.BeginDraw();
             rt.Clear(Some(&self.theme.bg));
 
-            // メニューバー（ダークテーマのとき）とタブバーを描き、それより下は丸ごと下へずらして描く
+            // いちばん上にタブバー、その下にツールバー（とモードバー）を描き、それより下は丸ごと下へずらして描く
+            rt.SetTransform(&Matrix3x2::identity());
+            self.draw_tabs(&rt, brush, w)?;
             if self.tb_h() > 0.0 {
-                rt.SetTransform(&Matrix3x2::identity());
+                rt.SetTransform(&Matrix3x2::translation(0.0, self.tab_h()));
                 self.draw_toolbar(&rt, brush, w)?;
             }
-            rt.SetTransform(&Matrix3x2::translation(0.0, self.tb_h()));
-            self.draw_tabs(&rt, brush, w)?;
             rt.SetTransform(&Matrix3x2::translation(0.0, self.chrome_h()));
             let pin = self.pin_h();
             if pin > 0.0 {

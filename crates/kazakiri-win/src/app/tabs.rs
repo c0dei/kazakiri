@@ -497,8 +497,8 @@ impl App {
                 let active = i == self.active;
                 let hovered = self.hover == Some(super::toolbar::Hover::Tab(i));
                 if active {
-                    // 上の角を丸めたカード（下は本文とつなげる）
-                    brush.SetColor(&t.bg);
+                    // 上の角を丸めたカード（下はツールバーとつなげる）
+                    brush.SetColor(&if self.settings.toolbar { t.toolbar_bg } else { t.bg });
                     rt.FillRoundedRectangle(&rrect(x0 + 2.0, 4.0, x1 - 2.0, h + 8.0, 8.0), brush);
                 } else if hovered {
                     brush.SetColor(&t.panel_head);

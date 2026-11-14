@@ -118,8 +118,10 @@ impl App {
         unsafe {
             let _ = GetClientRect(self.hwnd, &mut rc);
             let scale = GetDpiForWindow(self.hwnd) as f32 / 96.0;
-            // タブバーを除いた大きさ（本文・結果一覧・ステータスバーの領域）
-            ((rc.right - rc.left) as f32 / scale, ((rc.bottom - rc.top) as f32 / scale - self.chrome_h()).max(0.0))
+            // タブバー・ツールバーと、スクロールバーを除いた大きさ（本文・結果一覧・ステータスバーの領域）
+            let (vw, hh) = self.scrollbar_px();
+            let hh = if self.hbar_on.get() { hh } else { 0 };
+            ((rc.right - rc.left - vw) as f32 / scale, ((rc.bottom - rc.top - hh) as f32 / scale - self.chrome_h()).max(0.0))
         }
     }
 
@@ -212,9 +214,9 @@ impl App {
         if let Some((total, page, pos)) = self.md_scroll_info() {
             let v = SCROLLINFO { cbSize: size_of::<SCROLLINFO>() as u32, fMask: SIF_RANGE | SIF_PAGE | SIF_POS, nMin: 0, nMax: total, nPage: page, nPos: pos, nTrackPos: 0 };
             unsafe {
-                SetScrollInfo(self.hwnd, SB_VERT, &v, true);
-                let _ = ShowScrollBar(self.hwnd, SB_HORZ, false);
+                SetScrollInfo(self.vbar, SB_CTL, &v, true);
             }
+            self.set_hbar(false);
             return;
         }
         let scale = self.scroll_scale();
@@ -248,10 +250,42 @@ impl App {
             nTrackPos: 0,
         };
         unsafe {
-            SetScrollInfo(self.hwnd, SB_VERT, &v, true);
-            SetScrollInfo(self.hwnd, SB_HORZ, &h, true);
-            // 折り返し表示のときは横スクロールバーを出さない
-            let _ = ShowScrollBar(self.hwnd, SB_HORZ, !self.wrap_on());
+            SetScrollInfo(self.vbar, SB_CTL, &v, true);
+            SetScrollInfo(self.hbar, SB_CTL, &h, true);
+        }
+        // 折り返し表示のときは横スクロールバーを出さない
+        self.set_hbar(!self.wrap_on());
+    }
+
+    /// 縦・横のスクロールバーの幅（物理ピクセル）
+    fn scrollbar_px(&self) -> (i32, i32) {
+        let dpi = unsafe { GetDpiForWindow(self.hwnd) }.max(96);
+        unsafe { (GetSystemMetricsForDpi(SM_CXVSCROLL, dpi), GetSystemMetricsForDpi(SM_CYHSCROLL, dpi)) }
+    }
+
+    /// 横のスクロールバーを出す／隠す（出し入れで本文の高さが変わるので、置き直す）
+    fn set_hbar(&self, on: bool) {
+        if self.hbar_on.get() != on {
+            self.hbar_on.set(on);
+            self.layout_scrollbars();
+            self.invalidate();
+        }
+    }
+
+    /// スクロールバー（子ウィンドウ）を、本文の右端・下端に置く。縦は、ツールバーの下から
+    pub(super) fn layout_scrollbars(&self) {
+        let mut rc = RECT::default();
+        let scale = unsafe { GetDpiForWindow(self.hwnd) } as f32 / 96.0;
+        unsafe {
+            let _ = GetClientRect(self.hwnd, &mut rc);
+        }
+        let (vw, hh) = self.scrollbar_px();
+        let hh = if self.hbar_on.get() { hh } else { 0 };
+        let top = (self.chrome_h() * scale).round() as i32;
+        unsafe {
+            let _ = SetWindowPos(self.vbar, None, rc.right - vw, top, vw, (rc.bottom - top - hh).max(0), SWP_NOZORDER | SWP_NOACTIVATE);
+            let _ = SetWindowPos(self.hbar, None, 0, rc.bottom - hh.max(1), (rc.right - vw).max(0), hh.max(1), SWP_NOZORDER | SWP_NOACTIVATE);
+            let _ = ShowWindow(self.hbar, if hh > 0 { SW_SHOWNOACTIVATE } else { SW_HIDE });
         }
     }
 

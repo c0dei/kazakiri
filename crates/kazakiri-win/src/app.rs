@@ -17,7 +17,7 @@
 //! | `tabs` / `menubar` / `toolbar` / `status_menu` / `view` / `theme` / `dark` | タブ、メニューバー、ツールバー、ステータスバー、表示設定、配色 |
 //! | `find_dialog` / `settings_dialog` / `keys_dialog` | 各ダイアログ |
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
@@ -35,7 +35,7 @@ use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::Com::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::Dialogs::*;
-use windows::Win32::UI::Controls::{SetScrollInfo, ShowScrollBar};
+use windows::Win32::UI::Controls::SetScrollInfo;
 use windows::Win32::UI::HiDpi::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::Shell::*;
@@ -250,6 +250,11 @@ struct SearchDone {
 
 struct App {
     hwnd: HWND,
+    /// 縦・横のスクロールバー（子ウィンドウ。標準のスクロールバーはタイトルバーまで伸びるので、本文の部分だけに置く）
+    vbar: HWND,
+    hbar: HWND,
+    /// 横のスクロールバーを出しているか
+    hbar_on: Cell<bool>,
     d2d: ID2D1Factory,
     dw: IDWriteFactory,
     format: IDWriteTextFormat,
@@ -537,6 +542,7 @@ impl App {
                         let (w, h) = (loword(lparam.0 as usize), hiword(lparam.0 as usize));
                         let _ = g.target.Resize(&D2D_SIZE_U { width: w, height: h });
                     }
+                    self.layout_scrollbars();
                     self.update_scrollbars();
                     self.invalidate();
                     (DONE, None)
@@ -681,7 +687,7 @@ impl App {
                 WM_VSCROLL if self.md_mode() == Some(mdview::MdMode::Design) => {
                     let code = SCROLLBAR_COMMAND(loword(wparam.0) as i32);
                     let mut si = SCROLLINFO { cbSize: size_of::<SCROLLINFO>() as u32, fMask: SIF_TRACKPOS, ..Default::default() };
-                    let _ = GetScrollInfo(self.hwnd, SB_VERT, &mut si);
+                    let _ = GetScrollInfo(self.vbar, SB_CTL, &mut si);
                     self.md_vscroll(code, si.nTrackPos);
                     (DONE, None)
                 }
@@ -697,7 +703,7 @@ impl App {
                         SB_BOTTOM => self.scroll_to(u64::MAX),
                         SB_THUMBTRACK | SB_THUMBPOSITION => {
                             let mut si = SCROLLINFO { cbSize: size_of::<SCROLLINFO>() as u32, fMask: SIF_TRACKPOS, ..Default::default() };
-                            let _ = GetScrollInfo(self.hwnd, SB_VERT, &mut si);
+                            let _ = GetScrollInfo(self.vbar, SB_CTL, &mut si);
                             let scale = self.scroll_scale();
                             self.scroll_to(si.nTrackPos as u64 * scale);
                         }
@@ -715,7 +721,7 @@ impl App {
                         SB_PAGERIGHT => self.hscroll_by((self.editor_w() - self.gutter_width()).max(self.char_w * 40.0)),
                         SB_THUMBTRACK | SB_THUMBPOSITION => {
                             let mut si = SCROLLINFO { cbSize: size_of::<SCROLLINFO>() as u32, fMask: SIF_TRACKPOS, ..Default::default() };
-                            let _ = GetScrollInfo(self.hwnd, SB_HORZ, &mut si);
+                            let _ = GetScrollInfo(self.hbar, SB_CTL, &mut si);
                             self.x_off = si.nTrackPos as f32;
                             self.update_scrollbars();
                             self.invalidate();
@@ -812,7 +818,7 @@ impl App {
                 WM_MBUTTONDOWN => {
                     let (x, y) = self.mouse_pos(lparam);
                     // タブを中ボタンでクリックしたら閉じる
-                    (DONE, if (-self.tab_h()..0.0).contains(&y) { self.tab_click(x, true) } else { None })
+                    (DONE, if (-self.chrome_h()..-self.tb_h()).contains(&y) { self.tab_click(x, true) } else { None })
                 }
                 WM_LBUTTONDBLCLK => {
                     let (x, y) = self.mouse_pos(lparam);
@@ -823,7 +829,7 @@ impl App {
                     if let Some(r) = self.chrome_press(x, y) {
                         return (DONE, r);
                     }
-                    if y < -self.tab_h() {
+                    if y >= -self.tb_h() && y < 0.0 {
                         return (DONE, None);
                     }
                     if y < 0.0 {
