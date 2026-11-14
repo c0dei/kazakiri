@@ -70,7 +70,7 @@ impl App {
         let d = self.col_drop.as_ref()?;
         let (bx0, bx1) = self.colpick_box()?;
         let w = self.client_size().0;
-        let row_h = self.ui_line_h + 10.0;
+        let row_h = self.ui_line_h + 12.0;
         let widest = d.items.iter().map(|(s, _)| unsafe { self.ui_text_width(&s.encode_utf16().collect::<Vec<_>>()) }.unwrap_or(0.0)).fold(0.0f32, f32::max);
         let width = (bx1 - bx0).max(widest + 56.0).min((w - 8.0).max(120.0));
         let x0 = bx0.min((w - width - 4.0).max(0.0));
@@ -185,12 +185,14 @@ impl App {
         let accent = theme::accent(self.settings.dark);
         unsafe {
             // 影・枠・面
-            brush.SetColor(&D2D1_COLOR_F { r: 0.0, g: 0.0, b: 0.0, a: 0.22 });
-            rt.FillRoundedRectangle(&rrect(r.x0 - 1.0, r.y0 + 2.0, r.x1 + 1.0, r.y1 + 4.0, 8.0), brush);
+            brush.SetColor(&D2D1_COLOR_F { r: 0.0, g: 0.0, b: 0.0, a: 0.14 });
+            rt.FillRoundedRectangle(&rrect(r.x0 - 2.0, r.y0 + 1.0, r.x1 + 2.0, r.y1 + 7.0, 11.0), brush);
+            brush.SetColor(&D2D1_COLOR_F { r: 0.0, g: 0.0, b: 0.0, a: 0.18 });
+            rt.FillRoundedRectangle(&rrect(r.x0 - 1.0, r.y0 + 2.0, r.x1 + 1.0, r.y1 + 4.0, 9.0), brush);
             brush.SetColor(&t.dim);
-            rt.FillRoundedRectangle(&rrect(r.x0 - 1.0, r.y0 - 1.0, r.x1 + 1.0, r.y1 + 1.0, 7.0), brush);
+            rt.FillRoundedRectangle(&rrect(r.x0 - 1.0, r.y0 - 1.0, r.x1 + 1.0, r.y1 + 1.0, 9.0), brush);
             brush.SetColor(&t.panel_head);
-            rt.FillRoundedRectangle(&rrect(r.x0, r.y0, r.x1, r.y1, 6.0), brush);
+            rt.FillRoundedRectangle(&rrect(r.x0, r.y0, r.x1, r.y1, 8.0), brush);
             rt.PushAxisAlignedClip(&rect(r.x0, r.y0 + 4.0, r.x1, r.y1 - 4.0), D2D1_ANTIALIAS_MODE_ALIASED);
             for k in 0..r.rows {
                 let i = d.top + k;
@@ -205,8 +207,13 @@ impl App {
                     brush.SetColor(&accent);
                     rt.FillRoundedRectangle(&rrect(r.x0 + 6.0, y + 7.0, r.x0 + 9.0, y + r.row_h - 7.0, 1.5), brush);
                 }
-                brush.SetColor(if target.is_none() { &t.gutter_text } else { &t.text });
+                brush.SetColor(&t.text);
                 self.draw_ui_str(rt, brush, label, r.x0 + 18.0, y + (r.row_h - self.ui_line_h) / 2.0, r.x1 - 10.0)?;
+                // 先頭の項目（列ではなく設定）と列の間に、細い区切り線
+                if target.is_none() {
+                    brush.SetColor(&t.dim);
+                    rt.FillRectangle(&rect(r.x0 + 10.0, y + r.row_h - 0.5, r.x1 - 10.0, y + r.row_h + 0.5), brush);
+                }
             }
             rt.PopAxisAlignedClip();
             // スクロールの印

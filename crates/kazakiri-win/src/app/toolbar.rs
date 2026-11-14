@@ -462,21 +462,23 @@ impl App {
                 brush.SetColor(&t.text);
                 self.draw_ui_str(rt, brush, label, x0 + 9.0, (h - self.ui_line_h) / 2.0, x1)?;
             }
-            // CSV 表示のあいだ、並べ替え・列フィルタの対象の列を、ドロップダウンの形で見せる（押すと列の一覧）
+            // CSV 表示のあいだ、並べ替え・列フィルタの対象の列を、ドロップダウンの形で見せる（押すと列の一覧が欄の下に開く）
             if let (Some(label), Some((x0, x1))) = (self.colpick_label(), self.colpick_box()) {
+                let open = self.col_drop.is_some();
                 let hovered = self.hover == Some(Hover::ColPick);
-                brush.SetColor(if hovered { &t.panel_head } else { &t.bg });
-                rt.FillRoundedRectangle(&rrect(x0, 3.0, x1, h - 3.0, 4.0), brush);
-                brush.SetColor(&t.dim);
-                rt.DrawRoundedRectangle(&rrect(x0 + 0.5, 3.5, x1 - 0.5, h - 3.5, 4.0), brush, 1.0, None);
+                // 枠：開いているあいだはアクセントカラー
+                brush.SetColor(if open { &theme::accent(self.settings.dark) } else { &t.dim });
+                rt.FillRoundedRectangle(&rrect(x0, 2.0, x1, h - 2.0, 6.0), brush);
+                brush.SetColor(if hovered || open { &t.panel_head } else { &t.bg });
+                rt.FillRoundedRectangle(&rrect(x0 + 1.0, 3.0, x1 - 1.0, h - 3.0, 5.0), brush);
                 brush.SetColor(&t.text);
-                self.draw_ui_str(rt, brush, &label, x0 + 9.0, (h - self.ui_line_h) / 2.0, x1 - 22.0)?;
-                // ▼
+                self.draw_ui_str(rt, brush, &label, x0 + 10.0, (h - self.ui_line_h) / 2.0, x1 - 26.0)?;
+                // ⌄（開いているときは ⌃）
                 let (cx, cy) = (x1 - 14.0, h / 2.0);
-                for k in 0..3 {
-                    let d = 4.0 - k as f32 * 1.4;
-                    rt.FillRectangle(&rect(cx - d, cy - 1.0 + k as f32 * 1.4, cx + d, cy + 0.4 + k as f32 * 1.4), brush);
-                }
+                let dy = if open { 1.5 } else { -1.5 };
+                brush.SetColor(&t.gutter_text);
+                rt.DrawLine(Vector2 { X: cx - 4.0, Y: cy + dy - if open { 0.0 } else { 0.0 } }, Vector2 { X: cx, Y: cy - dy }, brush, 1.4, None);
+                rt.DrawLine(Vector2 { X: cx, Y: cy - dy }, Vector2 { X: cx + 4.0, Y: cy + dy }, brush, 1.4, None);
             }
             brush.SetColor(&t.dim);
             rt.FillRectangle(&rect(0.0, h - 1.0, w, h), brush);
