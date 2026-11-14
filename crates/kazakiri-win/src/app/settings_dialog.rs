@@ -89,6 +89,10 @@ struct Row {
     title: &'static str,
     desc: &'static str,
     toggle: Option<i32>,
+    /// 行の高さ（DIP）
+    h: i32,
+    /// フォントの見え方を見せる行
+    preview: bool,
 }
 
 /// ダイアログの配色（Windows 11 の設定アプリに合わせた、背景・カード・文字・アクセント）
@@ -518,7 +522,7 @@ unsafe fn create(owner: HWND) {
         // 1 行（カード）を足す。戻り値は、その行の上端（ダイアログ内の座標）。検索用に、題と説明も覚える
         let card = |rows: &mut Vec<Row>, page: usize, idx: i32, title: &'static str, desc: &'static str, toggle: Option<i32>| -> i32 {
             let y = idx * (ROW_H + ROW_GAP);
-            rows.push(Row { page, y, title, desc, toggle });
+            rows.push(Row { page, y, title, desc, toggle, h: ROW_H, preview: false });
             PAGE_Y + y
         };
         // 入力欄の縦の位置（カードの中で縦中央）
@@ -526,7 +530,7 @@ unsafe fn create(owner: HWND) {
         let right = PAGE_X + CARD_W - 16;
         let flat = WS_BORDER.0;
         put(ALL, ID_SEARCH, w!("EDIT"), "", edit | flat, 0, 12, 14, 156, 26);
-        put(ALL, ID_CATS, w!("LISTBOX"), "", (LBS_NOTIFY as u32) | WS_TABSTOP.0 | WS_VSCROLL.0 | flat, 0, 12, 48, 156, 380);
+        put(ALL, ID_CATS, w!("LISTBOX"), "", (LBS_NOTIFY as u32) | (LBS_OWNERDRAWFIXED as u32) | (LBS_HASSTRINGS as u32) | WS_TABSTOP.0, 0, 12, 52, 164, 420);
         put(ALL, ID_TITLE, w!("STATIC"), "", 0, 0, PAGE_X, 12, 480, 34);
         // 基本
         card(&mut rows, 0, 0, "長い行を折り返して表示", "画面の幅で折り返す（文字単位）", Some(ID_WRAP));
@@ -547,6 +551,8 @@ unsafe fn create(owner: HWND) {
         put(2, ID_UIFONT, w!("EDIT"), "", edit | flat, 0, right - 60 - 8 - 72 - 8 - 150, mid(y, 26), 150, 26);
         put(2, ID_UIFONT_PICK, w!("BUTTON"), "選択...", push, 0, right - 60 - 8 - 72, mid(y, 28), 72, 28);
         put(2, ID_UISIZE, w!("EDIT"), "", edit | ES_NUMBER as u32 | flat, 0, right - 60, mid(y, 26), 60, 26);
+        // フォントの見え方（設定を変えると、すぐ変わる）
+        rows.push(Row { page: 2, y: 4 * (ROW_H + ROW_GAP), title: "プレビュー", desc: "", toggle: None, h: 92, preview: true });
         // 表示
         card(&mut rows, 3, 0, "空白・タブ・改行を表示", "印で見えるようにする（Ctrl+Shift+W）", Some(ID_WS));
         card(&mut rows, 3, 1, "ログの色分け", "ERROR / WARN などに色を付ける", Some(ID_LOG));
@@ -615,6 +621,7 @@ unsafe fn create(owner: HWND) {
         CTRLS.with(|c| *c.borrow_mut() = Some(Ctrls { rows, toggles: HashMap::new(), all, pages, visible: Vec::new(), cur: 0 }));
         fill_cats("");
         SET_DLG.store(dlg.0 as isize, Ordering::Relaxed);
+        SendMessageW(ctl(ID_CATS), LB_SETITEMHEIGHT, Some(WPARAM(0)), Some(LPARAM(p(40) as isize)));
         // クライアント領域を 720 × 566 に
         let style = WINDOW_STYLE(GetWindowLongW(dlg, GWL_STYLE) as u32);
         let mut rc = RECT { left: 0, top: 0, right: p(720), bottom: p(566) };
@@ -632,6 +639,108 @@ unsafe fn font_lf(font: HFONT) -> LOGFONTW {
     lf
 }
 
+/// フォントの見え方（本文のフォントと大きさで、構文・ログの色の例を描く）
+unsafe fn draw_preview(hdc: HDC, x: i32, y: i32, h: i32, scale: f32, pal: &Pal) {
+    let Some((face, size)) = with_app(|a| (a.settings.font.clone(), a.settings.font_size)) else { return };
+    let face = if face.is_empty() { "BIZ UDGothic".to_string() } else { face };
+    let t = if DARK.load(Ordering::Relaxed) { &super::theme::DARK } else { &super::theme::LIGHT };
+    unsafe {
+        let wface = wide(&face);
+        let mut name = [0u16; 32];
+        for (i, c) in wface.iter().take(31).enumerate() {
+            name[i] = *c;
+        }
+        let lf = LOGFONTW { lfHeight: -((size * scale).round() as i32), lfCharSet: windows::Win32::Graphics::Gdi::DEFAULT_CHARSET, lfFaceName: name, ..Default::default() };
+        let font = CreateFontIndirectW(&lf);
+        let old = SelectObject(hdc, font.into());
+        SetBkMode(hdc, TRANSPARENT);
+        let mut tm = TEXTMETRICW::default();
+        let _ = GetTextMetricsW(hdc, &mut tm);
+        let lh = tm.tmHeight.max(12) + 2;
+        // 見出し（小さく）
+        let y0 = y + (h - lh * 2) / 2;
+        let runs: [&[(&str, &D2D1_COLOR_F)]; 2] = [
+            &[("SELECT", &t.syn_kw), (" id, name ", &t.text), ("FROM", &t.syn_kw), (" users ", &t.text), ("WHERE", &t.syn_kw), (" status = ", &t.text), ("'active'", &t.syn_str), (";", &t.text)],
+            &[("ERROR", &t.log_error), (" 接続できません　", &t.text), ("WARN", &t.log_warn), (" 再試行 1/3　", &t.text), ("12345", &t.syn_num)],
+        ];
+        let _ = pal;
+        for (row, line) in runs.iter().enumerate() {
+            let mut cx = x;
+            for (text, color) in line.iter() {
+                SetTextColor(hdc, rgb_ref(color));
+                let mut u: Vec<u16> = text.encode_utf16().collect();
+                let mut rc = RECT { left: cx, top: y0 + row as i32 * lh, right: cx + 2000, bottom: y0 + row as i32 * lh + lh };
+                DrawTextW(hdc, &mut u, &mut rc, DT_LEFT | DT_SINGLELINE | DT_NOPREFIX | DT_NOCLIP);
+                let mut sz = windows::Win32::Foundation::SIZE::default();
+                let _ = GetTextExtentPoint32W(hdc, &u, &mut sz);
+                cx += sz.cx;
+            }
+        }
+        SelectObject(hdc, old);
+        let _ = DeleteObject(font.into());
+    }
+}
+
+/// 左の分類の 1 行：アイコン・名前、選んでいる行は左にアクセントカラーの帯
+unsafe fn draw_cat_item(di: &DRAWITEMSTRUCT) {
+    const ICONS: [&str; 9] = ["\u{E713}", "\u{E8CB}", "\u{E790}", "\u{E890}", "\u{E721}", "\u{E74E}", "\u{E823}", "\u{E8A5}", "\u{E765}"];
+    let p = pal();
+    let hdc = di.hDC;
+    let rc = di.rcItem;
+    let Some(cat) = CTRLS.with(|c| c.borrow().as_ref().and_then(|ct| ct.visible.get(di.itemID as usize).copied())) else {
+        unsafe {
+            let b = CreateSolidBrush(rgb_ref(&p.bg));
+            FillRect(hdc, &rc, b);
+            let _ = DeleteObject(b.into());
+        }
+        return;
+    };
+    let scale = unsafe { GetDpiForWindow(di.hwndItem) }.max(96) as f32 / 96.0;
+    let px = |v: f32| (v * scale).round() as i32;
+    let selected = di.itemState.0 & ODS_SELECTED.0 != 0;
+    unsafe {
+        let bg = CreateSolidBrush(rgb_ref(&p.bg));
+        FillRect(hdc, &rc, bg);
+        let _ = DeleteObject(bg.into());
+        if selected {
+            let sel = CreateSolidBrush(rgb_ref(&p.cardb));
+            let pen = GetStockObject(NULL_PEN);
+            let (ob, op) = (SelectObject(hdc, sel.into()), SelectObject(hdc, pen));
+            let _ = RoundRect(hdc, rc.left + px(2.0), rc.top + px(2.0), rc.right - px(2.0), rc.bottom - px(2.0), px(8.0), px(8.0));
+            SelectObject(hdc, ob);
+            SelectObject(hdc, op);
+            let _ = DeleteObject(sel.into());
+            let acc = CreateSolidBrush(rgb_ref(&p.acc));
+            let bar = RECT { left: rc.left + px(2.0), top: rc.top + px(11.0), right: rc.left + px(5.0), bottom: rc.bottom - px(11.0) };
+            FillRect(hdc, &bar, acc);
+            let _ = DeleteObject(acc.into());
+        }
+        SetBkMode(hdc, TRANSPARENT);
+        // アイコン（Segoe Fluent Icons。なければ Segoe MDL2 Assets）
+        let mut name = [0u16; 32];
+        for (i, c) in "Segoe Fluent Icons".encode_utf16().enumerate() {
+            name[i] = c;
+        }
+        let lf = LOGFONTW { lfHeight: -px(16.0), lfCharSet: windows::Win32::Graphics::Gdi::DEFAULT_CHARSET, lfFaceName: name, ..Default::default() };
+        let icon_font = CreateFontIndirectW(&lf);
+        let old = SelectObject(hdc, icon_font.into());
+        SetTextColor(hdc, rgb_ref(if selected { &p.acc } else { &p.dim }));
+        let mut g: Vec<u16> = ICONS[cat.min(8)].encode_utf16().collect();
+        let mut r = RECT { left: rc.left + px(16.0), top: rc.top, right: rc.left + px(36.0), bottom: rc.bottom };
+        DrawTextW(hdc, &mut g, &mut r, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+        SelectObject(hdc, old);
+        let _ = DeleteObject(icon_font.into());
+        // 名前
+        let font = HFONT(UI_FONT.load(Ordering::Relaxed) as *mut _);
+        let old = SelectObject(hdc, font.into());
+        SetTextColor(hdc, rgb_ref(&p.text));
+        let mut t: Vec<u16> = CATS[cat].encode_utf16().collect();
+        let mut r = RECT { left: rc.left + px(44.0), top: rc.top, right: rc.right - px(8.0), bottom: rc.bottom };
+        DrawTextW(hdc, &mut t, &mut r, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
+        SelectObject(hdc, old);
+    }
+}
+
 /// カード・スイッチ・文字を、背景として描く（子ウィンドウの部品は、この上に重なる）
 unsafe fn paint_bg(hwnd: HWND, hdc: HDC) {
     thread_local! {
@@ -644,7 +753,7 @@ unsafe fn paint_bg(hwnd: HWND, hdc: HDC) {
         let pal = pal();
         let (rows, toggles) = CTRLS.with(|c| {
             c.borrow().as_ref().map_or((Vec::new(), HashMap::new()), |ct| {
-                (ct.rows.iter().filter(|r| r.page == ct.cur).map(|r| (r.y, r.title, r.desc, r.toggle)).collect::<Vec<_>>(), ct.toggles.clone())
+                (ct.rows.iter().filter(|r| r.page == ct.cur).map(|r| (r.y, r.title, r.desc, r.toggle, r.h, r.preview)).collect::<Vec<_>>(), ct.toggles.clone())
             })
         });
         let factory = FACTORY.with(|f| {
@@ -669,9 +778,9 @@ unsafe fn paint_bg(hwnd: HWND, hdc: HDC) {
                     rt.BeginDraw();
                     rt.Clear(Some(&pal.bg));
                     if let Ok(brush) = rt.CreateSolidColorBrush(&pal.card, None) {
-                        for &(y, _, _, toggle) in &rows {
+                        for &(y, _, _, toggle, rh, _) in &rows {
                             let (x0, y0) = (px(PAGE_X), px(PAGE_Y + y));
-                            let (x1, y1) = (x0 + px(CARD_W), y0 + px(ROW_H));
+                            let (x1, y1) = (x0 + px(CARD_W), y0 + px(rh));
                             brush.SetColor(&pal.cardb);
                             rt.FillRoundedRectangle(&rrect(x0, y0, x1, y1, px(8)), &brush);
                             brush.SetColor(&pal.card);
@@ -711,7 +820,11 @@ unsafe fn paint_bg(hwnd: HWND, hdc: HDC) {
             let _ = GetTextMetricsW(hdc, &mut tm);
             tm.tmHeight.max(12)
         };
-        for &(y, title, desc, toggle) in &rows {
+        for &(y, title, desc, toggle, rh, preview) in &rows {
+            if preview {
+                draw_preview(hdc, px(PAGE_X + 16) as i32, px(PAGE_Y + y) as i32, px(rh) as i32, scale, pal);
+                continue;
+            }
             let x0 = px(PAGE_X + 16) as i32;
             let y0 = px(PAGE_Y + y) as i32;
             let (ty, dy) = if desc.is_empty() { (y0 + (px(ROW_H) as i32 - lh) / 2, 0) } else { (y0 + px(10) as i32, y0 + px(10) as i32 + lh + px(2) as i32) };
@@ -766,6 +879,10 @@ unsafe extern "system" fn dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
             WM_DRAWITEM => {
                 // カードの上に重ねた透明なボタン：フォーカスがあるときだけ、枠を描く（ないときはカードの色で消す）
                 let di = &*(lparam.0 as *const DRAWITEMSTRUCT);
+                if di.CtlType == ODT_LISTBOX {
+                    draw_cat_item(di);
+                    return LRESULT(1);
+                }
                 let p = pal();
                 let focused = di.itemState.0 & ODS_FOCUS.0 != 0;
                 let brush = CreateSolidBrush(rgb_ref(if focused { &p.acc } else { &p.card }));
@@ -776,7 +893,12 @@ unsafe extern "system" fn dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
             WM_CTLCOLORDLG | WM_CTLCOLORSTATIC | WM_CTLCOLORBTN | WM_CTLCOLOREDIT | WM_CTLCOLORLISTBOX => {
                 let hdc = HDC(wparam.0 as *mut _);
                 let (p, i) = (pal(), DARK.load(Ordering::Relaxed) as usize);
-                if msg == WM_CTLCOLOREDIT || msg == WM_CTLCOLORLISTBOX {
+                if msg == WM_CTLCOLORLISTBOX {
+                    SetTextColor(hdc, rgb_ref(&p.text));
+                    SetBkColor(hdc, rgb_ref(&p.bg));
+                    return LRESULT(BG_BRUSH[i].load(Ordering::Relaxed));
+                }
+                if msg == WM_CTLCOLOREDIT {
                     let bg = if i == 1 { rgb(0x1f, 0x1f, 0x1f) } else { rgb(0xff, 0xff, 0xff) };
                     SetTextColor(hdc, rgb_ref(&p.text));
                     SetBkColor(hdc, rgb_ref(&bg));
