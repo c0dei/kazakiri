@@ -90,6 +90,8 @@ pub(super) enum Effect {
     LogDebug,
     /// 構文の色分け
     Syn(kazakiri_core::syntax::Kind),
+    /// 固定した見出し行の、対象の列（アクセントカラー）
+    Target,
 }
 
 /// ログレベルの語（単語として現れたもの）を探す。戻り値は UTF-16 の位置
@@ -463,6 +465,12 @@ impl App {
             rt.PushAxisAlignedClip(&rect(gutter, 0.0, w, self.line_h), D2D1_ANTIALIAS_MODE_ALIASED);
             let disp = self.display(&line);
             let layout = self.dw.CreateTextLayout(&disp.units, &self.format, 1.0e6, self.line_h)?;
+            // 並べ替え・列フィルタの対象の列は、見出しをアクセントカラーで
+            if let (Some((col, _, _)), Some(g)) = (self.target_column(), self.gfx.as_ref()) {
+                if let Some(&(a, b)) = disp.cols.get(col) {
+                    let _ = layout.SetDrawingEffect(g.brush_for(Effect::Target), DWRITE_TEXT_RANGE { startPosition: a, length: b.saturating_sub(a) });
+                }
+            }
             let entry = CachedLine { end: line.end, generation: 0, layout, disp };
             self.draw_line(rt, brush, &line, &entry, self.text_left(), 0.0)?;
             rt.PopAxisAlignedClip();

@@ -157,6 +157,12 @@ impl App {
         if i < MD_FROM { self.csv_context() } else { self.md_context() && i > MD_FROM }
     }
 
+    /// 「対象の列」の欄の左に出す、小さな題の幅
+    fn colpick_title_w(&self) -> f32 {
+        let units: Vec<u16> = "対象の列".encode_utf16().collect();
+        unsafe { self.ui_text_width(&units) }.unwrap_or(48.0) + 8.0
+    }
+
     /// モードバーのボタンの位置 (x0, x1, 番号) と、「対象の列」ドロップダウンの位置 (x0, x1)。
     /// ドロップダウンは、並べ替え・列フィルタのボタンの直前に置く
     fn mode_layout(&self) -> (Vec<(f32, f32, usize)>, Option<(f32, f32)>) {
@@ -175,6 +181,8 @@ impl App {
                 Some((label, id, _)) => {
                     if *id == menu::ID_SORT_ASC {
                         if let Some(w) = pick_w {
+                            // 小さな題「対象の列」のあとに、欄
+                            x += self.colpick_title_w();
                             pick = Some((x, x + w));
                             x += w + 8.0;
                         }
@@ -200,7 +208,7 @@ impl App {
     fn colpick_label(&self) -> Option<String> {
         let (col, _, name) = self.target_column()?;
         let follow = self.csv.as_ref().is_some_and(|v| v.target.is_none());
-        Some(format!("対象の列: {}{}{}", col + 1, if name.is_empty() { String::new() } else { format!(": {name}") }, if follow { "（カーソル）" } else { "" }))
+        Some(format!("{}{}{}", col + 1, if name.is_empty() { String::new() } else { format!(": {name}") }, if follow { "（カーソル）" } else { "" }))
     }
 
     /// 「対象の列」の欄の左下（画面の座標）。ドロップダウンの一覧をここから開く
@@ -512,6 +520,8 @@ impl App {
             }
             // CSV 表示のあいだ、並べ替え・列フィルタの対象の列を、ドロップダウンの形で見せる（押すと列の一覧が欄の下に開く）
             if let (Some(label), Some((x0, x1))) = (self.colpick_label(), self.colpick_box()) {
+                brush.SetColor(&t.gutter_text);
+                self.draw_ui_str(rt, brush, "対象の列", x0 - self.colpick_title_w() + 2.0, (h - self.ui_line_h) / 2.0, x0)?;
                 let open = self.col_drop.is_some();
                 let hovered = self.hover == Some(Hover::ColPick);
                 // 枠：開いているあいだはアクセントカラー

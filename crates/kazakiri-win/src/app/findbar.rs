@@ -19,7 +19,89 @@ fn inside(r: R4, x: f32, y: f32) -> bool {
     x >= r.0 && x < r.2 && y >= r.1 && y < r.3
 }
 
+/// 列フィルタの演算子のチップ（演算子, 表示）
+const FILTER_OPS: [(&str, &str); 10] = [("=", "="), ("!=", "!="), (":", ": 含む"), ("~", "~ 正規表現"), (">", ">"), (">=", ">="), ("<", "<"), ("<=", "<="), ("empty", "empty"), ("!empty", "!empty")];
+
 impl App {
+    /// 列フィルタのカードに足す、演算子のチップの行の高さ
+    pub(super) fn filter_chip_row_h(&self) -> f32 {
+        if self.prompt == Some(Prompt::ColumnFilter) { self.ui_line_h + 16.0 } else { 0.0 }
+    }
+
+    /// 列フィルタの演算子のチップの位置。(位置, 演算子, 表示)
+    fn filter_chips(&self) -> Vec<(R4, &'static str, &'static str)> {
+        if self.prompt != Some(Prompt::ColumnFilter) {
+            return Vec::new();
+        }
+        let (cx0, _, cx1, _) = self.prompt_card();
+        let (_, _, _, iy1) = self.prompt_input_rect();
+        let (y0, h) = (iy1 + 8.0, self.ui_line_h + 8.0);
+        let mut x = cx0 + 14.0;
+        let mut out = Vec::new();
+        for (op, label) in FILTER_OPS {
+            let units: Vec<u16> = label.encode_utf16().collect();
+            let w = unsafe { self.ui_text_width(&units) }.unwrap_or(40.0) + 18.0;
+            if x + w > cx1 - 10.0 {
+                break;
+            }
+            out.push(((x, y0, x + w, y0 + h), op, label));
+            x += w + 6.0;
+        }
+        out
+    }
+
+    /// 入力欄の、いまの演算子（列フィルタ）
+    fn filter_input_op(&self) -> Option<&'static str> {
+        let t = self.input.trim();
+        let rest = t[t.find(|c: char| !c.is_ascii_digit()).unwrap_or(t.len())..].trim_start();
+        ["!empty", "empty", ">=", "<=", "!=", "=", ":", "~", ">", "<"].into_iter().find(|op| rest.starts_with(op))
+    }
+
+    /// 入力欄の演算子を差し替える（「3 = ERROR」の「=」だけを変える）
+    fn set_filter_op(&mut self, op: &str) {
+        let t = self.input.trim().to_string();
+        let split = t.find(|c: char| !c.is_ascii_digit()).unwrap_or(t.len());
+        let col = if split == 0 { self.target_column().map_or(1, |(c, _, _)| c + 1).to_string() } else { t[..split].to_string() };
+        let rest = t[split..].trim_start();
+        let value = ["!empty", "empty", ">=", "<=", "!=", "=", ":", "~", ">", "<"].into_iter().find_map(|o| rest.strip_prefix(o)).unwrap_or(rest).trim();
+        self.input = if matches!(op, "empty" | "!empty") { format!("{col} {op}") } else { format!("{col} {op} {value}").trim_end().to_string() + if value.is_empty() { " " } else { "" } };
+        self.invalidate();
+    }
+
+    /// 列フィルタのカードのクリック。カードの上なら true
+    pub(super) fn prompt_chip_click(&mut self, x: f32, y: f32) -> bool {
+        if self.prompt != Some(Prompt::ColumnFilter) || !inside(self.prompt_card(), x, y) {
+            return false;
+        }
+        if let Some(&(_, op, _)) = self.filter_chips().iter().find(|(r, _, _)| inside(*r, x, y)) {
+            self.set_filter_op(op);
+        }
+        true
+    }
+
+    /// 列フィルタの演算子のチップを描く
+    pub(super) unsafe fn draw_filter_chips(&self, rt: &ID2D1RenderTarget, brush: &ID2D1SolidColorBrush) -> Result<()> {
+        let t = self.theme;
+        let cur = self.filter_input_op();
+        let accent = theme::accent(self.settings.dark);
+        unsafe {
+            for ((x0, y0, x1, y1), op, label) in self.filter_chips() {
+                if Some(op) == cur {
+                    brush.SetColor(&t.panel_sel);
+                    rt.FillRoundedRectangle(&rrect(x0, y0, x1, y1, 5.0), brush);
+                    brush.SetColor(&accent);
+                    rt.DrawRoundedRectangle(&rrect(x0 + 0.5, y0 + 0.5, x1 - 0.5, y1 - 0.5, 5.0), brush, 1.0, None);
+                } else {
+                    brush.SetColor(&t.dim);
+                    rt.DrawRoundedRectangle(&rrect(x0 + 0.5, y0 + 0.5, x1 - 0.5, y1 - 0.5, 5.0), brush, 1.0, None);
+                }
+                brush.SetColor(&t.text);
+                self.draw_ui_str(rt, brush, label, x0 + 9.0, y0 + (y1 - y0 - self.ui_line_h) / 2.0, x1)?;
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn find_layout(&self) -> FindLayout {
         let w = self.client_size().0;
         let cw = (w - 40.0).clamp(360.0, 640.0).min(w);
@@ -56,6 +138,9 @@ impl App {
         self.prompt?;
         if !inside(self.prompt_card(), x, y) {
             return None;
+        }
+        if self.filter_chips().iter().any(|(r, _, _)| inside(*r, x, y)) {
+            return Some(IDC_HAND);
         }
         if self.is_find_bar() {
             let l = self.find_layout();

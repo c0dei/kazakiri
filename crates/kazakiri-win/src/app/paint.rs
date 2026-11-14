@@ -33,6 +33,7 @@ impl App {
                 mk(&t.syn_comment)?,
                 mk(&t.syn_tag)?,
                 mk(&t.syn_key)?,
+                mk(&theme::accent(self.settings.dark))?,
             ];
             let md = vec![mk(&theme::accent(self.settings.dark))?, mk(&t.syn_tag)?, mk(&t.syn_str)?, mk(&t.syn_num)?, mk(&t.syn_kw)?, mk(&t.syn_comment)?, mk(&t.syn_tag)?, mk(&t.syn_key)?];
             self.gfx = Some(Gfx { target, brush, effects, md });
@@ -56,6 +57,8 @@ impl App {
             }
             if !self.message.is_empty() && self.message != self.last_message {
                 self.last_message = self.message.clone();
+                self.message_at = Instant::now();
+                SetTimer(Some(self.hwnd), TIMER_MSG, MESSAGE_SECS * 1000 + 200, None);
             }
             self.ensure_gfx()?;
             // スクロールバーの出し入れなどでクライアント領域の大きさが変わっても WM_SIZE が来ないことがあるので、毎回合わせる
@@ -466,9 +469,21 @@ impl App {
                     let dir = if job.dir == Direction::Forward { "↓" } else { "↑" };
                     format!("検索中{dir}{flags} 「{}」 {:.0}%  {:.1} 秒  (Esc で中止)", self.last_find, pct.min(100.0), job.started.elapsed().as_secs_f64())
                 }
-                None => self.message.clone(),
+                None if !self.message.is_empty() && self.message_at.elapsed().as_secs() < MESSAGE_SECS as u64 => self.message.clone(),
+                None => self.doc_summary(),
             },
         }
+    }
+
+    /// ステータスバーの左に出す、ファイルの概要（行数・CSV なら列数）
+    fn doc_summary(&self) -> String {
+        let Some(doc) = self.doc.as_ref() else { return String::new() };
+        let (lines, exact) = doc.line_count();
+        let mut s = format!("{}{} 行", if exact { "" } else { "約" }, group(lines));
+        if let Some((_, cols, _)) = self.csv.as_ref().and_then(|_| self.target_column()) {
+            s.push_str(&format!(" · {cols} 列"));
+        }
+        s
     }
 
     /// 入力欄のカード（本文の右上に浮かせる）の位置。(x0, y0, x1, y1)。ツールバーとタブバーを除いた座標
@@ -479,7 +494,7 @@ impl App {
         let w = self.client_size().0;
         let cw = (w - 40.0).clamp(280.0, 560.0).min(w);
         let (x0, y0) = ((w - cw - 20.0).max(0.0), self.pin_h() + 10.0);
-        (x0, y0, x0 + cw, y0 + 14.0 + self.ui_line_h * 3.0 + 14.0 + 10.0 + 6.0)
+        (x0, y0, x0 + cw, y0 + 14.0 + self.ui_line_h * 3.0 + 14.0 + 10.0 + 6.0 + self.filter_chip_row_h())
     }
 
     /// 入力欄（カードの中の入力の枠）の位置。(x0, y0, x1, y1)
@@ -514,7 +529,7 @@ impl App {
             Prompt::ColumnFilter => {
                 let names: Vec<String> = self.csv_column_names(12).iter().enumerate().map(|(i, n)| format!("{}:{n}", i + 1)).collect();
                 let cols = if names.is_empty() { String::new() } else { format!("　列 {}", names.join("  ")) };
-                ("列フィルタ".to_string(), format!("「列番号 演算子 値」で入力して Enter。演算子: = != : ~ > < >= <= empty（例: 3 = ERROR / 2 : 語 / 4 >= 100）{cols}"))
+                ("列フィルタ".to_string(), format!("「列番号 演算子 値」の形で、演算子は上のチップでも選べます（例: 3 = ERROR / 4 >= 100）。Enter で絞り込み{cols}"))
             }
         };
         let (cx0, cy0, cx1, cy1) = self.prompt_card();
@@ -537,9 +552,10 @@ impl App {
             // 説明（2 行まで折り返す）
             let hint_units: Vec<u16> = hint.encode_utf16().collect();
             brush.SetColor(&t.gutter_text);
-            rt.DrawText(&hint_units, &self.ui_format, &rect(cx0 + 14.0, iy1 + 8.0, cx1 - 14.0, cy1 - 4.0), brush, D2D1_DRAW_TEXT_OPTIONS_CLIP, DWRITE_MEASURING_MODE_NATURAL);
+            rt.DrawText(&hint_units, &self.ui_format, &rect(cx0 + 14.0, iy1 + 8.0 + self.filter_chip_row_h(), cx1 - 14.0, cy1 - 4.0), brush, D2D1_DRAW_TEXT_OPTIONS_CLIP, DWRITE_MEASURING_MODE_NATURAL);
             // 入力欄
             self.draw_field(rt, brush, (ix0, iy0, ix1, iy1), &self.input, true)?;
+            self.draw_filter_chips(rt, brush)?;
         }
         Ok(())
     }

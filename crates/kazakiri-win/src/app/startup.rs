@@ -69,6 +69,7 @@ pub(super) unsafe fn run_inner() -> std::result::Result<(), (&'static str, windo
             hover: None,
             filter_pending: false,
             last_message: String::new(),
+            message_at: Instant::now(),
             open_dir: None,
             diff_ign_edge: false,
             diff_ign_case: false,

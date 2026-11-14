@@ -102,6 +102,10 @@ const TIMER_FOLLOW: usize = 3;
 const TIMER_TIP: usize = 4;
 /// 自動保存
 const TIMER_AUTOSAVE: usize = 6;
+/// ステータスバーのメッセージを、しばらくしたら行数・列数の表示に戻す
+const TIMER_MSG: usize = 7;
+/// メッセージを出しておく秒数
+const MESSAGE_SECS: u32 = 6;
 /// 長い行の横スクロールで取り出す窓の大きさの上限（バイト）。描画の上限（8192 UTF-16 単位）に収まる大きさ
 const LONG_LINE_WINDOW: usize = 8000;
 /// 検索スレッドからの完了通知
@@ -197,6 +201,7 @@ impl Gfx {
             Effect::Syn(Kind::Comment) => 7,
             Effect::Syn(Kind::Tag) => 8,
             Effect::Syn(Kind::Key) => 9,
+            Effect::Target => 10,
         }]
     }
 }
@@ -269,6 +274,8 @@ struct App {
     filter_pending: bool,
     /// 最後に表示したメッセージ（トレイの「最後のメッセージを表示」用）
     last_message: String,
+    /// メッセージを出した時刻（一定時間たったら、ステータスバーを行数・列数の表示に戻す）
+    message_at: Instant,
     /// 「最近使ったフォルダー」から開くとき、開くダイアログの初めのフォルダー
     open_dir: Option<PathBuf>,
     /// 比較のオプション（行頭・行末の空白を無視／大文字小文字を無視）と、分割表示の同期スクロール、CSV の列を A,B,C で表示
@@ -562,6 +569,11 @@ impl App {
                     self.autosave_tick();
                     (DONE, None)
                 }
+                WM_TIMER if wparam.0 == TIMER_MSG => {
+                    let _ = KillTimer(Some(self.hwnd), TIMER_MSG);
+                    self.invalidate();
+                    (DONE, None)
+                }
                 WM_TIMER if wparam.0 == TIMER_TIP => {
                     let _ = KillTimer(Some(self.hwnd), TIMER_TIP);
                     self.show_tip();
@@ -760,6 +772,9 @@ impl App {
                     if self.find_bar_click(x, y) {
                         return (DONE, None);
                     }
+                    if self.prompt_chip_click(x, y) {
+                        return (DONE, None);
+                    }
                     if self.md_hit(x, y) {
                         return (DONE, self.md_click(x, y));
                     }
@@ -807,7 +822,7 @@ impl App {
                         return (DONE, None);
                     }
                     // 検索・置換バーの上は、素早い 2 回目のクリックも 1 回目と同じ操作（本文の単語選択にしない）
-                    if self.find_bar_click(x, y) {
+                    if self.find_bar_click(x, y) || self.prompt_chip_click(x, y) {
                         return (DONE, None);
                     }
                     if y < self.pin_h() {
