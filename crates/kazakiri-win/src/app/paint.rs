@@ -202,6 +202,7 @@ impl App {
             rt.SetTransform(&Matrix3x2::translation(0.0, self.chrome_h()));
             self.draw_panel(&rt, brush, w, text_h + pin)?;
             self.draw_status(&rt, brush, w, h)?;
+            self.draw_prompt_bar(&rt, brush, w, h)?;
             rt.SetTransform(&Matrix3x2::identity());
             self.draw_tip(&rt, brush, w)?;
             rt.EndDraw(None, None)
@@ -432,10 +433,8 @@ impl App {
             if self.opts.regex { "[.*]" } else { "" }
         );
         match self.prompt {
-            Some(Prompt::GotoLine) => format!("行番号へ移動: {}|", self.input),
-            Some(Prompt::Sequence) => format!("連番を挿入（開始値,増分,桁数。例: 1,1,3 → 001, 002…）: {}|  Enter:実行 Esc:取消", self.input),
-            Some(Prompt::Split) => format!("ファイルを分割（1 ファイルの行数、またはサイズ。例: 1000000 / 512MB / 2GB）: {}|  Enter:実行 Esc:取消", self.input),
-            Some(Prompt::ColumnFilter) => format!("列フィルタ: {}|  例: 3 = ERROR / 2 : 語を含む / 4 >= 100 / 1 ~ 正規表現 / 5 empty", self.input),
+            // 入力欄は、ステータスバーの上の枠（draw_prompt_bar）に出す
+            Some(_) => "入力中… Enter で実行、Esc で取消".to_string(),
             None if self.rjob.is_some() => self.job_status(self.rjob.as_ref().unwrap()),
             None if self.saving.is_some() => {
                 let job = self.saving.as_ref().unwrap();
@@ -452,6 +451,39 @@ impl App {
                 None => self.message.clone(),
             },
         }
+    }
+
+    /// 入力欄（行へ移動・列フィルタ・分割・連番）を、ステータスバーの上に 2 行の枠で出す。1 行目は説明、2 行目は入力
+    pub(super) unsafe fn draw_prompt_bar(&self, rt: &ID2D1RenderTarget, brush: &ID2D1SolidColorBrush, w: f32, h: f32) -> Result<()> {
+        let Some(prompt) = self.prompt else { return Ok(()) };
+        let t = self.theme;
+        let (title, hint) = match prompt {
+            Prompt::GotoLine => ("行へ移動".to_string(), "行番号を入力して Enter（Esc で取消）".to_string()),
+            Prompt::Sequence => ("連番を挿入".to_string(), "開始値,増分,桁数（例: 1,1,3 → 001, 002…）を入力して Enter（Esc で取消）".to_string()),
+            Prompt::Split => ("ファイルを分割".to_string(), "1 ファイルの行数、またはサイズ（例: 1000000 / 512MB / 2GB）を入力して Enter（Esc で取消）".to_string()),
+            Prompt::ColumnFilter => {
+                let names: Vec<String> = self.csv_column_names(12).iter().enumerate().map(|(i, n)| format!("{}:{n}", i + 1)).collect();
+                let cols = if names.is_empty() { String::new() } else { format!("　列 {}", names.join("  ")) };
+                ("列フィルタ".to_string(), format!("「列番号 演算子 値」で入力して Enter（Esc で取消）。演算子: = != : ~ > < >= <= empty（例: 3 = ERROR / 2 : 語 / 4 >= 100）{cols}"))
+            }
+        };
+        let bar_h = self.ui_line_h * 2.0 + 14.0;
+        let top = h - self.status_h() - bar_h;
+        unsafe {
+            brush.SetColor(&t.panel_head);
+            rt.FillRectangle(&rect(0.0, top, w, top + bar_h), brush);
+            brush.SetColor(&theme::accent(self.settings.dark));
+            rt.FillRectangle(&rect(0.0, top, w, top + 2.0), brush);
+            brush.SetColor(&t.gutter_text);
+            self.draw_ui_str(rt, brush, &format!("{title}　{hint}"), 10.0, top + 5.0, w - 10.0)?;
+            // 入力欄
+            let iy = top + 7.0 + self.ui_line_h;
+            brush.SetColor(&t.bg);
+            rt.FillRoundedRectangle(&rrect(8.0, iy, w - 8.0, iy + self.ui_line_h + 4.0, 4.0), brush);
+            brush.SetColor(&t.text);
+            self.draw_ui_str(rt, brush, &format!("{}|", self.input), 14.0, iy + 2.0, w - 14.0)?;
+        }
+        Ok(())
     }
 
     /// ステータスバーの右側（ファイルの情報）を、部分に分けたもの。Some(n) の部分はクリックできる

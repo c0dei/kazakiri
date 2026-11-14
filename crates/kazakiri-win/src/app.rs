@@ -662,8 +662,9 @@ impl App {
                         self.diff_focus_at(x);
                         return (DONE, None);
                     }
-                    // 固定した見出し行
+                    // 固定した見出し行：押した列を、並べ替え・フィルタの対象の列にする
                     if y < self.pin_h() {
+                        self.header_click(x);
                         return (DONE, None);
                     }
                     let y = y - self.pin_h();
@@ -698,6 +699,7 @@ impl App {
                         return (DONE, None);
                     }
                     if y < self.pin_h() {
+                        self.header_click(x);
                         return (DONE, None);
                     }
                     let y = y - self.pin_h();

@@ -541,6 +541,31 @@ impl App {
         Some((col, total, name.unwrap_or_default()))
     }
 
+    /// 固定した見出し行を押した：その列を、並べ替え・列フィルタの対象にする（カーソルを見出し行のその列へ移す）
+    pub(super) fn header_click(&mut self, x: f32) {
+        let Some(doc) = self.doc.clone() else { return };
+        if self.csv.is_none() {
+            return;
+        }
+        let Some(off) = self.offset_in_line_at_x(&doc, 0, (x - self.text_left()).max(0.0)) else { return };
+        self.sel = Some((off, off));
+        self.goal_x = None;
+        if let Some((col, _, name)) = self.caret_column() {
+            self.message = format!("対象の列: {} 列目{}（「列で昇順／降順」「列フィルタ」はこの列に対して行います）", col + 1, if name.is_empty() { String::new() } else { format!("「{name}」") });
+        }
+        self.invalidate();
+    }
+
+    /// 見出し行の各列の名前（最大 `max` 個）
+    pub(super) fn csv_column_names(&self, max: usize) -> Vec<String> {
+        let (Some(v), Some(doc)) = (self.csv.as_ref(), self.doc.as_ref()) else { return Vec::new() };
+        if !v.header {
+            return Vec::new();
+        }
+        let Some(h) = doc.lines(0, 1).into_iter().next() else { return Vec::new() };
+        csv::split_fields(&h.text, v.delim).into_iter().take(max).map(|r| csv::unquote(&h.text[r])).collect()
+    }
+
     /// カーソルのある列で並べ替える（別スレッドで並べ、1 回の編集として置き換える）
     pub(super) fn sort_by_column(&mut self, desc: bool) {
         let (Some((delim, header)), Some(doc)) = (self.csv.as_ref().map(|v| (v.delim, v.header)), self.doc.clone()) else {
