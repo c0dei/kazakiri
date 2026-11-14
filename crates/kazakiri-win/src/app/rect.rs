@@ -18,6 +18,8 @@ pub(super) struct RectSel {
     pub a_x: f32,
     pub b_line: u64,
     pub b_x: f32,
+    /// 押した位置（セルに合わせる前の x）。ドラッグのたびに、ここからセルを求め直す
+    pub ra_x: f32,
     snap: (u64, u64),
 }
 
@@ -35,6 +37,20 @@ impl RectSel {
 }
 
 impl App {
+    /// セル選択モード：行 `line` の、x（行頭からの位置）にあるセルの左端・右端の x
+    fn cell_span(&self, doc: &Document, line: u64, x: f32) -> Option<(f32, f32)> {
+        let v = self.csv.as_ref()?;
+        let l = doc.lines(line, 1).into_iter().next()?;
+        let d = Disp::csv(&l, v);
+        let idx = unsafe { self.unit_at_x(&d.units[..d.shown], x.max(0.0)) }.unwrap_or(0).min(d.shown);
+        let col = d.col_at(idx)?;
+        let &(a, b) = d.cols.get(col)?;
+        let (a, b) = (a as usize, (b as usize).min(d.units.len()));
+        let x0 = unsafe { self.text_width(&d.units[..a]) }.ok()?;
+        let x1 = unsafe { self.text_width(&d.units[..b]) }.ok()?;
+        Some((x0, x1.max(x0 + self.char_w)))
+    }
+
     /// 有効な矩形選択
     pub(super) fn rect(&self) -> Option<RectSel> {
         self.rect.filter(|r| self.sel == Some(r.snap))
@@ -58,9 +74,16 @@ impl App {
     fn set_rect_end(&mut self, anchor: Option<(u64, f32)>, line: u64, x: f32) {
         let Some(doc) = self.doc.clone() else { return };
         let Some((line, off)) = self.rect_point(&doc, line, x) else { return };
-        let (a_line, a_x) = anchor.unwrap_or((line, x));
+        let (a_line, ra_x) = anchor.unwrap_or((line, x));
+        let (mut a_x, mut b_x) = (ra_x, x);
+        // セル選択モード：四角の左右を、セルの境目に合わせる
+        if self.cell_mode && self.csv.is_some() {
+            if let (Some((ax0, ax1)), Some((bx0, bx1))) = (self.cell_span(&doc, a_line, ra_x), self.cell_span(&doc, line, x)) {
+                (a_x, b_x) = if bx0 >= ax0 { (ax0, bx1) } else { (ax1, bx0) };
+            }
+        }
         self.sel = Some((off, off));
-        self.rect = Some(RectSel { a_line, a_x, b_line: line, b_x: x, snap: (off, off) });
+        self.rect = Some(RectSel { a_line, a_x, b_line: line, b_x, ra_x, snap: (off, off) });
         self.goal_x = None;
         self.hit = None;
     }
@@ -96,7 +119,7 @@ impl App {
         }
         let y = y.clamp(0.0, self.text_height() - 1.0);
         let line = self.top + (y / self.line_h) as u64;
-        self.set_rect_end(Some((r.a_line, r.a_x)), line, x - self.text_left());
+        self.set_rect_end(Some((r.a_line, r.ra_x)), line, x - self.text_left());
         self.invalidate();
         true
     }
@@ -114,7 +137,7 @@ impl App {
                 let c = self.caret();
                 let line = doc.line_of_offset(c).unwrap_or(0);
                 let x = self.x_of_offset(&doc, c);
-                RectSel { a_line: line, a_x: x, b_line: line, b_x: x, snap: (c, c) }
+                RectSel { a_line: line, a_x: x, b_line: line, b_x: x, ra_x: x, snap: (c, c) }
             }
         };
         let (mut line, mut x) = (r.b_line, r.b_x);
@@ -125,7 +148,7 @@ impl App {
             VK_RIGHT => x += self.char_w,
             _ => return,
         }
-        self.set_rect_end(Some((r.a_line, r.a_x)), line, x);
+        self.set_rect_end(Some((r.a_line, r.ra_x)), line, x);
         let c = self.caret();
         self.ensure_visible(c);
         self.update_ime_position();

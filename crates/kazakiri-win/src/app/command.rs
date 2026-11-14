@@ -39,6 +39,12 @@ impl App {
                     return r;
                 }
             }
+            menu::ID_CELL_MODE => {
+                self.cell_mode = !self.cell_mode;
+                self.rect = None;
+                self.message = if self.cell_mode { "セル選択モード: ドラッグでセルの四角を選べます（コピー・削除・入力は、選んだセルの全行に効きます）".into() } else { "セル選択モードを終了しました".to_string() };
+                self.invalidate();
+            }
             menu::ID_COLPICK => {
                 if self.csv.is_some() {
                     return Some(Deferred::ColMenu);

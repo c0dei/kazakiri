@@ -249,6 +249,8 @@ struct App {
     diff_ign_case: bool,
     split_sync: bool,
     csv_letters: bool,
+    /// CSV のセル選択モード（普通にドラッグするだけで、セルの四角を選ぶ）
+    cell_mode: bool,
     /// 出している説明（ツールチップ）：文字、左の位置（x）
     tip: Option<(String, f32, bool)>,
     /// 単語補完の途中（続けて押すと次の候補）
@@ -583,7 +585,7 @@ impl App {
                     let forced = self.doc.as_ref().map(|d| d.forced_encoding());
                     self.menus.refresh(self.opts.case_sensitive, self.opts.regex, self.follow, forced, &self.recent);
                     self.menus.refresh_clips(&clipboard::history());
-                    self.menus.refresh_view(self.csv.as_ref().map(|v| (v.delim, v.header)), self.is_split_view(), [self.diff_ign_edge, self.diff_ign_case, self.split_sync, self.csv_letters], &self.settings);
+                    self.menus.refresh_view(self.csv.as_ref().map(|v| (v.delim, v.header)), self.is_split_view(), [self.diff_ign_edge, self.diff_ign_case, self.split_sync, self.csv_letters, self.cell_mode], &self.settings);
                     (DONE, None)
                 }
                 WM_COMMAND => (DONE, self.command(loword(wparam.0))),
@@ -675,7 +677,7 @@ impl App {
                     if self.in_panel(y) {
                         return (DONE, self.panel_click(y));
                     }
-                    if GetKeyState(VK_MENU.0 as i32) < 0 && x >= self.gutter_width() && y < self.text_height() {
+                    if (GetKeyState(VK_MENU.0 as i32) < 0 || (self.cell_mode && self.csv.is_some() && GetKeyState(VK_SHIFT.0 as i32) >= 0)) && x >= self.gutter_width() && y < self.text_height() {
                         self.rect_start(x, y);
                     } else if GetKeyState(VK_CONTROL.0 as i32) < 0 && x >= self.gutter_width() && y < self.text_height() {
                         self.multi_click(x, y);

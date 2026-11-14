@@ -74,6 +74,7 @@ pub(super) unsafe fn run_inner() -> std::result::Result<(), (&'static str, windo
             diff_ign_case: false,
             split_sync: false,
             csv_letters: false,
+            cell_mode: false,
             tip: None,
             dabbrev: None,
             markers: Vec::new(),
