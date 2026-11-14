@@ -545,6 +545,55 @@ pub fn sort_to_file(doc: &Document, opts: SortOptions, out: &Path, run_rows: usi
     result
 }
 
+fn order(opts: SortOptions, a: &Key, b: &Key) -> Ordering {
+    let o = cmp_key(a, b);
+    if opts.descending { o.reverse() } else { o }
+}
+
+struct Part {
+    rows: Vec<(Key, u64, u64)>,
+    /// この範囲で見つかった、前の行から続く行（または範囲の終わりが引用符の中なら、次の行）
+    cont: Option<u64>,
+}
+
+/// 行 `lo..hi` の並べ替えキーを取り出す
+fn key_part(doc: &Document, opts: SortOptions, lo: u64, hi: u64, ctl: &SearchControl) -> Result<Part, String> {
+    use std::sync::atomic::Ordering::Relaxed;
+    let mut rows = Vec::with_capacity((hi - lo) as usize);
+    let (mut quoted, mut cont, mut pending) = (false, None, 0u64);
+    for i in lo..hi {
+        if i % 8192 == 0 {
+            ctl.scanned.fetch_add(pending, Relaxed);
+            pending = 0;
+            if ctl.cancel.load(Relaxed) {
+                return Err("並べ替えを中止しました".into());
+            }
+        }
+        if quoted && cont.is_none() {
+            cont = Some(i);
+        }
+        let (s, e) = doc.line_range(i).ok_or("行の位置が分かりません")?;
+        let bytes = doc.read(s, e);
+        let text = doc.decode(&bytes);
+        // 引用符（0x22）が無い行は、区切りで分けるだけでよい
+        let key = if memchr::memchr(b'"', &bytes).is_none() {
+            quoted = false;
+            text.split(opts.delim).nth(opts.column).map_or(Key::Text(String::new()), key_of)
+        } else {
+            quoted = ends_in_quote(&text, opts.delim, quoted);
+            split_fields(&text, opts.delim).get(opts.column).map_or(Key::Text(String::new()), |r| key_of(&text[r.clone()]))
+        };
+        rows.push((key, s, e));
+        pending += e - s;
+    }
+    ctl.scanned.fetch_add(pending, Relaxed);
+    if quoted && cont.is_none() {
+        cont = Some(hi);
+    }
+    rows.sort_by(|a, b| order(opts, &a.0, &b.0));
+    Ok(Part { rows, cont })
+}
+
 /// 列で並べ替えた内容（ファイルの文字コードのバイト列）を作る。
 /// 本文全体（BOM の後ろから末尾まで）をこれで置き換えれば並べ替えになる
 pub fn sort_document(doc: &Document, opts: SortOptions, ctl: &SearchControl) -> Result<Vec<u8>, String> {
@@ -555,36 +604,56 @@ pub fn sort_document(doc: &Document, opts: SortOptions, ctl: &SearchControl) -> 
     if count > SORT_LIMIT {
         return Err(format!("行が多すぎて並べ替えできません（{} 万行まで）", SORT_LIMIT / 10_000));
     }
-    // 引用符の中に改行を含むレコードがあると、行ごとの並べ替えでレコードが壊れる
-    if let Some(n) = first_continuation_line(doc, opts.delim, ctl) {
-        return Err(format!(
-            "{} 行目が前の行から続くレコード（引用符の中の改行）なので、並べ替えるとレコードが壊れます。並べ替えは行いません",
-            n + 1
-        ));
-    }
     // 最後の行が空（ファイルが改行で終わる）なら並べ替えの対象にしない
     let last_empty = doc.line_range(count - 1).is_some_and(|(s, e)| s == e);
     let body_end = if last_empty { count - 1 } else { count };
     let first = if opts.header { 1.min(body_end) } else { 0 };
 
-    let mut rows: Vec<(Key, u64, u64)> = Vec::with_capacity((body_end - first) as usize);
-    for i in first..body_end {
-        if i % 65536 == 0 && ctl.cancel.load(std::sync::atomic::Ordering::Relaxed) {
-            return Err("並べ替えを中止しました".into());
-        }
-        let (s, e) = doc.line_range(i).ok_or("行の位置が分かりません")?;
-        let bytes = doc.read(s, e);
-        let text = doc.decode(&bytes);
-        let fields = split_fields(&text, opts.delim);
-        let key = fields.get(opts.column).map_or(Key::Text(String::new()), |r| key_of(&text[r.clone()]));
-        rows.push((key, s, e));
-        ctl.scanned.fetch_add(e - s, std::sync::atomic::Ordering::Relaxed);
-    }
-    rows.sort_by(|a, b| {
-        let o = cmp_key(&a.0, &b.0);
-        if opts.descending { o.reverse() } else { o }
+    // キーの取り出しは、行を分けて複数のスレッドで進める。同時に、引用符の中の改行（レコードが行をまたぐ）も調べる
+    // （それがあると、行ごとの並べ替えでレコードが壊れる）
+    let n = body_end - first;
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).clamp(1, 8) as u64;
+    let per = n.div_ceil(threads).max(1);
+    let parts: Vec<Result<Part, String>> = std::thread::scope(|sc| {
+        let hs: Vec<_> = (0..threads)
+            .map(|t| {
+                let (lo, hi) = (first + (t * per).min(n), first + ((t + 1) * per).min(n));
+                sc.spawn(move || key_part(doc, opts, lo, hi, ctl))
+            })
+            .collect();
+        hs.into_iter().map(|h| h.join().unwrap_or_else(|_| Err("並べ替えに失敗しました".into()))).collect()
     });
-
+    let mut bad: Option<u64> = None;
+    let mut sorted = Vec::with_capacity(parts.len());
+    for p in parts {
+        let p = p?;
+        if bad.is_none() {
+            bad = p.cont;
+        }
+        sorted.push(p.rows);
+    }
+    if let Some(l) = bad {
+        return Err(format!(
+            "{} 行目が前の行から続くレコード（引用符の中の改行）なので、並べ替えるとレコードが壊れます。並べ替えは行いません",
+            l + 1
+        ));
+    }
+    // 各スレッドで並べた列を、1 本にまとめる（同じ値なら元の順＝前の列を先に）
+    let mut at = vec![0usize; sorted.len()];
+    let mut rows: Vec<(u64, u64)> = Vec::with_capacity(n as usize);
+    loop {
+        let mut best: Option<usize> = None;
+        for (k, part) in sorted.iter().enumerate() {
+            let Some(cur) = part.get(at[k]) else { continue };
+            if best.is_none_or(|j| order(opts, &cur.0, &sorted[j][at[j]].0) == Ordering::Less) {
+                best = Some(k);
+            }
+        }
+        let Some(k) = best else { break };
+        let r = &sorted[k][at[k]];
+        rows.push((r.1, r.2));
+        at[k] += 1;
+    }
     let nl = doc.encode(match doc.newline_name() {
         "CRLF" => "\r\n",
         "CR" => "\r",
@@ -599,7 +668,7 @@ pub fn sort_document(doc: &Document, opts: SortOptions, ctl: &SearchControl) -> 
         let (s, e) = doc.line_range(0).unwrap();
         push_line(&mut out, s, e);
     }
-    for (_, s, e) in &rows {
+    for (s, e) in &rows {
         push_line(&mut out, *s, *e);
     }
     // 元が改行で終わっていなければ、最後の改行は付けない
