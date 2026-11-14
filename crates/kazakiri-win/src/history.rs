@@ -12,12 +12,18 @@ pub enum Kind {
     Find,
     /// 置換後の文字列
     Replace,
+    /// GREP のフォルダー
+    Folder,
+    /// GREP のファイルの種類（`*.log` など）
+    Files,
 }
 
 #[derive(Default, Debug, PartialEq)]
 pub struct History {
     find: Vec<String>,
     replace: Vec<String>,
+    folder: Vec<String>,
+    files: Vec<String>,
 }
 
 fn store_path() -> Option<PathBuf> {
@@ -37,11 +43,15 @@ impl History {
             match line.split_once('\t') {
                 Some(("f", w)) if !w.is_empty() => h.find.push(w.to_string()),
                 Some(("r", w)) if !w.is_empty() => h.replace.push(w.to_string()),
+                Some(("d", w)) if !w.is_empty() => h.folder.push(w.to_string()),
+                Some(("p", w)) if !w.is_empty() => h.files.push(w.to_string()),
                 _ => {}
             }
         }
         h.find.truncate(MAX);
         h.replace.truncate(MAX);
+        h.folder.truncate(MAX);
+        h.files.truncate(MAX);
         h
     }
 
@@ -53,6 +63,12 @@ impl History {
         for w in &self.replace {
             s.push_str(&format!("r\t{w}\n"));
         }
+        for w in &self.folder {
+            s.push_str(&format!("d\t{w}\n"));
+        }
+        for w in &self.files {
+            s.push_str(&format!("p\t{w}\n"));
+        }
         s
     }
 
@@ -60,6 +76,8 @@ impl History {
         match kind {
             Kind::Find => &self.find,
             Kind::Replace => &self.replace,
+            Kind::Folder => &self.folder,
+            Kind::Files => &self.files,
         }
     }
 
@@ -72,6 +90,8 @@ impl History {
         let list = match kind {
             Kind::Find => &mut self.find,
             Kind::Replace => &mut self.replace,
+            Kind::Folder => &mut self.folder,
+            Kind::Files => &mut self.files,
         };
         if list.first().is_some_and(|w| w == word) {
             return;

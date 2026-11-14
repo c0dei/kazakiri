@@ -27,6 +27,8 @@ pub struct GrepOptions {
     pub recursive: bool,
     /// 一致の最大件数（超えたら打ち切る）
     pub max_hits: usize,
+    /// 文字コードを指定する（`None` なら、ファイルごとに自動判定）
+    pub encoding: Option<&'static encoding_rs::Encoding>,
 }
 
 #[derive(Debug, Clone)]
@@ -185,7 +187,7 @@ fn grep_file(path: &Path, file: usize, pattern: &str, opts: &GrepOptions, prog: 
     if meta.len() == 0 {
         return Ok(Vec::new());
     }
-    let doc = Document::open_scan(path).map_err(|_| FileError::Open)?;
+    let doc = Document::open_scan_with(path, opts.encoding).map_err(|_| FileError::Open)?;
     if is_binary(&doc) {
         return Err(FileError::Binary);
     }
@@ -431,6 +433,7 @@ mod tests {
             include: parse_include("*.log"),
             recursive: true,
             max_hits: 1000,
+            encoding: None,
         };
         let prog = GrepProgress::default();
         let r = grep(&dir, "エラー", &opts, &prog).unwrap();
