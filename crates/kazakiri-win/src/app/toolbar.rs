@@ -440,7 +440,7 @@ impl App {
 
     /// ツールバーの右端の、コマンドパレットを開く丸い欄（ツールバーの行の中の座標）。幅が足りないときは None
     pub(super) fn palette_pill(&self) -> Option<(f32, f32, f32, f32)> {
-        let w = self.client_size().0;
+        let w = self.client_w_dip();
         if w < 900.0 || !self.settings.toolbar {
             return None;
         }

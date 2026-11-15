@@ -82,10 +82,12 @@ impl App {
 
             // いちばん上にタブバー、その下にツールバー（とモードバー）を描き、それより下は丸ごと下へずらして描く
             rt.SetTransform(&Matrix3x2::identity());
-            self.draw_tabs(&rt, brush, w)?;
+            // タブバー（ウィンドウのボタンを含む）とツールバーは、縦のスクロールバーの上も含めたウィンドウの全幅に描く
+            let wf = self.client_w_dip();
+            self.draw_tabs(&rt, brush, wf)?;
             if self.tb_h() > 0.0 {
                 rt.SetTransform(&Matrix3x2::translation(0.0, self.tab_h()));
-                self.draw_toolbar(&rt, brush, w)?;
+                self.draw_toolbar(&rt, brush, wf)?;
             }
             rt.SetTransform(&Matrix3x2::translation(0.0, self.chrome_h()));
             let pin = self.pin_h();

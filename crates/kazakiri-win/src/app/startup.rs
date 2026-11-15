@@ -10,7 +10,7 @@ pub(super) unsafe fn run_inner() -> std::result::Result<(), (&'static str, windo
             style: CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS,
             lpfnWndProc: Some(wndproc),
             hInstance: instance.into(),
-            hCursor: LoadCursorW(None, IDC_IBEAM).map_err(|e| ("LoadCursor", e))?,
+            hCursor: LoadCursorW(None, IDC_ARROW).map_err(|e| ("LoadCursor", e))?,
             lpszClassName: class,
             ..Default::default()
         };

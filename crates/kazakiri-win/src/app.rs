@@ -494,9 +494,9 @@ impl App {
                     let scale = GetDpiForWindow(self.hwnd) as f32 / 96.0;
                     let (x, y) = (pt.x as f32 / scale, pt.y as f32 / scale - self.chrome_h());
                     let (cw, ch) = self.client_size();
-                    let _ = cw;
                     // 本文の中だけ I ビーム。ツールバー・タブ・行番号・結果一覧・ステータスバー・機能ボタンは、ボタンも含めて通常の矢印
-                    let in_text = self.diffview.is_none() && !self.md_hit(x, y) && y >= 0.0 && x >= self.gutter_width() && y < ch - self.status_h() - self.panel_h();
+                    // 右端はスクロールバー（Windows 11 の細いスクロールバーはクライアント領域に重なる）なので、矢印のまま
+                    let in_text = self.diffview.is_none() && !self.md_hit(x, y) && y >= 0.0 && x >= self.gutter_width() && x < cw - 18.0 && y < ch - self.status_h() - self.panel_h();
                     let on_link = self.md_link_hover(x, y);
                     let id = if let Some(c) = self.prompt_cursor(x, y) {
                         c
