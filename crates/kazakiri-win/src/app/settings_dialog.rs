@@ -1,15 +1,16 @@
 //! 設定ダイアログ（ファイル → 設定）。
 //!
 //! モードレスの 1 枚のウィンドウ。左に分類の一覧と検索欄（EmEditor の「すべての設定のプロパティ」のように、
-//! 検索語に当てはまる項目を含む分類だけに絞る）、右に選んだ分類のページを出す。チェックボックスは押すとすぐ反映され、
-//! `settings.ini` に保存される（表示メニューと同じ操作を呼ぶだけ）。フォント・大きさ・タブ幅の入力欄は、
-//! 欄から離れたとき・閉じたとき・Enter で反映する。
+//! 検索語に当てはまる項目を含む分類だけに絞る）、右に選んだ分類のページを出す。
+//! 部品の操作は「下書き」を変えるだけで、「保存」（Enter も。押してもダイアログは閉じない）を押したときに初めて、アプリと `settings.ini` へ反映する
+//! （表示メニューと同じ操作を呼ぶものもある）。保存せずに閉じるときは確認を出す。
 
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 
 use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE};
+use windows::Win32::UI::Controls::Dialogs::{ChooseFontW, CF_INITTOLOGFONTSTRUCT, CF_SCREENFONTS, CHOOSEFONTW};
 use windows::Win32::UI::Controls::*;
 use windows::Win32::UI::HiDpi::{GetDpiForWindow, SystemParametersInfoForDpi};
 
@@ -25,9 +26,14 @@ static EDIT_BRUSH: [AtomicIsize; 2] = [AtomicIsize::new(0), AtomicIsize::new(0)]
 /// 本文のフォントと、見出し用の大きなフォント（HFONT）
 static UI_FONT: AtomicIsize = AtomicIsize::new(0);
 static FIRST: AtomicBool = AtomicBool::new(true);
+/// 保存していない変更がある（下書きが、アプリの設定と違う）
+static DIRTY: AtomicBool = AtomicBool::new(false);
+/// 「保存しました」を出している間
+static SAVED: AtomicBool = AtomicBool::new(false);
+/// 「保存しました」を消すタイマー
+const SAVED_TIMER: usize = 1;
 
 const CLASS: PCWSTR = w!("KazakiriSettingsDialog");
-const EN_KILLFOCUS_CODE: u32 = 0x0200;
 
 const ID_LINENUM: i32 = 214;
 /// テーマの選び方（システム・ライト・ダーク）と、アクセントカラーの見本の ID（先頭から連番）
@@ -41,11 +47,12 @@ const ID_UISIZE_INC: i32 = 273;
 const ID_TRAY: i32 = 226;
 const ID_MODEBAR: i32 = 227;
 const ID_FONT: i32 = 204;
+const ID_FONT_PICK: i32 = 205;
+const ID_UIFONT_PICK: i32 = 208;
 const ID_SIZE: i32 = 206;
 const ID_UIFONT: i32 = 207;
 const ID_UISIZE: i32 = 209;
 const ID_WRAP: i32 = 210;
-const ID_IME: i32 = 211;
 const ID_TAB: i32 = 212;
 const ID_WS: i32 = 220;
 const ID_LOG: i32 = 221;
@@ -69,7 +76,6 @@ const ID_CLOSE: i32 = 241;
 /// チェックボックスの ID と、同じ働きの表示メニューのコマンド
 const CHECKS: &[(i32, &str, u32)] = &[
     (ID_WRAP, "長い行を折り返して表示(&W)", menu::ID_WRAP),
-    (ID_IME, "IME の変換中の文字をエディタ内に表示(&M)", menu::ID_IME_INLINE),
     (ID_WS, "空白・タブ・改行を表示(&S)", menu::ID_WHITESPACE),
     (ID_LOG, "ログの ERROR / WARN などに色を付ける(&L)", menu::ID_LOG_COLORS),
     (ID_SYN, "構文の色分け（JSON・SQL・XML など）(&X)", menu::ID_SYNTAX),
@@ -83,10 +89,6 @@ const CHECKS: &[(i32, &str, u32)] = &[
 const CATS: [&str; 9] = ["基本", "スクロール", "外観", "表示", "検索・GREP", "バックアップ", "自動保存", "Markdown", "キーボード"];
 const EN_CHANGE_CODE: u32 = 0x0300;
 const LBN_SELCHANGE_CODE: u32 = 1;
-const CBN_SELCHANGE_CODE: u32 = 1;
-const CBN_KILLFOCUS_CODE: u32 = 4;
-/// フォント名の一覧の先頭（空欄 = 自動）
-const AUTO_FONT: &str = "（自動）";
 
 /// 設定の 1 行（カード）。`toggle` があれば、右端にスイッチを出す
 struct Row {
@@ -176,11 +178,14 @@ fn relayout(dlg: HWND) {
         let _ = GetClientRect(dlg, &mut rc);
         let (cw, ch) = ((rc.right as f32 / scale) as i32, (rc.bottom as f32 / scale) as i32);
         let new_w = (cw - PAGE_X - 24).max(440);
-        let (places, rows, ids) = CTRLS.with(|c| {
+        let (places, rows, ids, scroll) = CTRLS.with(|c| {
             let mut c = c.borrow_mut();
-            let Some(ct) = c.as_mut() else { return (Vec::new(), Vec::new(), Vec::new()) };
+            let Some(ct) = c.as_mut() else { return (Vec::new(), Vec::new(), Vec::new(), 0) };
             ct.card_w = new_w;
-            (ct.places.clone(), ct.rows.iter().map(|r| (r.y, r.h, r.toggle, r.choice)).collect::<Vec<_>>(), ct.all.iter().map(|(i, _)| *i).collect::<Vec<_>>())
+            // スクロール量は、ページの内容と表示領域の高さに収める
+            let max = max_scroll(ch, ct.page_h.get(ct.cur).copied().unwrap_or(0));
+            ct.scroll = ct.scroll.clamp(0, max);
+            (ct.places.clone(), ct.rows.iter().map(|r| (r.y, r.h, r.toggle, r.choice)).collect::<Vec<_>>(), ct.all.iter().map(|(i, _)| *i).collect::<Vec<_>>(), ct.scroll)
         });
         if ids.is_empty() {
             return;
@@ -189,53 +194,113 @@ fn relayout(dlg: HWND) {
         let put = |id: i32, x: i32, y: i32, w: i32, h: i32| {
             let _ = SetWindowPos(ctl(id), None, p(x), p(y), p(w), p(h), SWP_NOZORDER | SWP_NOACTIVATE);
         };
+        // スクロールで動く部品（ページの中身）の ID。表示領域からはみ出した部分を切り取る
+        let mut moving: Vec<i32> = Vec::new();
         for pl in places {
             match pl.anchor {
-                Anchor::CardRight(off) => put(pl.id, PAGE_X + new_w - off, pl.y, pl.w, pl.h),
-                Anchor::CardWidth => put(pl.id, pl.x, pl.y, new_w, pl.h),
+                Anchor::CardRight(off) => {
+                    put(pl.id, PAGE_X + new_w - off, pl.y - scroll, pl.w, pl.h);
+                    moving.push(pl.id);
+                }
+                Anchor::CardWidth => {
+                    put(pl.id, pl.x, pl.y - scroll, new_w, pl.h);
+                    moving.push(pl.id);
+                }
                 Anchor::ListHeight => put(pl.id, pl.x, pl.y, pl.w, (ch - pl.y - 14).max(100)),
                 Anchor::Corner(dx, dy) => put(pl.id, cw - dx, ch - dy, pl.w, pl.h),
             }
         }
         for (y, h, toggle, choice) in rows {
+            let y = y - scroll;
             if let Some(id) = toggle {
                 put(id, PAGE_X + 4, PAGE_Y + y + 4, new_w - 8, h - 8);
+                moving.push(id);
             }
             if let Some((first, kind, n)) = choice {
                 for (i, (x0, y0, x1, y1)) in choice_rects(y, h, new_w, kind, n).into_iter().enumerate() {
                     put(first + i as i32, x0, y0, x1 - x0, y1 - y0);
+                    moving.push(first + i as i32);
                 }
             }
         }
+        clip_to_view(dlg, &moving, p(PAGE_Y), rc.bottom - p(FOOTER_H));
         let _ = InvalidateRect(Some(dlg), None, true);
     }
 }
 
-/// インストールされているフォントの名前（日本語名があればそれ）
-fn font_families() -> Vec<String> {
+/// ページの内容がスクロールできる最大の量（DIP）。`ch` はダイアログのクライアントの高さ、`content` はページの内容の高さ
+fn max_scroll(ch: i32, content: i32) -> i32 {
+    (content - (ch - FOOTER_H - PAGE_Y)).max(0)
+}
+
+/// スクロールで動く部品を、ページの表示領域（タイトルの下から、ボタンの行の上まで）で切り取る。
+/// はみ出した部品は、タイトルやボタンの上に重ならない（`top`・`bottom` はクライアントの座標。ピクセル）
+unsafe fn clip_to_view(dlg: HWND, ids: &[i32], top: i32, bottom: i32) {
     unsafe {
-        let Ok(dw) = DWriteCreateFactory::<IDWriteFactory>(DWRITE_FACTORY_TYPE_SHARED) else { return Vec::new() };
-        let mut coll = None;
-        if dw.GetSystemFontCollection(&mut coll, false).is_err() {
-            return Vec::new();
-        }
-        let Some(coll) = coll else { return Vec::new() };
-        let mut out = Vec::new();
-        for i in 0..coll.GetFontFamilyCount() {
-            let Ok(fam) = coll.GetFontFamily(i) else { continue };
-            let Ok(names) = fam.GetFamilyNames() else { continue };
-            let (mut idx, mut exists) = (0u32, BOOL(0));
-            let _ = names.FindLocaleName(w!("ja-jp"), &mut idx, &mut exists);
-            let idx = if exists.as_bool() { idx } else { 0 };
-            let Ok(len) = names.GetStringLength(idx) else { continue };
-            let mut buf = vec![0u16; len as usize + 1];
-            if names.GetString(idx, &mut buf).is_ok() {
-                out.push(String::from_utf16_lossy(&buf[..len as usize]));
+        for &id in ids {
+            let h = ctl(id);
+            if h.0.is_null() {
+                continue;
             }
+            let mut wr = RECT::default();
+            if GetWindowRect(h, &mut wr).is_err() {
+                continue;
+            }
+            let mut pts = [POINT { x: wr.left, y: wr.top }, POINT { x: wr.right, y: wr.bottom }];
+            MapWindowPoints(None, Some(dlg), &mut pts);
+            let (t, b) = (pts[0].y, pts[1].y);
+            if t >= top && b <= bottom {
+                let _ = SetWindowRgn(h, None, true);
+                continue;
+            }
+            let (it, ib) = (t.max(top), b.min(bottom));
+            let rgn = if it >= ib { CreateRectRgn(0, 0, 0, 0) } else { CreateRectRgn(0, it - t, pts[1].x - pts[0].x, ib - t) };
+            SetWindowRgn(h, Some(rgn), true);
         }
-        out.sort_by_key(|s| s.to_lowercase());
-        out.dedup();
-        out
+    }
+}
+
+/// ページを `delta`（DIP）だけスクロールする（正は下へ）
+fn scroll_by(dlg: HWND, delta: i32) {
+    let changed = CTRLS.with(|c| {
+        let mut c = c.borrow_mut();
+        let Some(ct) = c.as_mut() else { return false };
+        ct.scroll += delta;
+        delta != 0
+    });
+    if changed {
+        relayout(dlg);
+    }
+}
+
+/// 部品（ID）が表示領域にはみ出しているなら、見える位置までスクロールする（Tab でフォーカスが動いたときなど）
+unsafe fn ensure_visible(dlg: HWND, id: i32) {
+    unsafe {
+        let on_page = CTRLS.with(|c| c.borrow().as_ref().is_some_and(|ct| ct.pages.iter().any(|(i, pg, _)| *i == id && *pg == ct.cur)));
+        if !on_page {
+            return;
+        }
+        let h = ctl(id);
+        let mut wr = RECT::default();
+        if GetWindowRect(h, &mut wr).is_err() {
+            return;
+        }
+        let mut pts = [POINT { x: wr.left, y: wr.top }, POINT { x: wr.right, y: wr.bottom }];
+        MapWindowPoints(None, Some(dlg), &mut pts);
+        let scale = GetDpiForWindow(dlg).max(96) as f32 / 96.0;
+        let mut rc = RECT::default();
+        let _ = GetClientRect(dlg, &mut rc);
+        let (top, bottom) = (((PAGE_Y as f32) * scale).round() as i32, rc.bottom - (FOOTER_H as f32 * scale).round() as i32);
+        let d = if pts[0].y < top {
+            pts[0].y - top
+        } else if pts[1].y > bottom {
+            pts[1].y - bottom
+        } else {
+            0
+        };
+        if d != 0 {
+            scroll_by(dlg, (d as f32 / scale).round() as i32);
+        }
     }
 }
 
@@ -249,6 +314,10 @@ const ROW_GAP: i32 = 6;
 const CARD_W: i32 = 496;
 const PAGE_X: i32 = 184;
 const PAGE_Y: i32 = 56;
+/// 下のボタンの行の高さ（DIP）。ページの内容は、この上までに収め、はみ出す分はスクロールする
+const FOOTER_H: i32 = 56;
+/// マウスホイール 1 ノッチあたりのスクロール量（DIP）
+const WHEEL_STEP: i32 = 48;
 
 struct Ctrls {
     /// いまのカードの幅（DIP）
@@ -265,6 +334,10 @@ struct Ctrls {
     /// 一覧に出している分類
     visible: Vec<usize>,
     cur: usize,
+    /// ページの内容を、上へどれだけずらしているか（DIP）。ページの内容が表示領域より長いときのスクロール量
+    scroll: i32,
+    /// 分類ごとの、内容の高さ（DIP。ページの上端から）
+    page_h: Vec<i32>,
 }
 
 thread_local! {
@@ -282,6 +355,10 @@ fn text_of(id: i32) -> String {
 }
 
 fn set_text(id: i32, s: &str) {
+    // 同じ内容なら触らない（コンボボックスは入れ直すと全選択になる）
+    if text_of(id) == s {
+        return;
+    }
     let w = wide(s);
     unsafe {
         let _ = SetWindowTextW(ctl(id), PCWSTR(w.as_ptr()));
@@ -313,7 +390,6 @@ fn sync() {
     let Some(s) = with_app(|app| app.settings.clone()) else { return };
     set_checked(ID_LINENUM, s.line_numbers);
     set_checked(ID_WRAP, s.wrap);
-    set_checked(ID_IME, s.ime_inline);
     set_checked(ID_WS, s.whitespace);
     set_checked(ID_LOG, s.log_colors);
     set_checked(ID_SYN, s.syntax);
@@ -366,6 +442,8 @@ fn sync() {
         }
     });
     set_theme(s.dark);
+    // 部品に写しただけで、変更ではない（入力欄を書き換えた通知で立った印を戻す）
+    DIRTY.store(false, Ordering::Relaxed);
     let dlg = HWND(SET_DLG.load(Ordering::Relaxed) as *mut _);
     if !dlg.0.is_null() {
         unsafe {
@@ -385,9 +463,8 @@ fn set_theme(dark: bool) {
     }
     unsafe {
         let all: Vec<(i32, HWND)> = CTRLS.with(|c| c.borrow().as_ref().map(|ct| ct.all.clone()).unwrap_or_default());
-        for (id, h) in all {
-            // フォントの選択（コンボボックス）は、専用のテーマ名
-            let name = if id == ID_FONT || id == ID_UIFONT { w!("DarkMode_CFD") } else { w!("DarkMode_Explorer") };
+        for (_, h) in all {
+            let name = w!("DarkMode_Explorer");
             let _ = SetWindowTheme(h, if dark { name } else { PCWSTR::null() }, PCWSTR::null());
         }
         let v = BOOL::from(dark);
@@ -402,6 +479,7 @@ fn show_page(cat: usize) {
         let mut c = c.borrow_mut();
         let Some(ct) = c.as_mut() else { return Vec::new() };
         ct.cur = cat;
+        ct.scroll = 0; // ページを変えたら、先頭から
         ct.pages.iter().map(|(i, p, _)| (*i, *p)).collect()
     });
     unsafe {
@@ -412,9 +490,8 @@ fn show_page(cat: usize) {
     set_text(ID_TITLE, CATS[cat]);
     let dlg = HWND(SET_DLG.load(Ordering::Relaxed) as *mut _);
     if !dlg.0.is_null() {
-        unsafe {
-            let _ = InvalidateRect(Some(dlg), None, true);
-        }
+        // 先頭に戻した位置に、部品を置き直す（表示領域での切り取りも）
+        relayout(dlg);
     }
 }
 
@@ -439,6 +516,110 @@ fn fill_cats(query: &str) {
             SendMessageW(list, LB_SETCURSEL, Some(WPARAM(pos)), None);
             show_page(cat);
         }
+    }
+}
+
+/// 設定の項目 id に対応する、今のアプリの値（表示メニューのコマンドで切り替えるもの）
+fn current_check(s: &settings::Settings, id: i32) -> bool {
+    match id {
+        ID_WRAP => s.wrap,
+        ID_WS => s.whitespace,
+        ID_LOG => s.log_colors,
+        ID_SYN => s.syntax,
+        ID_TOOLBAR => s.toolbar,
+        ID_MODEBAR => s.modebar,
+        ID_FKEYS => s.fkeys,
+        ID_BACKUP => s.grep_backup,
+        _ => false,
+    }
+}
+
+/// 下書き（ダイアログの部品の状態）を、アプリと設定ファイルへ反映する。「保存」を押したときだけ呼ぶ
+unsafe fn apply_all(owner: HWND) {
+    let theme = CTRLS.with(|c| c.borrow().as_ref().and_then(|ct| ct.sel.get(&ID_THEME_BASE).copied())).map(|i| i.min(2) as u8);
+    let accent = CTRLS.with(|c| c.borrow().as_ref().map(|ct| ct.sel.get(&ID_ACCENT_BASE).copied()));
+    let (line_numbers, tray, bk_save, bk_num, md_auto) = (is_checked(ID_LINENUM), is_checked(ID_TRAY), is_checked(ID_BKSAVE), is_checked(ID_BKNUM), is_checked(ID_MDAUTO));
+    let checks: Vec<(i32, bool, u32)> = CHECKS.iter().map(|&(id, _, cmd)| (id, is_checked(id), cmd)).collect();
+    let mut deferred = Vec::new();
+    with_app(|app| {
+        if let Some(m) = theme.filter(|&m| m != app.settings.theme_mode) {
+            app.set_theme_mode(m);
+        }
+        if let Some(a) = accent {
+            let c = match a {
+                Some(n) if n >= 1 => ACCENTS.get(n - 1).copied(),
+                _ => None,
+            };
+            if c != app.settings.accent {
+                app.set_accent(c);
+            }
+        }
+        if line_numbers != app.settings.line_numbers {
+            app.settings.line_numbers = line_numbers;
+            app.settings.save();
+            app.layout_cache.borrow_mut().clear();
+            app.invalidate();
+        }
+        if tray != app.settings.tray {
+            app.set_tray(tray);
+        }
+        if (bk_save, bk_num, md_auto) != (app.settings.backup_save, app.settings.backup_numbered, app.settings.md_auto) {
+            app.settings.backup_save = bk_save;
+            app.settings.backup_numbered = bk_num;
+            app.settings.md_auto = md_auto;
+            app.settings.save();
+        }
+        // 表示メニューと同じ働きのもの：今の値と違うときだけ、コマンドで切り替える
+        for (id, on, cmd) in &checks {
+            if *on != current_check(&app.settings, *id) {
+                if let Some(d) = app.command(*cmd) {
+                    deferred.push(d);
+                }
+            }
+        }
+    });
+    for d in deferred {
+        run_deferred(owner, d);
+    }
+    commit_edits();
+    DIRTY.store(false, Ordering::Relaxed);
+    with_app(|app| app.message = "設定を保存しました".into());
+    unsafe {
+        let _ = InvalidateRect(Some(owner), None, false);
+        // ダイアログの下に「保存しました」を 2.5 秒だけ出す
+        let dlg = HWND(SET_DLG.load(Ordering::Relaxed) as *mut _);
+        if !dlg.0.is_null() {
+            SAVED.store(true, Ordering::Relaxed);
+            SetTimer(Some(dlg), SAVED_TIMER, 2500, None);
+            let _ = InvalidateRect(Some(dlg), None, true);
+        }
+    }
+}
+
+/// 保存していない変更があれば、確認する。戻り値は「閉じてよいか」（キャンセルなら false）
+unsafe fn confirm_unsaved(dlg: HWND) -> bool {
+    unsafe {
+        if !DIRTY.load(Ordering::Relaxed) {
+            return true;
+        }
+        let r = MessageBoxW(Some(dlg), w!("変更が保存されていません。保存しますか？"), w!("設定"), MB_YESNOCANCEL | MB_ICONQUESTION);
+        if r == IDYES {
+            apply_all(GetWindow(dlg, GW_OWNER).unwrap_or_default());
+            true
+        } else if r == IDNO {
+            sync(); // 変更を捨てて、アプリの今の設定に戻す
+            true
+        } else {
+            false
+        }
+    }
+}
+
+/// 下書きを変えた
+fn mark_dirty(dlg: HWND) {
+    DIRTY.store(true, Ordering::Relaxed);
+    unsafe {
+        let _ = InvalidateRect(Some(dlg), None, true);
     }
 }
 
@@ -474,11 +655,36 @@ fn commit_edits() {
     sync();
 }
 
-/// 大きさを `delta` だけ変える（− ＋ ボタン）
+/// フォント選択のウィンドウ（Windows 標準）を開いて、選んだ名前と大きさを欄に入れる。反映は「保存」のとき
+unsafe fn pick_font(dlg: HWND, ui: bool) {
+    unsafe {
+        let (id_font, id_size) = if ui { (ID_UIFONT, ID_UISIZE) } else { (ID_FONT, ID_SIZE) };
+        let name = text_of(id_font);
+        let size = text_of(id_size).trim().parse::<f32>().unwrap_or(14.0);
+        let mut lf = LOGFONTW { lfHeight: -(size.round() as i32 * 96 / 72), lfCharSet: windows::Win32::Graphics::Gdi::SHIFTJIS_CHARSET, ..Default::default() };
+        for (i, c) in name.encode_utf16().take(31).enumerate() {
+            lf.lfFaceName[i] = c;
+        }
+        let mut cf = CHOOSEFONTW {
+            lStructSize: std::mem::size_of::<CHOOSEFONTW>() as u32,
+            hwndOwner: dlg,
+            lpLogFont: &mut lf,
+            Flags: CF_SCREENFONTS | CF_INITTOLOGFONTSTRUCT,
+            ..Default::default()
+        };
+        if ChooseFontW(&mut cf).as_bool() {
+            let n = lf.lfFaceName.iter().position(|&c| c == 0).unwrap_or(32);
+            set_text(id_font, &String::from_utf16_lossy(&lf.lfFaceName[..n]));
+            set_text(id_size, &format!("{}", (cf.iPointSize / 10).max(1)));
+            mark_dirty(dlg);
+        }
+    }
+}
+
+/// 大きさを `delta` だけ変える（− ＋ ボタン）。反映は「保存」のとき
 fn step_size(id_size: i32, delta: f32, min: f32, max: f32) {
     let cur = text_of(id_size).trim().parse::<f32>().unwrap_or(14.0);
     set_text(id_size, &format!("{}", (cur + delta).clamp(min, max)));
-    commit_edits();
 }
 
 unsafe fn on_command(dlg: HWND, id: i32, code: u32) {
@@ -504,106 +710,70 @@ unsafe fn on_command(dlg: HWND, id: i32, code: u32) {
         if id == IDOK.0 && GetFocus() == ctl(ID_SEARCH) {
             return;
         }
-        // フォント名のコンボボックス：一覧から選んだら、その名前にして反映する（「（自動）」は空欄）
-        if matches!(id, ID_FONT | ID_UIFONT) {
-            if code == CBN_SELCHANGE_CODE {
-                let list = ctl(id);
-                let sel = SendMessageW(list, CB_GETCURSEL, None, None).0;
-                if sel >= 0 {
-                    let len = SendMessageW(list, CB_GETLBTEXTLEN, Some(WPARAM(sel as usize)), None).0.max(0) as usize;
-                    let mut buf = vec![0u16; len + 1];
-                    SendMessageW(list, CB_GETLBTEXT, Some(WPARAM(sel as usize)), Some(LPARAM(buf.as_mut_ptr() as isize)));
-                    let name = String::from_utf16_lossy(&buf[..len]);
-                    set_text(id, if name == AUTO_FONT { "" } else { &name });
-                    commit_edits();
-                }
-            } else if code == EN_KILLFOCUS_CODE || code == CBN_KILLFOCUS_CODE {
-                commit_edits();
-            }
-            return;
-        }
-        if matches!(id, ID_SIZE | ID_TAB | ID_UISIZE | ID_WHEEL | ID_BKDIR | ID_AUTOMIN) {
-            if code == EN_KILLFOCUS_CODE {
-                commit_edits();
+        // 入力欄を書き換えた：下書きを変えただけ（反映は「保存」のとき）
+        if matches!(id, ID_FONT | ID_SIZE | ID_TAB | ID_UIFONT | ID_UISIZE | ID_WHEEL | ID_BKDIR | ID_AUTOMIN) {
+            if code == EN_CHANGE_CODE {
+                mark_dirty(dlg);
             }
             return;
         }
         if code != BN_CLICKED && id != IDOK.0 && id != IDCANCEL.0 {
             return;
         }
-        if id == IDOK.0 || id == IDCANCEL.0 || id == ID_CLOSE {
-            commit_edits();
-            let _ = ShowWindow(dlg, SW_HIDE);
+        // 保存（Enter も）：反映する。ダイアログは開いたまま
+        if id == IDOK.0 {
+            apply_all(owner);
+            let _ = InvalidateRect(Some(dlg), None, true);
+            return;
+        }
+        // 閉じる・Esc：保存していない変更があれば確認する
+        if id == IDCANCEL.0 || id == ID_CLOSE {
+            if confirm_unsaved(dlg) {
+                let _ = ShowWindow(dlg, SW_HIDE);
+            }
             return;
         }
         match id {
-            ID_SIZE_DEC => return step_size(ID_SIZE, -1.0, settings::MIN_FONT, settings::MAX_FONT),
-            ID_SIZE_INC => return step_size(ID_SIZE, 1.0, settings::MIN_FONT, settings::MAX_FONT),
-            ID_UISIZE_DEC => return step_size(ID_UISIZE, -1.0, settings::MIN_FONT, 40.0),
-            ID_UISIZE_INC => return step_size(ID_UISIZE, 1.0, settings::MIN_FONT, 40.0),
-            i if (ID_THEME_BASE..ID_THEME_BASE + 3).contains(&i) => {
-                with_app(|app| app.set_theme_mode((i - ID_THEME_BASE) as u8));
-            }
-            i if (ID_ACCENT_BASE..ID_ACCENT_BASE + 1 + ACCENTS.len() as i32).contains(&i) => {
-                let n = (i - ID_ACCENT_BASE) as usize;
-                with_app(|app| app.set_accent(if n == 0 { None } else { Some(ACCENTS[n - 1]) }));
-            }
-            ID_LINENUM => {
-                let on = is_checked(ID_LINENUM);
-                with_app(|app| {
-                    app.settings.line_numbers = on;
-                    app.settings.save();
-                    app.layout_cache.borrow_mut().clear();
-                    app.invalidate();
-                });
-            }
-            ID_TRAY => {
-                let on = is_checked(ID_TRAY);
-                with_app(|app| app.set_tray(on));
-            }
+            ID_FONT_PICK => return pick_font(dlg, false),
+            ID_UIFONT_PICK => return pick_font(dlg, true),
+            ID_SIZE_DEC => step_size(ID_SIZE, -1.0, settings::MIN_FONT, settings::MAX_FONT),
+            ID_SIZE_INC => step_size(ID_SIZE, 1.0, settings::MIN_FONT, settings::MAX_FONT),
+            ID_UISIZE_DEC => step_size(ID_UISIZE, -1.0, settings::MIN_FONT, 40.0),
+            ID_UISIZE_INC => step_size(ID_UISIZE, 1.0, settings::MIN_FONT, 40.0),
+            // テーマ・アクセントカラー：選んだ印だけ変える
+            i if (ID_THEME_BASE..ID_THEME_BASE + 3).contains(&i) => select_choice(ID_THEME_BASE, (i - ID_THEME_BASE) as usize),
+            i if (ID_ACCENT_BASE..ID_ACCENT_BASE + 1 + ACCENTS.len() as i32).contains(&i) => select_choice(ID_ACCENT_BASE, (i - ID_ACCENT_BASE) as usize),
             ID_BKDIR_PICK => {
                 if let Some(d) = pick_folder_titled(dlg, "バックアップを置くフォルダを選んでください") {
                     set_text(ID_BKDIR, &d);
-                    commit_edits();
                 }
             }
-            ID_BKSAVE | ID_BKNUM => {
-                let on = is_checked(id);
-                with_app(|app| {
-                    if id == ID_BKSAVE {
-                        app.settings.backup_save = on;
-                    } else {
-                        app.settings.backup_numbered = on;
-                    }
-                    app.settings.save();
-                });
-            }
-            ID_MDAUTO => {
-                let on = is_checked(ID_MDAUTO);
-                with_app(|app| {
-                    app.settings.md_auto = on;
-                    app.settings.save();
-                });
-            }
             ID_KEYS => {
+                // 別のダイアログを開く操作：保存していない変更があれば、先に確認する
+                if !confirm_unsaved(dlg) {
+                    return;
+                }
                 let d = with_app(|app| app.command(menu::ID_KEYS)).flatten();
                 if let Some(d) = d {
                     run_deferred(owner, d);
                 }
                 let _ = ShowWindow(dlg, SW_HIDE);
+                return;
             }
-            _ => {
-                if let Some(&(_, _, cmd)) = CHECKS.iter().find(|(i, _, _)| *i == id) {
-                    let d = with_app(|app| app.command(cmd)).flatten();
-                    if let Some(d) = d {
-                        run_deferred(owner, d);
-                    }
-                }
-            }
+            // スイッチ：押した分は WM_COMMAND の側で切り替え済み。ここでは下書きが変わったことだけ覚える
+            _ => {}
         }
-        sync();
-        let _ = InvalidateRect(Some(owner), None, false);
+        mark_dirty(dlg);
     }
+}
+
+/// 選択肢（テーマ・アクセントカラー）の印を変える
+fn select_choice(first: i32, idx: usize) {
+    CTRLS.with(|c| {
+        if let Some(ct) = c.borrow_mut().as_mut() {
+            ct.sel.insert(first, idx);
+        }
+    });
 }
 
 /// ダイアログを（なければ作って）開く
@@ -616,8 +786,12 @@ pub(super) unsafe fn show(owner: HWND) {
         if dlg.0.is_null() {
             return;
         }
-        DARK.store(!with_app(|app| app.settings.dark).unwrap_or(false), Ordering::Relaxed);
-        sync();
+        // すでに開いているなら、書きかけの下書きを消さない
+        let newly = !IsWindowVisible(dlg).as_bool();
+        if newly {
+            DARK.store(!with_app(|app| app.settings.dark).unwrap_or(false), Ordering::Relaxed);
+            sync();
+        }
         if FIRST.swap(false, Ordering::Relaxed) {
             let mut r = RECT::default();
             let _ = GetWindowRect(owner, &mut r);
@@ -625,6 +799,10 @@ pub(super) unsafe fn show(owner: HWND) {
         }
         let _ = ShowWindow(dlg, SW_SHOW);
         let _ = SetForegroundWindow(dlg);
+        if newly {
+            // 開いた直後は、フォーカスを左の分類の一覧に置く
+            let _ = SetFocus(Some(ctl(ID_CATS)));
+        }
     }
 }
 
@@ -673,9 +851,9 @@ unsafe fn create(owner: HWND) {
         } else {
             HFONT(GetStockObject(DEFAULT_GUI_FONT).0)
         };
-        let push = BS_PUSHBUTTON as u32 | WS_TABSTOP.0;
+        // BS_NOTIFY：フォーカスが入ったときに通知をもらう（表示領域の外なら、見える位置までスクロールするため）
+        let push = BS_PUSHBUTTON as u32 | BS_NOTIFY as u32 | WS_TABSTOP.0;
         let edit = ES_AUTOHSCROLL as u32 | WS_TABSTOP.0;
-        let combo = (CBS_DROPDOWN as u32) | (CBS_AUTOHSCROLL as u32) | WS_VSCROLL.0 | WS_TABSTOP.0;
         let mut all: Vec<(i32, HWND)> = Vec::new();
         let mut pages: Vec<(i32, usize, String)> = Vec::new();
         let mut rows: Vec<Row> = Vec::new();
@@ -718,7 +896,6 @@ unsafe fn create(owner: HWND) {
         put(ALL, ID_TITLE, w!("STATIC"), "", 0, 0, PAGE_X, 12, 480, 34);
         // 基本
         card(&mut rows, &mut cur, 0, "長い行を折り返して表示", "画面の幅で折り返す（文字単位）", Some(ID_WRAP), None);
-        card(&mut rows, &mut cur, 0, "IME の変換中の文字をエディタ内に表示", "オフなら IME 標準の窓", Some(ID_IME), None);
         card(&mut rows, &mut cur, 0, "行番号", "本文の左の行番号の欄を出す", Some(ID_LINENUM), None);
         let y = card(&mut rows, &mut cur, 0, "タブの幅", "半角の文字数", None, None);
         put(0, ID_TAB, w!("EDIT"), "", edit | ES_NUMBER as u32 | flat, 0, right - 60, mid(y, 26), 60, 26);
@@ -732,18 +909,25 @@ unsafe fn create(owner: HWND) {
         card(&mut rows, &mut cur, 2, "アプリのテーマ", "Windows の設定に合わせる、または固定する", None, Some((ID_THEME_BASE, 0, 3)));
         card(&mut rows, &mut cur, 2, "アクセントカラー", "選択・ボタン・フォーカスに使う色。左端は Windows の設定の色", None, Some((ID_ACCENT_BASE, 1, 1 + ACCENTS.len())));
         heading(&mut rows, &mut cur, 2, "フォント");
-        // フォント名の欄（一覧から選ぶか、書く）と、大きさの − [数] ＋
-        for (title, desc, id_font, id_dec, id_size, id_inc) in [("本文のフォント", "空欄で自動。等幅のフォントがおすすめ", ID_FONT, ID_SIZE_DEC, ID_SIZE, ID_SIZE_INC), ("画面のフォント", "メニュー・タブなど。空欄で自動", ID_UIFONT, ID_UISIZE_DEC, ID_UISIZE, ID_UISIZE_INC)] {
+        // フォント名の欄（書くか、「選択...」でフォント選択のウィンドウから選ぶ）と、大きさの − [数] ＋
+        for (title, desc, id_font, id_pick, id_dec, id_size, id_inc) in [
+            ("本文のフォント", "空欄で自動。等幅のフォントがおすすめ", ID_FONT, ID_FONT_PICK, ID_SIZE_DEC, ID_SIZE, ID_SIZE_INC),
+            ("画面のフォント", "メニュー・タブなど。空欄で自動", ID_UIFONT, ID_UIFONT_PICK, ID_UISIZE_DEC, ID_UISIZE, ID_UISIZE_INC),
+        ] {
             let y = card(&mut rows, &mut cur, 2, title, desc, None, None);
-            let (xi, xs, xd, xf) = (right - 28, right - 28 - 4 - 48, right - 28 - 4 - 48 - 4 - 28, right - 28 - 4 - 48 - 4 - 28 - 8 - 190);
+            let (xi, xs, xd) = (right - 28, right - 28 - 4 - 48, right - 28 - 4 - 48 - 4 - 28);
+            let xp = xd - 8 - 72;
+            let xf = xp - 8 - 130;
             put(2, id_inc, w!("BUTTON"), "＋", push, 0, xi, mid(y, 28), 28, 28);
             put(2, id_size, w!("EDIT"), "", edit | ES_NUMBER as u32 | ES_CENTER as u32 | flat, 0, xs, mid(y, 26), 48, 26);
             put(2, id_dec, w!("BUTTON"), "－", push, 0, xd, mid(y, 28), 28, 28);
-            put(2, id_font, w!("COMBOBOX"), "", combo, 0, xf, mid(y, 26), 190, 320);
+            put(2, id_pick, w!("BUTTON"), "選択...", push, 0, xp, mid(y, 28), 72, 28);
+            put(2, id_font, w!("EDIT"), "", edit | flat, 0, xf, mid(y, 26), 130, 26);
             places.push(Place { id: id_inc, anchor: cr(xi), x: xi, y: mid(y, 28), w: 28, h: 28 });
             places.push(Place { id: id_size, anchor: cr(xs), x: xs, y: mid(y, 26), w: 48, h: 26 });
             places.push(Place { id: id_dec, anchor: cr(xd), x: xd, y: mid(y, 28), w: 28, h: 28 });
-            places.push(Place { id: id_font, anchor: cr(xf), x: xf, y: mid(y, 26), w: 190, h: 320 });
+            places.push(Place { id: id_pick, anchor: cr(xp), x: xp, y: mid(y, 28), w: 72, h: 28 });
+            places.push(Place { id: id_font, anchor: cr(xf), x: xf, y: mid(y, 26), w: 130, h: 26 });
         }
         // フォントの見え方（設定を変えると、すぐ変わる）
         let py = cur[2];
@@ -785,20 +969,13 @@ unsafe fn create(owner: HWND) {
         let y = card(&mut rows, &mut cur, 8, "キー割り当て", "コマンドごとのキーを、一覧から選んで変える", None, None);
         put(8, ID_KEYS, w!("BUTTON"), "変更...", push, 0, right - 90, mid(y, 28), 90, 28);
         places.push(Place { id: ID_KEYS, anchor: cr(right - 90), x: right - 90, y: mid(y, 28), w: 90, h: 28 });
-        put(ALL, ID_CLOSE, w!("BUTTON"), "閉じる", BS_DEFPUSHBUTTON as u32 | WS_TABSTOP.0, 0, 620, 520, 90, 30);
+        // ページごとの内容の高さ（末尾の説明文の分と、下の余白を含む）。表示領域より長ければ、スクロールする
+        let notes = [0, 0, 0, 0, 0, 44, 84, 44, 0];
+        let page_h: Vec<i32> = (0..cur.len()).map(|i| cur[i] + notes[i] + 8).collect();
+        put(ALL, IDOK.0, w!("BUTTON"), "保存", BS_DEFPUSHBUTTON as u32 | WS_TABSTOP.0, 0, 520, 520, 90, 30);
+        places.push(Place { id: IDOK.0, anchor: Anchor::Corner(200, 46), x: 520, y: 520, w: 90, h: 30 });
+        put(ALL, ID_CLOSE, w!("BUTTON"), "閉じる", push, 0, 620, 520, 90, 30);
         places.push(Place { id: ID_CLOSE, anchor: Anchor::Corner(100, 46), x: 620, y: 520, w: 90, h: 30 });
-        // フォント名の一覧（先頭は「（自動）」）
-        let fonts = font_families();
-        for id_font in [ID_FONT, ID_UIFONT] {
-            if let Some(&(_, h)) = all.iter().find(|(i, _)| *i == id_font) {
-                let auto = wide(AUTO_FONT);
-                SendMessageW(h, CB_ADDSTRING, None, Some(LPARAM(auto.as_ptr() as isize)));
-                for name in &fonts {
-                    let w = wide(name);
-                    SendMessageW(h, CB_ADDSTRING, None, Some(LPARAM(w.as_ptr() as isize)));
-                }
-            }
-        }
         // 本文より大きな見出しのフォント
         let mut big = font_lf(font);
         big.lfHeight = (big.lfHeight as f32 * 2.0) as i32;
@@ -814,7 +991,7 @@ unsafe fn create(owner: HWND) {
         // スイッチの行・選択肢ごとに、カードの上に透明なボタンを重ねる（Tab で止まり、Space で押せる。クリックもこのボタンが受ける）
         for r in &rows {
             if let Some(id) = r.toggle {
-                let hw = make_child(dlg, w!("BUTTON"), "", BS_OWNERDRAW as u32 | WS_TABSTOP.0, 0, id, font);
+                let hw = make_child(dlg, w!("BUTTON"), "", BS_OWNERDRAW as u32 | BS_NOTIFY as u32 | WS_TABSTOP.0, 0, id, font);
                 let (x, y) = (PAGE_X + 4, PAGE_Y + r.y + 4);
                 let _ = SetWindowPos(hw, None, p(x), p(y), p(CARD_W - 8), p(r.h - 8), SWP_NOZORDER | SWP_NOACTIVATE);
                 all.push((id, hw));
@@ -823,7 +1000,7 @@ unsafe fn create(owner: HWND) {
             if let Some((first, kind, n)) = r.choice {
                 for (i, (x0, y0, x1, y1)) in choice_rects(r.y, r.h, CARD_W, kind, n).into_iter().enumerate() {
                     let id = first + i as i32;
-                    let hw = make_child(dlg, w!("BUTTON"), "", BS_OWNERDRAW as u32 | WS_TABSTOP.0, 0, id, font);
+                    let hw = make_child(dlg, w!("BUTTON"), "", BS_OWNERDRAW as u32 | BS_NOTIFY as u32 | WS_TABSTOP.0, 0, id, font);
                     let _ = SetWindowPos(hw, None, p(x0), p(y0), p(x1 - x0), p(y1 - y0), SWP_NOZORDER | SWP_NOACTIVATE);
                     all.push((id, hw));
                     pages.push((id, r.page, String::new()));
@@ -845,9 +1022,12 @@ unsafe fn create(owner: HWND) {
             BG_BRUSH[i].store(CreateSolidBrush(rgb_ref(&pal.bg)).0 as isize, Ordering::Relaxed);
             EDIT_BRUSH[i].store(CreateSolidBrush(rgb_ref(&edit_bg)).0 as isize, Ordering::Relaxed);
         }
-        CTRLS.with(|c| *c.borrow_mut() = Some(Ctrls { card_w: CARD_W, places, sel: HashMap::new(), rows, toggles: HashMap::new(), all, pages, visible: Vec::new(), cur: 0 }));
+        CTRLS.with(|c| *c.borrow_mut() = Some(Ctrls { card_w: CARD_W, places, sel: HashMap::new(), rows, toggles: HashMap::new(), all, pages, visible: Vec::new(), cur: 0, scroll: 0, page_h }));
         fill_cats("");
         SET_DLG.store(dlg.0 as isize, Ordering::Relaxed);
+        // キーボードのフォーカス枠は、マウスで押したときには出さない（Tab などを使うと、IsDialogMessage が出す状態に変える）
+        // WM_CHANGEUISTATE = 0x127、wparam = UIS_SET (1) | UISF_HIDEFOCUS (1) << 16
+        SendMessageW(dlg, 0x0127, Some(WPARAM(1 | (1 << 16))), None);
         SendMessageW(ctl(ID_CATS), LB_SETITEMHEIGHT, Some(WPARAM(0)), Some(LPARAM(p(40) as isize)));
         // クライアント領域を 720 × 566 に
         let style = WINDOW_STYLE(GetWindowLongW(dlg, GWL_STYLE) as u32);
@@ -868,7 +1048,10 @@ unsafe fn font_lf(font: HFONT) -> LOGFONTW {
 
 /// フォントの見え方（本文のフォントと大きさで、構文・ログの色の例を描く）
 unsafe fn draw_preview(hdc: HDC, x: i32, y: i32, h: i32, scale: f32, pal: &Pal) {
-    let Some((face, size)) = with_app(|a| (a.settings.font.clone(), a.settings.font_size)) else { return };
+    // 保存前の下書き（入力欄）で描く。読めないときだけ、アプリの今の設定
+    let Some(size) = with_app(|a| a.settings.font_size) else { return };
+    let face = text_of(ID_FONT).trim().to_string();
+    let size = text_of(ID_SIZE).trim().parse::<f32>().ok().map_or(size, |v| v.clamp(settings::MIN_FONT, settings::MAX_FONT));
     let face = if face.is_empty() { "BIZ UDGothic".to_string() } else { face };
     let t = if DARK.load(Ordering::Relaxed) { &super::theme::DARK } else { &super::theme::LIGHT };
     unsafe {
@@ -979,9 +1162,17 @@ unsafe fn paint_bg(hwnd: HWND, hdc: HDC) {
         let mut rc = RECT::default();
         let _ = GetClientRect(hwnd, &mut rc);
         let pal = pal();
-        let (rows, toggles, card_w, sel) = CTRLS.with(|c| {
-            c.borrow().as_ref().map_or((Vec::new(), HashMap::new(), CARD_W, HashMap::new()), |ct| {
-                (ct.rows.iter().filter(|r| r.page == ct.cur).map(|r| (r.y, r.title, r.desc, r.toggle, r.h, r.preview, r.heading, r.choice)).collect::<Vec<_>>(), ct.toggles.clone(), ct.card_w, ct.sel.clone())
+        // 行の位置は、スクロール量だけ上へずらす
+        let (rows, toggles, card_w, sel, scroll, content) = CTRLS.with(|c| {
+            c.borrow().as_ref().map_or((Vec::new(), HashMap::new(), CARD_W, HashMap::new(), 0, 0), |ct| {
+                (
+                    ct.rows.iter().filter(|r| r.page == ct.cur).map(|r| (r.y - ct.scroll, r.title, r.desc, r.toggle, r.h, r.preview, r.heading, r.choice)).collect::<Vec<_>>(),
+                    ct.toggles.clone(),
+                    ct.card_w,
+                    ct.sel.clone(),
+                    ct.scroll,
+                    ct.page_h.get(ct.cur).copied().unwrap_or(0),
+                )
             })
         });
         let acc = accent_now();
@@ -1007,6 +1198,8 @@ unsafe fn paint_bg(hwnd: HWND, hdc: HDC) {
                     rt.BeginDraw();
                     rt.Clear(Some(&pal.bg));
                     if let Ok(brush) = rt.CreateSolidColorBrush(&pal.card, None) {
+                        // 行（カード）は、表示領域（タイトルの下から、ボタンの行の上まで）の中だけに描く
+                        rt.PushAxisAlignedClip(&windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F { left: 0.0, top: px(PAGE_Y), right: rc.right as f32, bottom: rc.bottom as f32 - px(FOOTER_H) }, D2D1_ANTIALIAS_MODE_ALIASED);
                         for &(y, _, _, toggle, rh, _, heading, choice) in &rows {
                             if heading {
                                 continue;
@@ -1065,6 +1258,17 @@ unsafe fn paint_bg(hwnd: HWND, hdc: HDC) {
                                 }
                             }
                         }
+                        rt.PopAxisAlignedClip();
+                        // ページが表示領域より長いときだけ、右端にスクロール位置の目印（細い線）を出す
+                        let (view_top, view_bottom) = (px(PAGE_Y), rc.bottom as f32 - px(FOOTER_H));
+                        let (vh, content_px) = (view_bottom - view_top, px(content));
+                        if content_px > vh && vh > 0.0 {
+                            let thumb = (vh * vh / content_px).max(px(24)).min(vh);
+                            let ty = view_top + (px(scroll) / (content_px - vh)).clamp(0.0, 1.0) * (vh - thumb);
+                            let x1 = rc.right as f32 - px(6);
+                            brush.SetColor(&D2D1_COLOR_F { a: 0.5, ..pal.dim });
+                            rt.FillRoundedRectangle(&rrect(x1 - px(4), ty, x1, ty + thumb, px(2)), &brush);
+                        }
                     }
                     drawn = rt.EndDraw(None, None).is_ok();
                 }
@@ -1082,6 +1286,9 @@ unsafe fn paint_bg(hwnd: HWND, hdc: HDC) {
             let _ = GetTextMetricsW(hdc, &mut tm);
             tm.tmHeight.max(12)
         };
+        // 行の文字も、表示領域の中だけに描く
+        let saved_dc = SaveDC(hdc);
+        IntersectClipRect(hdc, 0, px(PAGE_Y) as i32, rc.right, rc.bottom - px(FOOTER_H) as i32);
         for &(y, title, desc, toggle, rh, preview, heading, choice) in &rows {
             if heading {
                 SetTextColor(hdc, rgb_ref(&pal.dim));
@@ -1119,6 +1326,20 @@ unsafe fn paint_bg(hwnd: HWND, hdc: HDC) {
                 DrawTextW(hdc, &mut d, &mut r, DT_LEFT | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
             }
         }
+        let _ = RestoreDC(hdc, saved_dc);
+        // 保存した直後だけ、保存ボタンの左に控えめな一言（数秒で消える）
+        if SAVED.load(Ordering::Relaxed) {
+            let hb = ctl(IDOK.0);
+            let mut wr = RECT::default();
+            if !hb.0.is_null() && GetWindowRect(hb, &mut wr).is_ok() {
+                let mut pts = [POINT { x: wr.left, y: wr.top }, POINT { x: wr.right, y: wr.bottom }];
+                MapWindowPoints(None, Some(hwnd), &mut pts);
+                SetTextColor(hdc, rgb_ref(&acc));
+                let mut t: Vec<u16> = "✓ 保存しました".encode_utf16().collect();
+                let mut r = RECT { left: px(PAGE_X) as i32, top: pts[0].y, right: pts[0].x - px(12) as i32, bottom: pts[1].y };
+                DrawTextW(hdc, &mut t, &mut r, DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+            }
+        }
         SelectObject(hdc, old);
     }
 }
@@ -1131,6 +1352,16 @@ unsafe extern "system" fn dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                 let code = ((wparam.0 >> 16) & 0xFFFF) as u32;
                 if code == BN_CLICKED && is_toggle(id) {
                     flip_checked(id);
+                }
+                // フォーカスが入った部品が表示領域の外なら、見える位置までスクロールする
+                // （BN_SETFOCUS = 6、EN_SETFOCUS = 0x100、CBN_SETFOCUS = 3。ほかの通知でも、見えていれば何もしない）
+                if code == 6 || code == 0x100 || code == 3 {
+                    ensure_visible(hwnd, id);
+                }
+                // 選択肢のフォーカスが動いたら、前の枠が残らないように描き直す（BN_SETFOCUS = 6, BN_KILLFOCUS = 7）
+                if (code == 6 || code == 7) && (ID_THEME_BASE..ID_ACCENT_BASE + 1 + ACCENTS.len() as i32).contains(&id) {
+                    let _ = InvalidateRect(Some(hwnd), None, true);
+                    return LRESULT(0);
                 }
                 on_command(hwnd, id, code);
                 LRESULT(0)
@@ -1145,14 +1376,28 @@ unsafe extern "system" fn dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                 let dpi = GetDpiForWindow(hwnd).max(96);
                 let scale = dpi as f32 / 96.0;
                 let style = WINDOW_STYLE(GetWindowLongW(hwnd, GWL_STYLE) as u32);
-                let mut rc = RECT { left: 0, top: 0, right: (640.0 * scale) as i32, bottom: (460.0 * scale) as i32 };
+                let mut rc = RECT { left: 0, top: 0, right: (640.0 * scale) as i32, bottom: (360.0 * scale) as i32 };
                 let _ = AdjustWindowRectExForDpi(&mut rc, style, false, WINDOW_EX_STYLE(0), dpi);
                 mmi.ptMinTrackSize = POINT { x: rc.right - rc.left, y: rc.bottom - rc.top };
                 LRESULT(0)
             }
+            WM_MOUSEWHEEL => {
+                // 1 ノッチ（120）で WHEEL_STEP だけ、ページをスクロールする
+                let notches = ((wparam.0 >> 16) & 0xFFFF) as i16 as i32;
+                scroll_by(hwnd, -notches * WHEEL_STEP / 120);
+                LRESULT(0)
+            }
+            WM_TIMER if wparam.0 == SAVED_TIMER => {
+                let _ = KillTimer(Some(hwnd), SAVED_TIMER);
+                SAVED.store(false, Ordering::Relaxed);
+                let _ = InvalidateRect(Some(hwnd), None, true);
+                LRESULT(0)
+            }
             WM_CLOSE => {
-                commit_edits();
-                let _ = ShowWindow(hwnd, SW_HIDE);
+                // ×：保存していない変更があれば確認する
+                if confirm_unsaved(hwnd) {
+                    let _ = ShowWindow(hwnd, SW_HIDE);
+                }
                 LRESULT(0)
             }
             WM_ERASEBKGND => {
@@ -1177,10 +1422,19 @@ unsafe extern "system" fn dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                     return LRESULT(1);
                 }
                 let p = pal();
-                let focused = di.itemState.0 & ODS_FOCUS.0 != 0;
+                let focused = di.itemState.0 & ODS_FOCUS.0 != 0 && di.itemState.0 & ODS_NOFOCUSRECT.0 == 0;
                 let acc = accent_now();
+                let is_choice = (ID_THEME_BASE..ID_ACCENT_BASE + 1 + ACCENTS.len() as i32).contains(&(di.CtlID as i32));
+                let mut rc = di.rcItem;
+                if is_choice {
+                    // 選択肢：フォーカスがないときは何も描かない（切り替えの外枠を欠けさせない）。あるときは内側に枠
+                    if !focused {
+                        return LRESULT(1);
+                    }
+                    rc = RECT { left: rc.left + 3, top: rc.top + 3, right: rc.right - 3, bottom: rc.bottom - 3 };
+                }
                 let brush = CreateSolidBrush(rgb_ref(if focused { &acc } else { &p.card }));
-                FrameRect(di.hDC, &di.rcItem, brush);
+                FrameRect(di.hDC, &rc, brush);
                 let _ = DeleteObject(brush.into());
                 LRESULT(1)
             }
@@ -1202,9 +1456,16 @@ unsafe extern "system" fn dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                 SetBkMode(hdc, TRANSPARENT);
                 let is_title = HWND(lparam.0 as *mut _) == ctl(ID_TITLE);
                 SetTextColor(hdc, rgb_ref(if is_title { &p.text } else { &p.dim }));
-                // 静的な文字と、カードの上に重ねた透明なボタンは、下のカードを塗りつぶさない
-                if msg == WM_CTLCOLORSTATIC || msg == WM_CTLCOLORBTN {
+                // 静的な文字と、カードの上に重ねた透明なボタン（スイッチ・切り替え・色の見本）は、下のカードを塗りつぶさない。
+                // 通常のボタン（保存・閉じる・＋・－ など）は、ダイアログの地の色で塗る（NULL だと、角に白い下地が出る）
+                if msg == WM_CTLCOLORSTATIC {
                     return LRESULT(GetStockObject(NULL_BRUSH).0 as isize);
+                }
+                if msg == WM_CTLCOLORBTN {
+                    let id = GetDlgCtrlID(HWND(lparam.0 as *mut _));
+                    if is_toggle(id) || (ID_THEME_BASE..ID_ACCENT_BASE + 1 + ACCENTS.len() as i32).contains(&id) {
+                        return LRESULT(GetStockObject(NULL_BRUSH).0 as isize);
+                    }
                 }
                 LRESULT(BG_BRUSH[i].load(Ordering::Relaxed))
             }

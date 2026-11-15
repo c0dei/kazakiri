@@ -23,8 +23,6 @@ pub struct Settings {
     pub wrap: bool,
     /// GREP 置換の前に、各ファイルのバックアップ（.bak）を作る
     pub grep_backup: bool,
-    /// IME の変換中の文字を、IME の窓ではなくエディタの中に描く
-    pub ime_inline: bool,
     /// 拡張子で決まる言語（JSON・SQL・XML など）の色分け
     pub syntax: bool,
     /// ツールバーと機能ボタンの列
@@ -60,7 +58,7 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { font: String::new(), font_size: 14.0, ui_font: String::new(), ui_font_size: 13.0, dark: false, whitespace: false, log_colors: true, tab_width: 4, wrap: false, grep_backup: true, ime_inline: true, syntax: true, tray: true, grep_close: false, wheel_lines: 3, md_auto: false, backup_save: false, backup_dir: String::new(), backup_numbered: false, autosave_min: 0, toolbar: true, modebar: true, fkeys: false, theme_mode: 0, accent: None, line_numbers: true, window: None }
+        Settings { font: String::new(), font_size: 14.0, ui_font: String::new(), ui_font_size: 13.0, dark: false, whitespace: false, log_colors: true, tab_width: 4, wrap: false, grep_backup: true, syntax: true, tray: true, grep_close: false, wheel_lines: 3, md_auto: false, backup_save: false, backup_dir: String::new(), backup_numbered: false, autosave_min: 0, toolbar: true, modebar: true, fkeys: false, theme_mode: 0, accent: None, line_numbers: true, window: None }
     }
 }
 
@@ -107,7 +105,6 @@ impl Settings {
                 "log_colors" => s.log_colors = flag(v),
                 "wrap" => s.wrap = flag(v),
                 "grep_backup" => s.grep_backup = flag(v),
-                "ime_inline" => s.ime_inline = flag(v),
                 "syntax" => s.syntax = flag(v),
                 // 旧キー menubar / native_dark_menu は、標準のメニューバーだけになったので無視する
                 "window" => {
@@ -155,8 +152,8 @@ impl Settings {
     pub fn to_text(&self) -> String {
         format!(
             "# kazakiri の設定（アプリから変更すると上書きされます）\n\
-             font = {}\nfont_size = {}\nui_font = {}\nui_font_size = {}\ndark = {}\nwhitespace = {}\nlog_colors = {}\ntab_width = {}\nwrap = {}\ngrep_backup = {}\nime_inline = {}\nsyntax = {}\ntray = {}\ngrep_close = {}\nwheel_lines = {}\nmd_auto = {}\nbackup_save = {}\nbackup_dir = {}\nbackup_numbered = {}\nautosave_min = {}\ntoolbar = {}\nmodebar = {}\nfkeys = {}\ntheme = {}\naccent = {}\nline_numbers = {}\n{}",
-            self.font, self.font_size, self.ui_font, self.ui_font_size, self.dark, self.whitespace, self.log_colors, self.tab_width, self.wrap, self.grep_backup, self.ime_inline, self.syntax, self.tray, self.grep_close, self.wheel_lines, self.md_auto, self.backup_save, self.backup_dir, self.backup_numbered, self.autosave_min, self.toolbar, self.modebar,
+             font = {}\nfont_size = {}\nui_font = {}\nui_font_size = {}\ndark = {}\nwhitespace = {}\nlog_colors = {}\ntab_width = {}\nwrap = {}\ngrep_backup = {}\nsyntax = {}\ntray = {}\ngrep_close = {}\nwheel_lines = {}\nmd_auto = {}\nbackup_save = {}\nbackup_dir = {}\nbackup_numbered = {}\nautosave_min = {}\ntoolbar = {}\nmodebar = {}\nfkeys = {}\ntheme = {}\naccent = {}\nline_numbers = {}\n{}",
+            self.font, self.font_size, self.ui_font, self.ui_font_size, self.dark, self.whitespace, self.log_colors, self.tab_width, self.wrap, self.grep_backup, self.syntax, self.tray, self.grep_close, self.wheel_lines, self.md_auto, self.backup_save, self.backup_dir, self.backup_numbered, self.autosave_min, self.toolbar, self.modebar,
             self.fkeys,
             ["system", "light", "dark"][self.theme_mode.min(2) as usize],
             self.accent.map_or("system".to_string(), |c| format!("{c:06X}")),
@@ -182,7 +179,7 @@ mod tests {
 
     #[test]
     fn roundtrip_and_defaults() {
-        let s = Settings { font: "Consolas".into(), font_size: 16.5, ui_font: "Meiryo UI".into(), ui_font_size: 12.0, dark: true, whitespace: true, log_colors: false, tab_width: 8, wrap: true, grep_backup: false, ime_inline: false, syntax: false, tray: false, grep_close: true, wheel_lines: 5, md_auto: true, backup_save: true, backup_dir: "D:\\bk".into(), backup_numbered: true, autosave_min: 3, toolbar: false, modebar: false, fkeys: false, theme_mode: 2, accent: Some(0x0067C0), line_numbers: false, window: Some((10, 20, 900, 700, true)) };
+        let s = Settings { font: "Consolas".into(), font_size: 16.5, ui_font: "Meiryo UI".into(), ui_font_size: 12.0, dark: true, whitespace: true, log_colors: false, tab_width: 8, wrap: true, grep_backup: false, syntax: false, tray: false, grep_close: true, wheel_lines: 5, md_auto: true, backup_save: true, backup_dir: "D:\\bk".into(), backup_numbered: true, autosave_min: 3, toolbar: false, modebar: false, fkeys: false, theme_mode: 2, accent: Some(0x0067C0), line_numbers: false, window: Some((10, 20, 900, 700, true)) };
         assert_eq!(Settings::parse(&s.to_text()), s);
         let broken = Settings::parse("font_size = abc\nunknown = 1\ntab_width = 99\n");
         assert_eq!(broken.font_size, 14.0);

@@ -192,7 +192,6 @@ pub const ID_ZOOM_IN: u32 = 623;
 pub const ID_ZOOM_OUT: u32 = 624;
 pub const ID_ZOOM_RESET: u32 = 625;
 pub const ID_WRAP: u32 = 626;
-pub const ID_IME_INLINE: u32 = 627;
 pub const ID_SYNTAX: u32 = 628;
 /// 区切り文字の選択肢（DELIMS の並びと対応）
 pub const ID_DELIM_BASE: u32 = 610;
@@ -485,7 +484,6 @@ pub unsafe fn build(km: &Keymap) -> Result<Menus> {
         item(km, view, ID_WRAP, "折り返して表示(&R)")?;
         item(km, view, ID_SYNTAX, "構文の色分け（JSON・SQL・XML など）(&Y)")?;
         item(km, view, ID_LOG_COLORS, "ログレベルの色分け(&L)")?;
-        item(km, view, ID_IME_INLINE, "IME の変換中の文字をエディタ内に表示(&M)")?;
         sep(view)?;
         item(km, view, ID_SPLIT_VIEW, "分割表示（同じファイルを左右に並べて参照）(&P)")?;
         item(km, view, ID_SPLIT_SYNC, "分割表示で同期スクロール(&Q)")?;
@@ -620,7 +618,6 @@ impl Menus {
             CheckMenuItem(self.view, ID_MODEBAR, check(s.modebar));
             CheckMenuItem(self.view, ID_FKEYS, check(s.fkeys));
             CheckMenuItem(self.view, ID_WRAP, check(s.wrap));
-            CheckMenuItem(self.view, ID_IME_INLINE, check(s.ime_inline));
             CheckMenuItem(self.grep, ID_GREP_BACKUP, check(s.grep_backup));
             CheckMenuItem(self.view, ID_DARK, check(s.dark));
             CheckMenuItem(self.csv, ID_CSV, check(csv.is_some()));

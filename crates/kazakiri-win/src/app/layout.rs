@@ -118,11 +118,25 @@ impl App {
         unsafe {
             let _ = GetClientRect(self.hwnd, &mut rc);
             let scale = GetDpiForWindow(self.hwnd) as f32 / 96.0;
-            // タブバー・ツールバーと、スクロールバーを除いた大きさ（本文・結果一覧・ステータスバーの領域）
-            let (vw, hh) = self.scrollbar_px();
-            let hh = if self.hbar_on.get() { hh } else { 0 };
-            ((rc.right - rc.left - vw) as f32 / scale, ((rc.bottom - rc.top - hh) as f32 / scale - self.chrome_h()).max(0.0))
+            // タブバー・ツールバーと、縦スクロールバーを除いた大きさ（本文・結果一覧・ステータスバーの領域）。
+            // 高さは、ステータスバーまで含む（横スクロールバーは本文の下端に置くので、`text_height` が引く）
+            let (vw, _) = self.scrollbar_px();
+            ((rc.right - rc.left - vw) as f32 / scale, ((rc.bottom - rc.top) as f32 / scale - self.chrome_h()).max(0.0))
         }
+    }
+
+    /// ウィンドウの幅いっぱい（スクロールバーの分も含む。DIP）。タブバー・ツールバー・ステータスバーは、これで描く
+    pub(super) fn full_w(&self) -> f32 {
+        self.client_w_dip()
+    }
+
+    /// 横スクロールバーの高さ（DIP。出していなければ 0）
+    pub(super) fn hbar_h(&self) -> f32 {
+        if !self.hbar_on.get() {
+            return 0.0;
+        }
+        let scale = unsafe { GetDpiForWindow(self.hwnd) } as f32 / 96.0;
+        self.scrollbar_px().1 as f32 / scale
     }
 
     /// ステータスバー（と、あれば機能ボタンの列）の高さ
@@ -136,7 +150,7 @@ impl App {
     }
 
     pub(super) fn text_height(&self) -> f32 {
-        self.client_size().1 - self.status_h() - self.panel_h() - self.pin_h()
+        self.client_size().1 - self.status_h() - self.panel_h() - self.pin_h() - self.hbar_h()
     }
 
     /// 見出し行を上に固定して表示するか（CSV モードで「1 行目は見出し」のとき）
@@ -277,7 +291,8 @@ impl App {
         }
     }
 
-    /// スクロールバー（子ウィンドウ）を、本文の右端・下端に置く。縦は、ツールバーの下から
+    /// スクロールバー（子ウィンドウ）を、本文の領域の中に置く。縦は本文の右端（ツールバーの下から、結果パネル・ステータスバーの上まで）、
+    /// 横は本文の下端（結果パネル・ステータスバーの上）
     pub(super) fn layout_scrollbars(&self) {
         let mut rc = RECT::default();
         let scale = unsafe { GetDpiForWindow(self.hwnd) } as f32 / 96.0;
@@ -287,15 +302,17 @@ impl App {
         let (vw, hh) = self.scrollbar_px();
         let hh = if self.hbar_on.get() { hh } else { 0 };
         let top = (self.chrome_h() * scale).round() as i32;
+        // 本文の領域の下端（固定した見出し行も含む。横スクロールバーはこの下）
+        let body_bottom = (((self.chrome_h() + self.pin_h() + self.text_height()) * scale).round() as i32).clamp(top, rc.bottom);
         // 位置が前回と同じなら何もしない（スクロールのたびに呼ばれるので）
-        let placed = [rc.right, rc.bottom, top, vw, hh, 0];
+        let placed = [rc.right, rc.bottom, top, vw, hh, body_bottom];
         if self.sb_placed.get() == placed {
             return;
         }
         self.sb_placed.set(placed);
         unsafe {
-            let _ = SetWindowPos(self.vbar, None, rc.right - vw, top, vw, (rc.bottom - top - hh).max(0), SWP_NOZORDER | SWP_NOACTIVATE);
-            let _ = SetWindowPos(self.hbar, None, 0, rc.bottom - hh.max(1), (rc.right - vw).max(0), hh.max(1), SWP_NOZORDER | SWP_NOACTIVATE);
+            let _ = SetWindowPos(self.vbar, None, rc.right - vw, top, vw, (body_bottom - top).max(0), SWP_NOZORDER | SWP_NOACTIVATE);
+            let _ = SetWindowPos(self.hbar, None, 0, body_bottom, (rc.right - vw).max(0), hh.max(1), SWP_NOZORDER | SWP_NOACTIVATE);
             let _ = ShowWindow(self.hbar, if hh > 0 { SW_SHOWNOACTIVATE } else { SW_HIDE });
         }
     }

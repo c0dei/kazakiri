@@ -205,7 +205,7 @@ impl App {
             self.draw_ui_str(rt, brush, text, ix0 + 8.0 - shift, ty, ix0 + 8.0 - shift + self.ui_text_width(&units)? + 4.0)?;
             if focused {
                 let x = x - shift;
-                match self.comp.as_ref().filter(|_| self.ime_inline_on()) {
+                match self.comp.as_ref() {
                     Some(comp) => {
                         // 変換中の文字：変換対象は背景、下線で状態を示す
                         let cw = self.ui_text_width(&comp.units)?;

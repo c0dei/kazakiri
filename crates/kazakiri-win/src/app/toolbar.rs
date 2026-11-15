@@ -345,7 +345,8 @@ impl App {
             }
             return self.mode_boxes().into_iter().find(|&(x0, x1, _)| x >= x0 && x < x1).map(|(_, _, i)| Hover::Mode(i));
         }
-        let (w, h) = self.client_size();
+        let (_, h) = self.client_size();
+        let w = self.full_w();
         if y >= h - self.status_base_h() && y < h {
             return self.status_hit(x).map(Hover::Status);
         }
@@ -469,7 +470,7 @@ impl App {
 
     /// ツールバーの右端の、コマンドパレットを開く丸い欄（ツールバーの行の中の座標）。幅が足りないときは None
     pub(super) fn palette_pill(&self) -> Option<(f32, f32, f32, f32)> {
-        let w = self.client_size().0;
+        let w = self.full_w();
         if w < 900.0 || !self.settings.toolbar {
             return None;
         }

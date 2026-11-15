@@ -73,7 +73,10 @@ impl App {
             }
             self.ensure_continuation();
             self.clamp_top();
+            // 結果パネルの出し入れなどで本文の高さが変わっても、スクロールバーが本文の中に収まるように
+            self.layout_scrollbars();
             let (w, h) = self.client_size();
+            let fw = self.full_w(); // タブバー・ツールバー・結果パネル・ステータスバーは、スクロールバーの列も含めた全幅
             let g = self.gfx.as_ref().unwrap();
             let rt: ID2D1RenderTarget = g.target.cast()?;
             let brush = &g.brush;
@@ -82,10 +85,10 @@ impl App {
 
             // いちばん上にタブバー、その下にツールバー（とモードバー）を描き、それより下は丸ごと下へずらして描く
             rt.SetTransform(&Matrix3x2::identity());
-            self.draw_tabs(&rt, brush, w)?;
+            self.draw_tabs(&rt, brush, fw)?;
             if self.tb_h() > 0.0 {
                 rt.SetTransform(&Matrix3x2::translation(0.0, self.tab_h()));
-                self.draw_toolbar(&rt, brush, w)?;
+                self.draw_toolbar(&rt, brush, fw)?;
             }
             rt.SetTransform(&Matrix3x2::translation(0.0, self.chrome_h()));
             let pin = self.pin_h();
@@ -96,7 +99,7 @@ impl App {
             if self.md_mode() == Some(mdview::MdMode::Design) {
                 rt.SetTransform(&Matrix3x2::translation(0.0, self.chrome_h()));
                 self.draw_markdown(&rt, brush)?;
-                self.draw_status(&rt, brush, w, h)?;
+                self.draw_status(&rt, brush, fw, h)?;
                 rt.SetTransform(&Matrix3x2::identity());
                 self.draw_tip(&rt, brush, w)?;
                 return rt.EndDraw(None, None);
@@ -105,7 +108,7 @@ impl App {
             if self.diffview.is_some() {
                 rt.SetTransform(&Matrix3x2::translation(0.0, self.chrome_h()));
                 self.draw_diffview(&rt, brush, w, h - self.status_h())?;
-                self.draw_status(&rt, brush, w, h)?;
+                self.draw_status(&rt, brush, fw, h)?;
                 rt.SetTransform(&Matrix3x2::identity());
                 return rt.EndDraw(None, None);
             }
@@ -225,8 +228,8 @@ impl App {
             if self.md_mode() == Some(mdview::MdMode::Split) {
                 self.draw_markdown(&rt, brush)?;
             }
-            self.draw_panel(&rt, brush, w, text_h + pin)?;
-            self.draw_status(&rt, brush, w, h)?;
+            self.draw_panel(&rt, brush, fw, text_h + pin)?;
+            self.draw_status(&rt, brush, fw, h)?;
             self.draw_prompt_bar(&rt, brush, w, h)?;
             rt.SetTransform(&Matrix3x2::identity());
             self.draw_tip(&rt, brush, w)?;
@@ -317,7 +320,7 @@ impl App {
                     if ua >= ra && (ua < rb || (last && ua == rb)) {
                         let cx = x + self.text_width(&units[..(ua - ra) as usize])?;
                         // IME の変換中の文字（あれば、カーソルの位置に重ねて描く）
-                        if let Some(comp) = self.comp.as_ref().filter(|_| self.ime_inline_on()) {
+                        if let Some(comp) = self.comp.as_ref() {
                             return self.draw_composition(rt, brush, comp, cx, y);
                         }
                         let mut color = self.theme.caret;

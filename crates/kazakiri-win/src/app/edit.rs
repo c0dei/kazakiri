@@ -553,11 +553,6 @@ impl App {
         }
     }
 
-    /// 変換中の文字を本文（入力欄でなく）に描くか
-    pub(super) fn ime_inline_on(&self) -> bool {
-        self.settings.ime_inline
-    }
-
     /// 変換中の文字列・文字ごとの状態・カーソルを IME から読む
     pub(super) fn read_composition(&mut self) {
         unsafe {

@@ -494,9 +494,9 @@ impl App {
                     let scale = GetDpiForWindow(self.hwnd) as f32 / 96.0;
                     let (x, y) = (pt.x as f32 / scale, pt.y as f32 / scale - self.chrome_h());
                     let (cw, ch) = self.client_size();
-                    let _ = cw;
-                    // 本文の中だけ I ビーム。ツールバー・タブ・行番号・結果一覧・ステータスバー・機能ボタンは、ボタンも含めて通常の矢印
-                    let in_text = self.diffview.is_none() && !self.md_hit(x, y) && y >= 0.0 && x >= self.gutter_width() && y < ch - self.status_h() - self.panel_h();
+                    // 本文の中だけ I ビーム。ツールバー・タブ・行番号・スクロールバー（右の列・下の行）・結果一覧・ステータスバー・機能ボタンは、
+                    // ボタンも含めて通常の矢印
+                    let in_text = self.diffview.is_none() && !self.md_hit(x, y) && y >= 0.0 && x >= self.gutter_width() && x < cw && y < ch - self.status_h() - self.panel_h() - self.hbar_h();
                     let on_link = self.md_link_hover(x, y);
                     let id = if let Some(c) = self.prompt_cursor(x, y) {
                         c
@@ -662,7 +662,7 @@ impl App {
                     (DONE, self.guarded(Pending::Close))
                 }
                 // 変換中の文字を自前で描くので、IME の標準の変換ウィンドウは出さない
-                WM_IME_SETCONTEXT if self.ime_inline_on() => {
+                WM_IME_SETCONTEXT => {
                     let l = LPARAM(lparam.0 & !(edit::ISC_SHOWUICOMPOSITIONWINDOW as isize));
                     (Some(DefWindowProcW(self.hwnd, msg, wparam, l)), None)
                 }
@@ -688,18 +688,18 @@ impl App {
                 }
                 WM_IME_STARTCOMPOSITION => {
                     self.update_ime_position();
-                    if self.ime_inline_on() { (DONE, None) } else { (None, None) }
+                    (DONE, None)
                 }
                 WM_IME_COMPOSITION if self.ime_result(lparam) => {
                     self.comp = None;
                     self.invalidate();
                     (DONE, None)
                 }
-                WM_IME_COMPOSITION if self.ime_inline_on() && lparam.0 as u32 & edit::GCS_COMPSTR_BIT != 0 => {
+                WM_IME_COMPOSITION if lparam.0 as u32 & edit::GCS_COMPSTR_BIT != 0 => {
                     self.read_composition();
                     (DONE, None)
                 }
-                WM_IME_ENDCOMPOSITION if self.ime_inline_on() => {
+                WM_IME_ENDCOMPOSITION => {
                     self.comp = None;
                     self.invalidate();
                     (DONE, None)

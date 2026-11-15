@@ -189,12 +189,6 @@ impl App {
                 self.layout_cache.borrow_mut().clear();
                 self.invalidate();
             }
-            menu::ID_IME_INLINE => {
-                self.settings.ime_inline = !self.settings.ime_inline;
-                self.settings.save();
-                self.message = format!("IME の変換中の文字をエディタ内に表示: {}（次の入力から）", on_off(self.settings.ime_inline));
-                self.invalidate();
-            }
             menu::ID_TOOLBAR | menu::ID_FKEYS | menu::ID_MODEBAR => {
                 match id {
                     menu::ID_TOOLBAR => self.settings.toolbar = !self.settings.toolbar,
