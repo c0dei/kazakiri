@@ -171,6 +171,9 @@ fn swatch_color(i: usize) -> D2D1_COLOR_F {
 }
 
 /// ウィンドウの大きさに合わせて、カードの幅とコントロールの位置を置き直す
+/// ウィンドウの大きさをドラッグで変えている最中（`WM_ENTERSIZEMOVE`〜`WM_EXITSIZEMOVE`）。このあいだは、背景を GDI で簡易に描いて軽くする
+static SIZING: AtomicBool = AtomicBool::new(false);
+
 fn relayout(dlg: HWND) {
     unsafe {
         let scale = GetDpiForWindow(dlg).max(96) as f32 / 96.0;
@@ -178,21 +181,27 @@ fn relayout(dlg: HWND) {
         let _ = GetClientRect(dlg, &mut rc);
         let (cw, ch) = ((rc.right as f32 / scale) as i32, (rc.bottom as f32 / scale) as i32);
         let new_w = (cw - PAGE_X - 24).max(440);
-        let (places, rows, ids, scroll) = CTRLS.with(|c| {
+        let (places, rows, ids, scroll, other) = CTRLS.with(|c| {
             let mut c = c.borrow_mut();
-            let Some(ct) = c.as_mut() else { return (Vec::new(), Vec::new(), Vec::new(), 0) };
+            let Some(ct) = c.as_mut() else { return (Vec::new(), Vec::new(), Vec::new(), 0, std::collections::HashSet::new()) };
             ct.card_w = new_w;
             // スクロール量は、ページの内容と表示領域の高さに収める
             let max = max_scroll(ch, ct.page_h.get(ct.cur).copied().unwrap_or(0));
             ct.scroll = ct.scroll.clamp(0, max);
-            (ct.places.clone(), ct.rows.iter().map(|r| (r.y, r.h, r.toggle, r.choice)).collect::<Vec<_>>(), ct.all.iter().map(|(i, _)| *i).collect::<Vec<_>>(), ct.scroll)
+            // 見えていないページの部品は、置き直さない（そのページを出すときに、`show_page` が置く）
+            let other: std::collections::HashSet<i32> = ct.pages.iter().filter(|(i, pg, _)| *i != 0 && *pg != ct.cur).map(|(i, _, _)| *i).collect();
+            (ct.places.clone(), ct.rows.iter().filter(|r| r.page == ct.cur).map(|r| (r.y, r.h, r.toggle, r.choice)).collect::<Vec<_>>(), ct.all.iter().map(|(i, _)| *i).collect::<Vec<_>>(), ct.scroll, other)
         });
         if ids.is_empty() {
             return;
         }
         let p = |v: i32| (v as f32 * scale).round() as i32;
-        let put = |id: i32, x: i32, y: i32, w: i32, h: i32| {
-            let _ = SetWindowPos(ctl(id), None, p(x), p(y), p(w), p(h), SWP_NOZORDER | SWP_NOACTIVATE);
+        // 置く位置を集めてから、まとめて動かす（1 つずつ動かすより、再描画が少ない）。前回と同じ位置の部品は動かさない
+        let mut moves: Vec<(i32, i32, i32, i32, i32)> = Vec::new();
+        let mut put = |id: i32, x: i32, y: i32, w: i32, h: i32| {
+            if !other.contains(&id) {
+                moves.push((id, p(x), p(y), p(w), p(h)));
+            }
         };
         // スクロールで動く部品（ページの中身）の ID。表示領域からはみ出した部分を切り取る
         let mut moving: Vec<i32> = Vec::new();
@@ -223,6 +232,39 @@ fn relayout(dlg: HWND) {
                 }
             }
         }
+        thread_local! {
+            static PLACED: RefCell<HashMap<i32, (i32, i32, i32, i32)>> = RefCell::new(HashMap::new());
+        }
+        let changed: Vec<(i32, i32, i32, i32, i32)> = PLACED.with(|m| {
+            let mut m = m.borrow_mut();
+            moves
+                .into_iter()
+                .filter(|&(id, x, y, w, h)| {
+                    let same = m.get(&id) == Some(&(x, y, w, h));
+                    m.insert(id, (x, y, w, h));
+                    !same
+                })
+                .collect()
+        });
+        if !changed.is_empty() {
+            let flags = SWP_NOZORDER | SWP_NOACTIVATE;
+            match BeginDeferWindowPos(changed.len() as i32) {
+                Ok(mut hdwp) => {
+                    for &(id, x, y, w, h) in &changed {
+                        match DeferWindowPos(hdwp, ctl(id), None, x, y, w, h, flags) {
+                            Ok(next) => hdwp = next,
+                            Err(_) => break,
+                        }
+                    }
+                    let _ = EndDeferWindowPos(hdwp);
+                }
+                Err(_) => {
+                    for &(id, x, y, w, h) in &changed {
+                        let _ = SetWindowPos(ctl(id), None, x, y, w, h, flags);
+                    }
+                }
+            }
+        }
         clip_to_view(dlg, &moving, p(PAGE_Y), rc.bottom - p(FOOTER_H));
         let _ = InvalidateRect(Some(dlg), None, true);
     }
@@ -236,6 +278,10 @@ fn max_scroll(ch: i32, content: i32) -> i32 {
 /// スクロールで動く部品を、ページの表示領域（タイトルの下から、ボタンの行の上まで）で切り取る。
 /// はみ出した部品は、タイトルやボタンの上に重ならない（`top`・`bottom` はクライアントの座標。ピクセル）
 unsafe fn clip_to_view(dlg: HWND, ids: &[i32], top: i32, bottom: i32) {
+    thread_local! {
+        /// 部品ごとに、前に設定した切り取り（上, 下, 幅。切り取りなしは (0, 0, 0)）。同じなら設定し直さない
+        static CLIPPED: RefCell<HashMap<i32, (i32, i32, i32)>> = RefCell::new(HashMap::new());
+    }
     unsafe {
         for &id in ids {
             let h = ctl(id);
@@ -248,14 +294,23 @@ unsafe fn clip_to_view(dlg: HWND, ids: &[i32], top: i32, bottom: i32) {
             }
             let mut pts = [POINT { x: wr.left, y: wr.top }, POINT { x: wr.right, y: wr.bottom }];
             MapWindowPoints(None, Some(dlg), &mut pts);
-            let (t, b) = (pts[0].y, pts[1].y);
-            if t >= top && b <= bottom {
-                let _ = SetWindowRgn(h, None, true);
+            let (t, b, w) = (pts[0].y, pts[1].y, pts[1].x - pts[0].x);
+            let (it, ib) = (t.max(top), b.min(bottom));
+            let key = if t >= top && b <= bottom { (0, 0, 0) } else if it >= ib { (-1, -1, -1) } else { (it - t, ib - t, w) };
+            if CLIPPED.with(|m| m.borrow_mut().insert(id, key)) == Some(key) {
                 continue;
             }
-            let (it, ib) = (t.max(top), b.min(bottom));
-            let rgn = if it >= ib { CreateRectRgn(0, 0, 0, 0) } else { CreateRectRgn(0, it - t, pts[1].x - pts[0].x, ib - t) };
-            SetWindowRgn(h, Some(rgn), true);
+            match key {
+                (0, 0, 0) => {
+                    let _ = SetWindowRgn(h, None, false);
+                }
+                (-1, -1, -1) => {
+                    SetWindowRgn(h, Some(CreateRectRgn(0, 0, 0, 0)), false);
+                }
+                (a, c, w) => {
+                    SetWindowRgn(h, Some(CreateRectRgn(0, a, w, c)), false);
+                }
+            }
         }
     }
 }
@@ -1048,6 +1103,10 @@ unsafe fn font_lf(font: HFONT) -> LOGFONTW {
 
 /// フォントの見え方（本文のフォントと大きさで、構文・ログの色の例を描く）
 unsafe fn draw_preview(hdc: HDC, x: i32, y: i32, h: i32, scale: f32, pal: &Pal) {
+    // 大きさをドラッグで変えているあいだは、描かない（終わったら描き直す）
+    if SIZING.load(Ordering::Relaxed) {
+        return;
+    }
     // 保存前の下書き（入力欄）で描く。読めないときだけ、アプリの今の設定
     let Some(size) = with_app(|a| a.settings.font_size) else { return };
     let face = text_of(ID_FONT).trim().to_string();
@@ -1061,7 +1120,25 @@ unsafe fn draw_preview(hdc: HDC, x: i32, y: i32, h: i32, scale: f32, pal: &Pal) 
             name[i] = *c;
         }
         let lf = LOGFONTW { lfHeight: -((size * scale).round() as i32), lfCharSet: windows::Win32::Graphics::Gdi::DEFAULT_CHARSET, lfFaceName: name, ..Default::default() };
-        let font = CreateFontIndirectW(&lf);
+        // フォントは、名前と大きさが同じあいだは使い回す（描くたびに作ると、サイズ変更中に重い）
+        thread_local! {
+            static PREVIEW_FONT: RefCell<Option<((String, i32), HFONT)>> = const { RefCell::new(None) };
+        }
+        let key = (face.clone(), lf.lfHeight);
+        let font = PREVIEW_FONT.with(|c| {
+            let mut c = c.borrow_mut();
+            if let Some((k, f)) = c.as_ref() {
+                if *k == key {
+                    return *f;
+                }
+            }
+            if let Some((_, old)) = c.take() {
+                let _ = DeleteObject(old.into());
+            }
+            let f = CreateFontIndirectW(&lf);
+            *c = Some((key, f));
+            f
+        });
         let old = SelectObject(hdc, font.into());
         SetBkMode(hdc, TRANSPARENT);
         let mut tm = TEXTMETRICW::default();
@@ -1087,7 +1164,6 @@ unsafe fn draw_preview(hdc: HDC, x: i32, y: i32, h: i32, scale: f32, pal: &Pal) 
             }
         }
         SelectObject(hdc, old);
-        let _ = DeleteObject(font.into());
     }
 }
 
@@ -1152,10 +1228,120 @@ unsafe fn draw_cat_item(di: &DRAWITEMSTRUCT) {
     }
 }
 
+/// 描く 1 行：(スクロール後の y, 題, 説明, スイッチの ID, 高さ, プレビューか, 小見出しか, 選択肢)
+type PaintRow = (i32, &'static str, &'static str, Option<i32>, i32, bool, bool, Option<(i32, u8, usize)>);
+
+/// 2 色を混ぜる（t = 0 で a、1 で b）
+fn mix(a: &D2D1_COLOR_F, b: &D2D1_COLOR_F, t: f32) -> D2D1_COLOR_F {
+    D2D1_COLOR_F { r: a.r + (b.r - a.r) * t, g: a.g + (b.g - a.g) * t, b: a.b + (b.b - a.b) * t, a: 1.0 }
+}
+
+/// 大きさをドラッグで変えている最中の、簡易な背景（GDI。縁は滑らかでないが、Direct2D のように描画結果を読み戻さないので速い）
+#[allow(clippy::too_many_arguments)]
+unsafe fn gdi_cards(hdc: HDC, rc: &RECT, scale: f32, rows: &[PaintRow], toggles: &HashMap<i32, bool>, card_w: i32, sel: &HashMap<i32, usize>, scroll: i32, content: i32, pal: &Pal, acc: &D2D1_COLOR_F) {
+    unsafe {
+        let px = |v: i32| (v as f32 * scale).round() as i32;
+        let bg = CreateSolidBrush(rgb_ref(&pal.bg));
+        FillRect(hdc, rc, bg);
+        let _ = DeleteObject(bg.into());
+        let saved = SaveDC(hdc);
+        IntersectClipRect(hdc, 0, px(PAGE_Y), rc.right, rc.bottom - px(FOOTER_H));
+        let null = GetStockObject(NULL_BRUSH);
+        let shape = |hdc: HDC, fill: Option<&D2D1_COLOR_F>, line: Option<&D2D1_COLOR_F>, f: &dyn Fn(HDC)| {
+            let b = fill.map(|c| CreateSolidBrush(rgb_ref(c)));
+            let pen = match line {
+                Some(c) => CreatePen(PS_SOLID, 1, rgb_ref(c)),
+                None => CreatePen(PS_NULL, 0, COLORREF(0)),
+            };
+            let (ob, op) = (SelectObject(hdc, b.map_or(null, |b| b.into())), SelectObject(hdc, pen.into()));
+            f(hdc);
+            SelectObject(hdc, ob);
+            SelectObject(hdc, op);
+            let _ = DeleteObject(pen.into());
+            if let Some(b) = b {
+                let _ = DeleteObject(b.into());
+            }
+        };
+        for &(y, _, _, toggle, rh, _, heading, choice) in rows {
+            if heading {
+                continue;
+            }
+            let (x0, y0) = (px(PAGE_X), px(PAGE_Y + y));
+            let (x1, y1) = (x0 + px(card_w), y0 + px(rh));
+            let d = px(16);
+            shape(hdc, Some(&pal.card), Some(&pal.cardb), &|h| {
+                let _ = RoundRect(h, x0, y0, x1, y1, d, d);
+            });
+            if let Some(id) = toggle {
+                let on = toggles.get(&id).copied().unwrap_or(false);
+                let (tw, th) = (px(40), px(20));
+                let (tx1, ty0) = (x1 - px(16), (y0 + y1) / 2 - th / 2);
+                let tx0 = tx1 - tw;
+                shape(hdc, if on { Some(acc) } else { None }, Some(if on { acc } else { &pal.dim }), &|h| {
+                    let _ = RoundRect(h, tx0, ty0, tx1, ty0 + th, th, th);
+                });
+                let r = px(5);
+                let kx = if on { tx1 - px(10) - 1 } else { tx0 + px(10) + 1 };
+                let knob = if on { &pal.knob } else { &pal.dim };
+                shape(hdc, Some(knob), None, &|h| {
+                    let _ = Ellipse(h, kx - r, ty0 + th / 2 - r, kx + r, ty0 + th / 2 + r);
+                });
+            }
+            if let Some((first, kind, n)) = choice {
+                let selected = sel.get(&first).copied();
+                let rects = choice_rects(y, rh, card_w, kind, n);
+                if kind == 0 {
+                    if let (Some(a), Some(b)) = (rects.first(), rects.last()) {
+                        shape(hdc, None, Some(&pal.dim), &|h| {
+                            let _ = RoundRect(h, px(a.0), px(a.1), px(b.2), px(b.3), px(12), px(12));
+                        });
+                    }
+                }
+                for (i, &(a0, a1, a2, a3)) in rects.iter().enumerate() {
+                    let on = selected == Some(i);
+                    if kind == 0 {
+                        if on {
+                            let fill = mix(&pal.card, acc, 0.28);
+                            shape(hdc, Some(&fill), Some(acc), &|h| {
+                                let _ = RoundRect(h, px(a0) + 2, px(a1) + 2, px(a2) - 2, px(a3) - 2, px(10), px(10));
+                            });
+                        }
+                    } else {
+                        let (cx, cy, r) = ((px(a0) + px(a2)) / 2, (px(a1) + px(a3)) / 2, px(11));
+                        shape(hdc, Some(&swatch_color(i)), None, &|h| {
+                            let _ = Ellipse(h, cx - r, cy - r, cx + r, cy + r);
+                        });
+                        if on {
+                            let r2 = r + px(3);
+                            shape(hdc, None, Some(&pal.text), &|h| {
+                                let _ = Ellipse(h, cx - r2, cy - r2, cx + r2, cy + r2);
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        let _ = RestoreDC(hdc, saved);
+        // スクロール位置の目印
+        let (view_top, view_bottom) = (px(PAGE_Y), rc.bottom - px(FOOTER_H));
+        let (vh, content_px) = (view_bottom - view_top, px(content));
+        if content_px > vh && vh > 0 {
+            let thumb = (vh * vh / content_px).max(px(24)).min(vh);
+            let ty = view_top + (px(scroll) as f32 / (content_px - vh) as f32).clamp(0.0, 1.0).mul_add((vh - thumb) as f32, 0.0) as i32;
+            let x1 = rc.right - px(6);
+            shape(hdc, Some(&mix(&pal.bg, &pal.dim, 0.5)), None, &|h| {
+                let _ = RoundRect(h, x1 - px(4), ty, x1, ty + thumb, px(4), px(4));
+            });
+        }
+    }
+}
+
 /// カード・スイッチ・文字を、背景として描く（子ウィンドウの部品は、この上に重なる）
 unsafe fn paint_bg(hwnd: HWND, hdc: HDC) {
     thread_local! {
         static FACTORY: RefCell<Option<ID2D1Factory>> = const { RefCell::new(None) };
+        /// 描画のたびに作り直さない（サイズ変更中に何度も描くため）。失敗したら捨てて作り直す
+        static DC_RT: RefCell<Option<windows::Win32::Graphics::Direct2D::ID2D1DCRenderTarget>> = const { RefCell::new(None) };
     }
     unsafe {
         let scale = GetDpiForWindow(hwnd).max(96) as f32 / 96.0;
@@ -1185,7 +1371,10 @@ unsafe fn paint_bg(hwnd: HWND, hdc: HDC) {
         });
         let px = |v: i32| v as f32 * scale;
         let mut drawn = false;
-        if let Some(factory) = factory {
+        if SIZING.load(Ordering::Relaxed) {
+            gdi_cards(hdc, &rc, scale, &rows, &toggles, card_w, &sel, scroll, content, pal, &acc);
+            drawn = true;
+        } else if let Some(factory) = factory {
             let props = D2D1_RENDER_TARGET_PROPERTIES {
                 r#type: D2D1_RENDER_TARGET_TYPE_DEFAULT,
                 pixelFormat: D2D1_PIXEL_FORMAT { format: windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM, alphaMode: D2D1_ALPHA_MODE_IGNORE },
@@ -1193,7 +1382,14 @@ unsafe fn paint_bg(hwnd: HWND, hdc: HDC) {
                 dpiY: 96.0,
                 ..Default::default()
             };
-            if let Ok(rt) = factory.CreateDCRenderTarget(&props) {
+            let cached = DC_RT.with(|r| {
+                let mut r = r.borrow_mut();
+                if r.is_none() {
+                    *r = factory.CreateDCRenderTarget(&props).ok();
+                }
+                r.clone()
+            });
+            if let Some(rt) = cached {
                 if rt.BindDC(hdc, &rc).is_ok() {
                     rt.BeginDraw();
                     rt.Clear(Some(&pal.bg));
@@ -1271,6 +1467,9 @@ unsafe fn paint_bg(hwnd: HWND, hdc: HDC) {
                         }
                     }
                     drawn = rt.EndDraw(None, None).is_ok();
+                    if !drawn {
+                        DC_RT.with(|r| *r.borrow_mut() = None);
+                    }
                 }
             }
         }
@@ -1379,6 +1578,16 @@ unsafe extern "system" fn dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                 let mut rc = RECT { left: 0, top: 0, right: (640.0 * scale) as i32, bottom: (360.0 * scale) as i32 };
                 let _ = AdjustWindowRectExForDpi(&mut rc, style, false, WINDOW_EX_STYLE(0), dpi);
                 mmi.ptMinTrackSize = POINT { x: rc.right - rc.left, y: rc.bottom - rc.top };
+                LRESULT(0)
+            }
+            // 大きさをドラッグで変えているあいだは、背景を軽く描く。終わったら、滑らかな描画に戻す
+            0x0231 /* WM_ENTERSIZEMOVE */ => {
+                SIZING.store(true, Ordering::Relaxed);
+                LRESULT(0)
+            }
+            0x0232 /* WM_EXITSIZEMOVE */ => {
+                SIZING.store(false, Ordering::Relaxed);
+                let _ = InvalidateRect(Some(hwnd), None, true);
                 LRESULT(0)
             }
             WM_MOUSEWHEEL => {
