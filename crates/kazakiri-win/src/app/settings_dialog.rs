@@ -1408,20 +1408,17 @@ unsafe fn paint_bg(hwnd: HWND, hdc: HDC) {
                             rt.FillRoundedRectangle(&rrect(x0 + 1.0, y0 + 1.0, x1 - 1.0, y1 - 1.0, px(8) - 1.0), &brush);
                             if let Some(id) = toggle {
                                 let on = toggles.get(&id).copied().unwrap_or(false);
-                                let (tw, th) = (px(40), px(20));
-                                let (tx1, ty0) = (x1 - px(16), (y0 + y1) / 2.0 - th / 2.0);
-                                let tx0 = tx1 - tw;
+                                // 標準のチェックボックスの形（四角の枠と、オンのときのチェックマーク）
+                                let size = px(16);
+                                let (bx1, by0) = (x1 - px(16), (y0 + y1) / 2.0 - size / 2.0);
+                                let bx0 = bx1 - size;
+                                brush.SetColor(&pal.text);
+                                rt.DrawRectangle(&rect(bx0 + 0.5, by0 + 0.5, bx1 - 0.5, by0 + size - 0.5), &brush, 1.0, None);
                                 if on {
-                                    brush.SetColor(&acc);
-                                    rt.FillRoundedRectangle(&rrect(tx0, ty0, tx1, ty0 + th, th / 2.0), &brush);
-                                } else {
-                                    brush.SetColor(&pal.dim);
-                                    rt.DrawRoundedRectangle(&rrect(tx0 + 0.5, ty0 + 0.5, tx1 - 0.5, ty0 + th - 0.5, th / 2.0), &brush, 1.0, None);
+                                    let p = |fx: f32, fy: f32| Vector2 { X: bx0 + size * fx, Y: by0 + size * fy };
+                                    rt.DrawLine(p(0.22, 0.52), p(0.42, 0.74), &brush, 1.6, None);
+                                    rt.DrawLine(p(0.42, 0.74), p(0.80, 0.26), &brush, 1.6, None);
                                 }
-                                let r = px(5);
-                                let kx = if on { tx1 - px(10) - 1.0 } else { tx0 + px(10) + 1.0 };
-                                brush.SetColor(if on { &pal.knob } else { &pal.dim });
-                                rt.FillEllipse(&D2D1_ELLIPSE { point: Vector2 { X: kx, Y: ty0 + th / 2.0 }, radiusX: r, radiusY: r }, &brush);
                             }
                             // 選択肢：切り替え（システム・ライト・ダーク）と、色の見本
                             if let Some((first, kind, n)) = choice {

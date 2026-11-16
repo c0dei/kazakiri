@@ -53,7 +53,9 @@ pub(super) fn on_off(b: bool) -> &'static str {
 }
 
 pub(super) fn rrect(l: f32, t: f32, r: f32, b: f32, radius: f32) -> D2D1_ROUNDED_RECT {
-    D2D1_ROUNDED_RECT { rect: rect(l, t, r, b), radiusX: radius, radiusY: radius }
+    // 角は丸めない（標準の部品に合わせる）。呼び出し側の半径は使わない
+    let _ = radius;
+    D2D1_ROUNDED_RECT { rect: rect(l, t, r, b), radiusX: 0.0, radiusY: 0.0 }
 }
 
 pub(super) fn rect(l: f32, t: f32, r: f32, b: f32) -> D2D_RECT_F {

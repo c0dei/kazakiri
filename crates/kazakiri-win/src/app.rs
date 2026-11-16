@@ -15,7 +15,7 @@
 //! | `edit` / `lines` / `multi` / `rect` / `wrap` / `complete` | 編集、行の操作と変換、複数カーソル、矩形選択、折り返し、補完 |
 //! | `csv_view` / `diffview` / `bookmarks` / `markers` | CSV 表示、差分・分割表示、ブックマーク、カラーマーカー |
 //! | `tabs` / `caption` / `toolbar` / `status_menu` / `view` / `theme` / `dark` | タブ、タイトルバー（ウィンドウのボタン・移動・サイズ変更）、ツールバーとモードバー、ステータスバー、表示設定、配色 |
-//! | `findbar` / `palette` / `coldrop` | 本文の上に浮かぶ検索・置換バーと入力欄のカード、コマンドパレット、「対象の列」のドロップダウン |
+//! | `findbar` / `palette` | 本文の上に浮かぶ検索・置換バーと入力欄のカード、コマンドパレット |
 //! | `find_dialog` / `settings_dialog` / `keys_dialog` | 各ダイアログ（検索ダイアログは GREP 用） |
 
 use std::cell::{Cell, RefCell};
@@ -67,7 +67,6 @@ mod rect;
 mod dark;
 mod find_dialog;
 mod findbar;
-mod coldrop;
 mod palette;
 mod caption;
 mod bookmarks;
@@ -362,7 +361,6 @@ struct App {
     input2: String,
     prompt_focus: u8,
     /// 「対象の列」のドロップダウン（開いているとき）
-    col_drop: Option<coldrop::ColDrop>,
     /// モードバーの区切り文字の欄を入力待ちにしているか（次に打った 1 文字が区切りになる）
     delim_edit: bool,
     /// コマンドパレットで選んでいる行と、先頭に見えている行
@@ -681,7 +679,6 @@ impl App {
                 WM_NCLBUTTONDOWN if self.cap_button_down(wparam.0 as u32) => (DONE, None),
                 WM_NCLBUTTONUP if self.cap_button_up(wparam.0 as u32) => (DONE, None),
                 WM_KILLFOCUS => {
-                    self.col_drop = None;
                     self.delim_edit = false;
                     self.reset_ime_forms();
                     (None, None)
@@ -760,9 +757,6 @@ impl App {
                 }
                 WM_MOUSEWHEEL => {
                     let delta = hiword(wparam.0) as i16 as i64;
-                    if self.col_drop_wheel(delta) {
-                        return (DONE, None);
-                    }
                     // ホイールの座標は画面座標
                     let mut pt = POINT { x: loword(lparam.0 as usize) as i16 as i32, y: hiword(lparam.0 as usize) as i16 as i32 };
                     let _ = ScreenToClient(self.hwnd, &mut pt);
@@ -794,10 +788,6 @@ impl App {
                     if self.delim_edit && !self.over_delim_field(x, y) {
                         self.delim_edit = false;
                         self.invalidate();
-                    }
-                    // 「対象の列」のドロップダウンが開いているあいだは、その操作だけ
-                    if self.col_drop_click(x, y) {
-                        return (DONE, None);
                     }
                     // ツールバー・機能ボタン・メニューバー・ステータスバー
                     if let Some(r) = self.chrome_press(x, y) {
@@ -850,9 +840,6 @@ impl App {
                 }
                 WM_LBUTTONDBLCLK => {
                     let (x, y) = self.mouse_pos(lparam);
-                    if self.col_drop_click(x, y) {
-                        return (DONE, None);
-                    }
                     // 素早く続けて押したときも、1 回目と同じボタンの操作として扱う（ダブルクリックとして無視しない）
                     if let Some(r) = self.chrome_press(x, y) {
                         return (DONE, r);
@@ -899,9 +886,6 @@ impl App {
                 }
                 WM_MOUSEMOVE if !self.dragging && self.tab_drag.is_none() => {
                     let (x, y) = self.mouse_pos(lparam);
-                    if self.col_drop_move(x, y) {
-                        return (DONE, None);
-                    }
                     self.update_hover(x, y);
                     (DONE, None)
                 }
