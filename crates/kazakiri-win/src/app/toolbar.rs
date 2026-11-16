@@ -614,7 +614,7 @@ impl App {
             if let (Some(label), Some((x0, x1))) = (self.colpick_label(), self.colpick_box()) {
                 brush.SetColor(&t.gutter_text);
                 self.draw_icon(rt, brush, Icon::ColPick, x0 - self.colpick_title_w() + 2.0, (h - 16.0) / 2.0);
-                let open = self.col_drop.is_some();
+                let open = false;
                 let hovered = self.hover == Some(Hover::ColPick);
                 // 枠：開いているあいだはアクセントカラー
                 brush.SetColor(if open { &theme::accent(self.settings.dark) } else { &t.dim });

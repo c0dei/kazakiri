@@ -111,11 +111,7 @@ impl App {
         let (cx0, cy0, cx1, cy1) = l.card;
         let results = self.palette_results();
         unsafe {
-            // 影・枠・面
-            brush.SetColor(&D2D1_COLOR_F { r: 0.0, g: 0.0, b: 0.0, a: 0.14 });
-            rt.FillRoundedRectangle(&rrect(cx0 - 2.0, cy0 + 1.0, cx1 + 2.0, cy1 + 9.0, 12.0), brush);
-            brush.SetColor(&D2D1_COLOR_F { r: 0.0, g: 0.0, b: 0.0, a: 0.18 });
-            rt.FillRoundedRectangle(&rrect(cx0 - 1.0, cy0 + 3.0, cx1 + 1.0, cy1 + 5.0, 10.0), brush);
+            // 枠・面
             brush.SetColor(&t.dim);
             rt.FillRoundedRectangle(&rrect(cx0 - 1.0, cy0 - 1.0, cx1 + 1.0, cy1 + 1.0, 10.0), brush);
             brush.SetColor(&t.panel_head);

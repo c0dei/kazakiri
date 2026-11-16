@@ -28,10 +28,6 @@ impl App {
     }
 
     pub(super) unsafe fn on_key(&mut self, vk: VIRTUAL_KEY) -> Option<Deferred> {
-        // 「対象の列」のドロップダウンが開いているあいだは、その操作だけ
-        if unsafe { self.col_drop_key(vk) } {
-            return None;
-        }
         // 区切り文字の入力待ち：Esc で取消、Tab キーでタブ区切り。文字は WM_CHAR（on_char）で受ける
         if self.delim_edit {
             match vk {
@@ -151,9 +147,6 @@ impl App {
     }
 
     pub(super) fn on_char(&mut self, ch: u32) {
-        if self.col_drop.is_some() {
-            return;
-        }
         if self.delim_edit {
             if ch >= 0x20 && ch != 0x7F {
                 if let Some(c) = char::from_u32(ch).filter(|c| !matches!(*c as u32, 0xD800..=0xDFFF)) {

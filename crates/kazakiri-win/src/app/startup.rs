@@ -135,7 +135,6 @@ pub(super) unsafe fn run_inner() -> std::result::Result<(), (&'static str, windo
             input: String::new(),
             input2: String::new(),
             prompt_focus: 0,
-            col_drop: None,
             delim_edit: false,
             palette_sel: 0,
             palette_top: 0,

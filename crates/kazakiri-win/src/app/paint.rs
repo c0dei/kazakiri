@@ -233,7 +233,6 @@ impl App {
             self.draw_prompt_bar(&rt, brush, w, h)?;
             rt.SetTransform(&Matrix3x2::identity());
             self.draw_tip(&rt, brush, w)?;
-            self.draw_col_drop(&rt, brush)?;
             rt.EndDraw(None, None)
         }
     }
@@ -552,9 +551,7 @@ impl App {
         let (cx0, cy0, cx1, cy1) = self.prompt_card();
         let (ix0, iy0, ix1, iy1) = self.prompt_input_rect();
         unsafe {
-            // 影・枠・面
-            brush.SetColor(&D2D1_COLOR_F { r: 0.0, g: 0.0, b: 0.0, a: 0.22 });
-            rt.FillRoundedRectangle(&rrect(cx0 - 1.0, cy0 + 2.0, cx1 + 1.0, cy1 + 4.0, 10.0), brush);
+            // 枠・面
             brush.SetColor(&t.dim);
             rt.FillRoundedRectangle(&rrect(cx0 - 1.0, cy0 - 1.0, cx1 + 1.0, cy1 + 1.0, 9.0), brush);
             brush.SetColor(&t.panel_head);
