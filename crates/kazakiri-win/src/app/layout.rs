@@ -294,6 +294,7 @@ impl App {
     /// スクロールバー（子ウィンドウ）を、本文の領域の中に置く。縦は本文の右端（ツールバーの下から、結果パネル・ステータスバーの上まで）、
     /// 横は本文の下端（結果パネル・ステータスバーの上）
     pub(super) fn layout_scrollbars(&self) {
+        self.layout_status();
         let mut rc = RECT::default();
         let scale = unsafe { GetDpiForWindow(self.hwnd) } as f32 / 96.0;
         unsafe {

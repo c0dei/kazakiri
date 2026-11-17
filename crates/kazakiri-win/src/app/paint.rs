@@ -73,6 +73,7 @@ impl App {
             }
             self.ensure_continuation();
             self.clamp_top();
+            self.update_status();
             // 結果パネルの出し入れなどで本文の高さが変わっても、スクロールバーが本文の中に収まるように
             self.layout_scrollbars();
             let (w, h) = self.client_size();
@@ -629,48 +630,11 @@ impl App {
         ]
     }
 
+    /// 機能ボタンの列（ステータスバーの上）。ステータスバー本体は標準の部品（chrome.rs）
     pub(super) unsafe fn draw_status(&self, rt: &ID2D1RenderTarget, brush: &ID2D1SolidColorBrush, w: f32, h: f32) -> Result<()> {
         let top = h - self.status_base_h();
-        unsafe {
-            if self.fkey_h() > 0.0 {
-                self.draw_fkeys(rt, brush, w, top - self.fkey_h())?;
-            }
-            brush.SetColor(&self.theme.status_bg);
-            rt.FillRectangle(&rect(0.0, top, w, h), brush);
-            brush.SetColor(&self.theme.panel_head);
-            rt.FillRectangle(&rect(0.0, top, w, top + 1.0), brush);
-            brush.SetColor(&self.theme.status_text);
-        }
-        let left = self.status_left();
-        let segs = self.status_segments();
-        let right: String = segs.iter().map(|(s, _)| s.as_str()).collect();
-        unsafe {
-            // 右側（ファイルの情報）を優先し、左側（メッセージ）は残りの幅で切る
-            let units: Vec<u16> = right.encode_utf16().collect();
-            let layout = self.dw.CreateTextLayout(&units, &self.ui_format, w, self.ui_line_h)?;
-            let mut m = DWRITE_TEXT_METRICS::default();
-            layout.GetMetrics(&mut m)?;
-            let rw = m.widthIncludingTrailingWhitespace.min(w * 0.75);
-            // クリックできる部分は、ホバーしたときに角丸の背景（チップ）を出す。位置は status_hit と同じ並べ方
-            let mut x0 = w - rw - 8.0;
-            for (text, kind) in &segs {
-                let u: Vec<u16> = text.encode_utf16().collect();
-                let x1 = x0 + self.ui_text_width(&u)?;
-                if let Some(k) = kind {
-                    if self.hover == Some(super::toolbar::Hover::Status(*k)) {
-                        brush.SetColor(&self.theme.panel_head);
-                        rt.FillRoundedRectangle(&rrect(x0 - 5.0, top + 2.0, x1 + 5.0, h - 2.0, 5.0), brush);
-                    }
-                }
-                brush.SetColor(&self.theme.status_text);
-                self.draw_ui_str(rt, brush, text, x0, top + 3.0, x1 + 1.0)?;
-                x0 = x1;
-            }
-            brush.SetColor(&self.theme.status_text);
-            // 右側と重ならないように切り取る（文字の切り取り指定が効かない環境もあるので領域で切る）
-            rt.PushAxisAlignedClip(&rect(0.0, top, (w - rw - 24.0).max(0.0), h), D2D1_ANTIALIAS_MODE_ALIASED);
-            self.draw_ui_str(rt, brush, &left, 8.0, top + 3.0, w - rw - 24.0)?;
-            rt.PopAxisAlignedClip();
+        if self.fkey_h() > 0.0 {
+            unsafe { self.draw_fkeys(rt, brush, w, top - self.fkey_h())? };
         }
         Ok(())
     }
