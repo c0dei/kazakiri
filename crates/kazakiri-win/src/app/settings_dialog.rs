@@ -1431,6 +1431,10 @@ unsafe fn paint_bg(hwnd: HWND, hdc: HDC) {
             if let Some(rt) = cached {
                 if rt.BindDC(hdc, &rc).is_ok() {
                     rt.BeginDraw();
+                    // 標準の部品が親の背景を借りに来たときは、DC の原点が子の位置にずれている。その分だけずらして描く（カードの位置を合わせる）
+                    let mut org = POINT::default();
+                    let _ = GetViewportOrgEx(hdc, &mut org);
+                    rt.SetTransform(&Matrix3x2::translation(org.x as f32, org.y as f32));
                     rt.Clear(Some(&pal.bg));
                     if let Ok(brush) = rt.CreateSolidColorBrush(&pal.card, None) {
                         // 行（カード）は、表示領域（タイトルの下から、ボタンの行の上まで）の中だけに描く
