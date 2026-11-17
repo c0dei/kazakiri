@@ -443,6 +443,19 @@ fn is_checked(id: i32) -> bool {
     !h.0.is_null() && unsafe { SendMessageW(h, BM_GETCHECK, Some(WPARAM(0)), Some(LPARAM(0))).0 } == BST_CHECKED.0 as isize
 }
 
+/// チェックボックスの背景消去：部品の既定の灰色ではなく、カードと同じ色で塗る（箱と題は、このあと部品が描く）
+unsafe extern "system" fn check_subclass(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM, _id: usize, _data: usize) -> LRESULT {
+    unsafe {
+        if msg == WM_ERASEBKGND {
+            let mut rc = RECT::default();
+            let _ = GetClientRect(hwnd, &mut rc);
+            FillRect(HDC(wparam.0 as *mut _), &rc, HBRUSH(CARD_BRUSH[DARK.load(Ordering::Relaxed) as usize].load(Ordering::Relaxed) as *mut _));
+            return LRESULT(1);
+        }
+        windows::Win32::UI::Shell::DefSubclassProc(hwnd, msg, wparam, lparam)
+    }
+}
+
 /// チェックボックスの位置と大きさ（DIP）。カードの上半分（題の行）に、カードの幅いっぱいに置く。
 /// 部品は自分の背景をカードと同じ色で塗る（`WM_CTLCOLORBTN`）ので、説明文を覆わないよう、題の行だけの高さにする。
 /// 箱と題は部品が描き、説明文はダイアログが、その下に（題の文字に合わせて）描く
@@ -1085,6 +1098,7 @@ unsafe fn create(owner: HWND) {
         for r in &rows {
             if let Some(id) = r.toggle {
                 let hw = make_child(dlg, w!("BUTTON"), r.title, BS_AUTOCHECKBOX as u32 | BS_LEFT as u32 | WS_TABSTOP.0, 0, id, font);
+                let _ = windows::Win32::UI::Shell::SetWindowSubclass(hw, Some(check_subclass), 1, 0);
                 let (x, y, w, h) = toggle_rect(r.y, r.h, CARD_W);
                 let _ = SetWindowPos(hw, None, p(x), p(y), p(w), p(h), SWP_NOZORDER | SWP_NOACTIVATE);
                 all.push((id, hw));
@@ -1632,7 +1646,10 @@ unsafe extern "system" fn dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                 // 静的な文字と、カードの上に重ねた透明なボタン（スイッチ・切り替え・色の見本）は、下のカードを塗りつぶさない。
                 // 通常のボタン（保存・閉じる・＋・－ など）は、ダイアログの地の色で塗る（NULL だと、角に白い下地が出る）
                 if msg == WM_CTLCOLORSTATIC {
-                    return LRESULT(GetStockObject(NULL_BRUSH).0 as isize);
+                    // 題・説明の文字は、ページの背景の上にある。透明にすると前の文字が残るので、背景色で塗る
+                    SetBkMode(hdc, OPAQUE);
+                    SetBkColor(hdc, rgb_ref(&p.bg));
+                    return LRESULT(BG_BRUSH[i].load(Ordering::Relaxed));
                 }
                 if msg == WM_CTLCOLORBTN {
                     let id = GetDlgCtrlID(HWND(lparam.0 as *mut _));
