@@ -15,7 +15,7 @@
 - 本体のタイトルバーは標準に戻す（モックの通り）。タブの × とドラッグ並べ替えは、標準では付かないので、フェーズ 6 で自前の処理を足す（中クリックで閉じる、ドラッグで並べ替え）。
 
 ## 確認の方法
-- この環境（Linux）で: `cargo test --workspace`、`cargo clippy --workspace --all-targets`（警告ゼロ）、`cargo check --target x86_64-pc-windows-gnu -p kazakiri-win`（Windows 向けのビルドが通るか）。
+- この環境（Linux）で: `cargo check --target x86_64-pc-windows-gnu -p kazakiri-win` と `cargo clippy --target x86_64-pc-windows-gnu -p kazakiri-win`（警告ゼロ）。コアのテストは `cargo test -p kazakiri-core -p kazakiri-cli`。**`kazakiri-win` のテストは Windows でしか動かない**（Linux の `cargo test --workspace` は win で失敗するのが正常）。Windows のテストは、ユーザーの実機か CI で。
 - 見た目・ダーク・DPI・キーボード・ナレーターは **Windows 実機でユーザーが確認**（スクリーンショットをもらって直す）。この環境では確認できない。
 
 ## 技術的なリスク
