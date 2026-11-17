@@ -22,6 +22,7 @@ pub(super) static SET_DLG: AtomicIsize = AtomicIsize::new(0);
 static DARK: AtomicBool = AtomicBool::new(false);
 /// ダークとライトの背景・入力欄のブラシ（[ライト, ダーク]）
 static BG_BRUSH: [AtomicIsize; 2] = [AtomicIsize::new(0), AtomicIsize::new(0)];
+static CARD_BRUSH: [AtomicIsize; 2] = [AtomicIsize::new(0), AtomicIsize::new(0)];
 static EDIT_BRUSH: [AtomicIsize; 2] = [AtomicIsize::new(0), AtomicIsize::new(0)];
 /// 本文のフォントと、見出し用の大きなフォント（HFONT）
 static UI_FONT: AtomicIsize = AtomicIsize::new(0);
@@ -433,10 +434,11 @@ fn is_checked(id: i32) -> bool {
     !h.0.is_null() && unsafe { SendMessageW(h, BM_GETCHECK, Some(WPARAM(0)), Some(LPARAM(0))).0 } == BST_CHECKED.0 as isize
 }
 
-/// チェックボックスの位置と大きさ（DIP）。カードの左上に置き、押せる範囲はカードの中ほぼ全体。
+/// チェックボックスの位置と大きさ（DIP）。カードの上半分（題の行）に、カードの幅いっぱいに置く。
+/// 部品は自分の背景をカードと同じ色で塗る（`WM_CTLCOLORBTN`）ので、説明文を覆わないよう、題の行だけの高さにする。
 /// 箱と題は部品が描き、説明文はダイアログが、その下に（題の文字に合わせて）描く
-fn toggle_rect(y: i32, h: i32, w: i32) -> (i32, i32, i32, i32) {
-    (PAGE_X + 12, PAGE_Y + y + 8, w - 24, h - 12)
+fn toggle_rect(y: i32, _h: i32, w: i32) -> (i32, i32, i32, i32) {
+    (PAGE_X + 12, PAGE_Y + y + 8, w - 24, 20)
 }
 
 /// 説明文を、チェックボックスの題の文字に合わせて右へずらす量（DIP。箱の幅と間）
@@ -1052,7 +1054,7 @@ unsafe fn create(owner: HWND) {
         // スイッチの行は標準のチェックボックス、選択肢ごとにはカードの上に透明なボタンを重ねる（Tab で止まり、Space で押せる）
         for r in &rows {
             if let Some(id) = r.toggle {
-                let hw = make_child(dlg, w!("BUTTON"), r.title, BS_AUTOCHECKBOX as u32 | BS_TOP as u32 | BS_LEFT as u32 | WS_TABSTOP.0, 0, id, font);
+                let hw = make_child(dlg, w!("BUTTON"), r.title, BS_AUTOCHECKBOX as u32 | BS_LEFT as u32 | WS_TABSTOP.0, 0, id, font);
                 let (x, y, w, h) = toggle_rect(r.y, r.h, CARD_W);
                 let _ = SetWindowPos(hw, None, p(x), p(y), p(w), p(h), SWP_NOZORDER | SWP_NOACTIVATE);
                 all.push((id, hw));
@@ -1082,6 +1084,7 @@ unsafe fn create(owner: HWND) {
             let edit_bg = if i == 1 { rgb(0x1f, 0x1f, 0x1f) } else { rgb(0xff, 0xff, 0xff) };
             BG_BRUSH[i].store(CreateSolidBrush(rgb_ref(&pal.bg)).0 as isize, Ordering::Relaxed);
             EDIT_BRUSH[i].store(CreateSolidBrush(rgb_ref(&edit_bg)).0 as isize, Ordering::Relaxed);
+            CARD_BRUSH[i].store(CreateSolidBrush(rgb_ref(&pal.card)).0 as isize, Ordering::Relaxed);
         }
         CTRLS.with(|c| *c.borrow_mut() = Some(Ctrls { card_w: CARD_W, places, sel: HashMap::new(), rows, all, pages, visible: Vec::new(), cur: 0, scroll: 0, page_h }));
         fill_cats("");
@@ -1592,6 +1595,8 @@ unsafe extern "system" fn dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                 if nm.code == NM_CUSTOMDRAW && is_toggle(nm.idFrom as i32) {
                     let cd = &*(lparam.0 as *const NMCUSTOMDRAW);
                     if cd.dwDrawStage == CDDS_PREPAINT {
+                        // 背景は、カードと同じ色であらかじめ塗っておく（部品の既定の灰色が出ないように）
+                        FillRect(cd.hdc, &cd.rc, HBRUSH(CARD_BRUSH[DARK.load(Ordering::Relaxed) as usize].load(Ordering::Relaxed) as *mut _));
                         SetTextColor(cd.hdc, rgb_ref(&pal().text));
                     }
                     return LRESULT(CDRF_DODEFAULT as isize);
@@ -1648,7 +1653,13 @@ unsafe extern "system" fn dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                 }
                 if msg == WM_CTLCOLORBTN {
                     let id = GetDlgCtrlID(HWND(lparam.0 as *mut _));
-                    if is_toggle(id) || (ID_THEME_BASE..ID_ACCENT_BASE + 1 + ACCENTS.len() as i32).contains(&id) {
+                    // チェックボックスは、背景をカードと同じ色で塗る（透明にはしない。標準の部品は自分の背景を塗るため）
+                    if is_toggle(id) {
+                        SetBkMode(hdc, OPAQUE);
+                        SetBkColor(hdc, rgb_ref(&p.card));
+                        return LRESULT(CARD_BRUSH[i].load(Ordering::Relaxed));
+                    }
+                    if (ID_THEME_BASE..ID_ACCENT_BASE + 1 + ACCENTS.len() as i32).contains(&id) {
                         return LRESULT(GetStockObject(NULL_BRUSH).0 as isize);
                     }
                 }
