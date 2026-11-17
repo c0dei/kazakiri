@@ -1591,8 +1591,6 @@ unsafe extern "system" fn dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                 if nm.code == NM_CUSTOMDRAW && is_toggle(nm.idFrom as i32) {
                     let cd = &*(lparam.0 as *const NMCUSTOMDRAW);
                     if cd.dwDrawStage == CDDS_PREPAINT {
-                        // 背景は、カードと同じ色であらかじめ塗っておく（部品の既定の灰色が出ないように）
-                        FillRect(cd.hdc, &cd.rc, HBRUSH(CARD_BRUSH[DARK.load(Ordering::Relaxed) as usize].load(Ordering::Relaxed) as *mut _));
                         SetTextColor(cd.hdc, rgb_ref(&pal().text));
                     }
                     return LRESULT(CDRF_DODEFAULT as isize);
