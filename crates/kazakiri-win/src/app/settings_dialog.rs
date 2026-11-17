@@ -152,15 +152,6 @@ fn accent_now() -> D2D1_COLOR_F {
     super::theme::accent(DARK.load(Ordering::Relaxed))
 }
 
-/// 選択肢の各部品の位置（ダイアログ内。DIP）。(x0, y0, x1, y1)
-fn choice_rects(row_y: i32, row_h: i32, card_w: i32, kind: u8, n: usize) -> Vec<(i32, i32, i32, i32)> {
-    let right = PAGE_X + card_w - 16;
-    let top = PAGE_Y + row_y;
-    let (w, h, gap) = if kind == 0 { (78, 32, 0) } else { (28, 28, 10) };
-    let total = n as i32 * w + (n as i32 - 1).max(0) * gap;
-    (0..n as i32).map(|i| (right - total + i * (w + gap), top + (row_h - h) / 2, right - total + i * (w + gap) + w, top + (row_h - h) / 2 + h)).collect()
-}
-
 /// ドロップダウン（テーマ・アクセントカラー）の位置と大きさ（DIP）。高さは、開いた一覧の分も含む
 fn combo_rect(row_y: i32, row_h: i32, card_w: i32) -> (i32, i32, i32, i32) {
     let right = PAGE_X + card_w - 16;
@@ -1606,22 +1597,13 @@ unsafe fn paint_bg(hwnd: HWND, hdc: HDC) {
         // 行の文字も、表示領域の中だけに描く
         let saved_dc = SaveDC(hdc);
         IntersectClipRect(hdc, 0, px(PAGE_Y) as i32, rc.right, rc.bottom - px(FOOTER_H) as i32);
-        for &(y, title, desc, toggle, rh, preview, heading, choice) in &rows {
+        for &(y, title, desc, toggle, rh, preview, heading, _) in &rows {
             if heading {
                 SetTextColor(hdc, rgb_ref(&pal.dim));
                 let mut t: Vec<u16> = title.encode_utf16().collect();
                 let mut r = RECT { left: px(PAGE_X + 4) as i32, top: px(PAGE_Y + y) as i32 + px(4) as i32, right: px(PAGE_X + card_w) as i32, bottom: px(PAGE_Y + y + 26) as i32 };
                 DrawTextW(hdc, &mut t, &mut r, DT_LEFT | DT_SINGLELINE | DT_NOPREFIX);
                 continue;
-            }
-            if let Some((_, 0, n)) = choice {
-                // 切り替えの文字
-                for (i, (a0, a1, a2, a3)) in choice_rects(y, rh, card_w, 0, n).into_iter().enumerate() {
-                    SetTextColor(hdc, rgb_ref(&pal.text));
-                    let mut t: Vec<u16> = ["システム", "ライト", "ダーク"][i.min(2)].encode_utf16().collect();
-                    let mut r = RECT { left: px(a0) as i32, top: px(a1) as i32, right: px(a2) as i32, bottom: px(a3) as i32 };
-                    DrawTextW(hdc, &mut t, &mut r, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
-                }
             }
             if preview {
                 draw_preview(hdc, px(PAGE_X + 16) as i32, px(PAGE_Y + y) as i32, px(rh) as i32, scale, pal);
