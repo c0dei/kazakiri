@@ -113,7 +113,10 @@ impl App {
             };
             for s in segs {
                 let x1 = x0 + width(s);
-                line(s, x0, x1 + 4.0);
+                // 空白だけの区切りは、描かずに位置だけ進める
+                if !s.trim().is_empty() {
+                    line(s, x0, x1 + 4.0);
+                }
                 x0 = x1;
             }
             line(left, 8.0, (w - rw - 24.0).max(8.0));
