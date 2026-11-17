@@ -443,16 +443,79 @@ fn is_checked(id: i32) -> bool {
     !h.0.is_null() && unsafe { SendMessageW(h, BM_GETCHECK, Some(WPARAM(0)), Some(LPARAM(0))).0 } == BST_CHECKED.0 as isize
 }
 
-/// チェックボックスの背景消去：部品の既定の灰色ではなく、カードと同じ色で塗る（箱と題は、このあと部品が描く）
+/// チェックボックスの描画を自分で受ける（部品は標準のまま。メッセージ・キー操作・読み上げは標準の動き）。
+/// 背景はカードと同じ色、箱は OS のテーマ（ダークなら `DarkMode_Explorer`）の本物の絵、題は自前の色で描く。
+/// 標準の描画は、親から背景を借りる途中で、位置や色が合わずに帯が出てしまうため
 unsafe extern "system" fn check_subclass(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM, _id: usize, _data: usize) -> LRESULT {
     unsafe {
-        if msg == WM_ERASEBKGND {
-            let mut rc = RECT::default();
-            let _ = GetClientRect(hwnd, &mut rc);
-            FillRect(HDC(wparam.0 as *mut _), &rc, HBRUSH(CARD_BRUSH[DARK.load(Ordering::Relaxed) as usize].load(Ordering::Relaxed) as *mut _));
-            return LRESULT(1);
+        let card = HBRUSH(CARD_BRUSH[DARK.load(Ordering::Relaxed) as usize].load(Ordering::Relaxed) as *mut _);
+        match msg {
+            WM_ERASEBKGND => {
+                let mut rc = RECT::default();
+                let _ = GetClientRect(hwnd, &mut rc);
+                FillRect(HDC(wparam.0 as *mut _), &rc, card);
+                LRESULT(1)
+            }
+            WM_PAINT => {
+                let mut ps = PAINTSTRUCT::default();
+                let hdc = BeginPaint(hwnd, &mut ps);
+                let mut rc = RECT::default();
+                let _ = GetClientRect(hwnd, &mut rc);
+                FillRect(hdc, &rc, card);
+                let state = SendMessageW(hwnd, BM_GETSTATE, None, None).0 as u32;
+                let checked = SendMessageW(hwnd, BM_GETCHECK, None, None).0 == BST_CHECKED.0 as isize;
+                let pushed = state & 0x0004 != 0; // BST_PUSHED
+                let hot = state & 0x0200 != 0; // BST_HOT
+                let disabled = !IsWindowEnabled(hwnd).as_bool();
+                // 箱の状態：1 通常・2 ホバー・3 押下・4 無効（チェック済みは +4）
+                let st = (if disabled { 4 } else if pushed { 3 } else if hot { 2 } else { 1 }) + if checked { 4 } else { 0 };
+                let theme = OpenThemeData(Some(hwnd), w!("Button"));
+                let dpi = GetDpiForWindow(hwnd).max(96) as i32;
+                let mut size = SIZE { cx: 13 * dpi / 96, cy: 13 * dpi / 96 };
+                if !theme.is_invalid() {
+                    if let Ok(sz) = GetThemePartSize(theme, Some(hdc), 3, st, None, TS_DRAW) {
+                        size = sz;
+                    }
+                }
+                let top = rc.top + (rc.bottom - rc.top - size.cy) / 2;
+                let glyph = RECT { left: rc.left, top, right: rc.left + size.cx, bottom: top + size.cy };
+                if !theme.is_invalid() {
+                    let _ = DrawThemeBackground(theme, hdc, 3, st, &glyph, None);
+                    let _ = CloseThemeData(theme);
+                } else {
+                    let _ = DrawFrameControl(hdc, &mut { glyph }, DFC_BUTTON, DFCS_BUTTONCHECK | if checked { DFCS_CHECKED } else { DFCS_BUTTONCHECK });
+                }
+                // 題
+                let mut buf = [0u16; 256];
+                let n = GetWindowTextW(hwnd, &mut buf) as usize;
+                let old = SelectObject(hdc, HGDIOBJ(SendMessageW(hwnd, WM_GETFONT, None, None).0 as *mut _));
+                SetBkMode(hdc, TRANSPARENT);
+                SetTextColor(hdc, rgb_ref(&pal().text));
+                let mut text = RECT { left: glyph.right + 6 * dpi / 96, top: rc.top, right: rc.right, bottom: rc.bottom };
+                DrawTextW(hdc, &mut buf[..n], &mut text, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
+                // キーボードのフォーカス（点線の枠）
+                if GetFocus() == hwnd {
+                    let mut measure = text;
+                    DrawTextW(hdc, &mut buf[..n], &mut measure, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_CALCRECT);
+                    let focus = RECT { left: text.left - 2, top: (rc.top + rc.bottom) / 2 - (measure.bottom - measure.top) / 2 - 1, right: (measure.right + 2).min(rc.right), bottom: (rc.top + rc.bottom) / 2 + (measure.bottom - measure.top) / 2 + 1 };
+                    let _ = DrawFocusRect(hdc, &focus);
+                }
+                SelectObject(hdc, old);
+                let _ = EndPaint(hwnd, &ps);
+                LRESULT(0)
+            }
+            // フォーカスの出入り、ホバー、押下で描き直す
+            WM_SETFOCUS | WM_KILLFOCUS | WM_MOUSEMOVE | WM_MOUSELEAVE | WM_LBUTTONDOWN | WM_LBUTTONUP | BM_SETCHECK => {
+                let r = windows::Win32::UI::Shell::DefSubclassProc(hwnd, msg, wparam, lparam);
+                let _ = InvalidateRect(Some(hwnd), None, false);
+                if msg == WM_MOUSEMOVE {
+                    let mut t = TRACKMOUSEEVENT { cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32, dwFlags: TME_LEAVE, hwndTrack: hwnd, dwHoverTime: 0 };
+                    let _ = TrackMouseEvent(&mut t);
+                }
+                r
+            }
+            _ => windows::Win32::UI::Shell::DefSubclassProc(hwnd, msg, wparam, lparam),
         }
-        windows::Win32::UI::Shell::DefSubclassProc(hwnd, msg, wparam, lparam)
     }
 }
 
