@@ -1597,7 +1597,20 @@ unsafe extern "system" fn dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                 LRESULT(0)
             }
             WM_ERASEBKGND => {
-                paint_bg(hwnd, HDC(wparam.0 as *mut _));
+                let hdc = HDC(wparam.0 as *mut _);
+                // 標準の部品（チェックボックス）が、親の背景を借りに来た場合：原点が子の位置にずれていて、部品の分の小さな領域だけを求められる。
+                // ダイアログ全体を描き直す（重い、かつ位置もずれる）かわりに、カードと同じ色で塗る（部品はカードの上にある）
+                let mut org = POINT::default();
+                let _ = GetViewportOrgEx(hdc, &mut org);
+                let (mut clip, mut client) = (RECT::default(), RECT::default());
+                GetClipBox(hdc, &mut clip);
+                let _ = GetClientRect(hwnd, &mut client);
+                let small = (clip.right - clip.left) as i64 * (clip.bottom - clip.top) as i64 * 2 < (client.right as i64 * client.bottom as i64);
+                if (org.x != 0 || org.y != 0) && small {
+                    FillRect(hdc, &clip, HBRUSH(CARD_BRUSH[DARK.load(Ordering::Relaxed) as usize].load(Ordering::Relaxed) as *mut _));
+                    return LRESULT(1);
+                }
+                paint_bg(hwnd, hdc);
                 LRESULT(1)
             }
             WM_NOTIFY => {
