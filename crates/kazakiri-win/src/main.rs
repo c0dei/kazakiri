@@ -21,7 +21,10 @@ fn main() {
         let path = std::env::temp_dir().join("kazakiri-crash.log");
         let _ = std::fs::write(path, format!("{info}\n"));
     }));
+    let _ = std::fs::remove_file(std::env::temp_dir().join("kazakiri-start.log"));
+    app::crumb(&format!("start build={}", option_env!("GITHUB_SHA").unwrap_or("local")));
     app::run();
+    app::crumb("exit");
 }
 
 #[cfg(not(windows))]

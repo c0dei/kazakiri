@@ -42,7 +42,9 @@ pub(super) unsafe fn run_inner() -> std::result::Result<(), (&'static str, windo
         let make_bar = |style: i32| CreateWindowExW(WINDOW_EX_STYLE(0), w!("SCROLLBAR"), PCWSTR::null(), WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WINDOW_STYLE(style as u32), 0, 0, 16, 16, Some(hwnd), None, Some(instance.into()), None);
         let vbar = make_bar(SBS_VERT).map_err(|e| ("CreateScrollBar", e))?;
         let hbar = make_bar(SBS_HORZ).map_err(|e| ("CreateScrollBar", e))?;
+        crumb("window created");
         let status = App::create_status(hwnd, instance.into());
+        crumb("status created");
 
         let d2d: ID2D1Factory = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None).map_err(|e| ("D2D1CreateFactory", e))?;
         let dw: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED).map_err(|e| ("DWriteCreateFactory", e))?;
@@ -226,6 +228,7 @@ pub(super) unsafe fn run_inner() -> std::result::Result<(), (&'static str, windo
             app.update_scrollbars();
         });
 
+        crumb("message loop");
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
             // 検索ダイアログ：Tab での移動・Enter・Esc を任せる

@@ -61,6 +61,16 @@ impl App {
                 self.message_at = Instant::now();
                 SetTimer(Some(self.hwnd), TIMER_MSG, MESSAGE_SECS * 1000 + 200, None);
             }
+            thread_local! {
+                static PAINTS: Cell<u32> = const { Cell::new(0) };
+            }
+            let n = PAINTS.with(|c| {
+                c.set(c.get() + 1);
+                c.get()
+            });
+            if n <= 3 {
+                crumb(&format!("paint {n} begin"));
+            }
             self.ensure_gfx()?;
             // スクロールバーの出し入れなどでクライアント領域の大きさが変わっても WM_SIZE が来ないことがあるので、毎回合わせる
             if let Some(g) = &self.gfx {
@@ -74,6 +84,9 @@ impl App {
             self.ensure_continuation();
             self.clamp_top();
             self.update_status();
+            if n <= 3 {
+                crumb("status updated");
+            }
             // 結果パネルの出し入れなどで本文の高さが変わっても、スクロールバーが本文の中に収まるように
             self.layout_scrollbars();
             let (w, h) = self.client_size();

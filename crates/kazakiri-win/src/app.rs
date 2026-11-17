@@ -46,6 +46,15 @@ use windows_numerics::{Matrix3x2, Vector2};
 use crate::menu::{self, Menus};
 use crate::{clipboard, keymap, recent};
 
+/// 起動の手がかり：進んだところまでを、一時フォルダの kazakiri-start.log に足していく（固まったとき、どこまで進んだかが分かる）
+pub(crate) fn crumb(msg: &str) {
+    use std::io::Write;
+    let path = std::env::temp_dir().join("kazakiri-start.log");
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(f, "{msg}");
+    }
+}
+
 mod csv_view;
 mod command;
 mod deferred;
