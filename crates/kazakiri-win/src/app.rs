@@ -577,6 +577,10 @@ impl App {
                     (Some(LRESULT(0)), None)
                 }
                 WM_SIZE => {
+                    // 最小化（SIZE_MINIMIZED = 1）：大きさが 0 になるだけなので、何も置き直さない
+                    if wparam.0 == 1 {
+                        return (DONE, None);
+                    }
                     if let Some(g) = &self.gfx {
                         let (w, h) = (loword(lparam.0 as usize), hiword(lparam.0 as usize));
                         let _ = g.target.Resize(&D2D_SIZE_U { width: w, height: h });

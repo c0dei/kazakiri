@@ -48,6 +48,9 @@ impl App {
             let _ = GetClientRect(self.hwnd, &mut rc);
         }
         let h = (self.status_base_h() * scale).round() as i32;
+        if rc.right <= 0 || rc.bottom <= 0 {
+            return;
+        }
         let placed = [rc.right, rc.bottom, h];
         if self.status_placed.get() == placed {
             return;

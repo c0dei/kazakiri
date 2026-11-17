@@ -304,7 +304,7 @@ impl App {
         let hh = if self.hbar_on.get() { hh } else { 0 };
         let top = (self.chrome_h() * scale).round() as i32;
         // 本文の領域の下端（固定した見出し行も含む。横スクロールバーはこの下）
-        let body_bottom = (((self.chrome_h() + self.pin_h() + self.text_height()) * scale).round() as i32).clamp(top, rc.bottom);
+        let body_bottom = (((self.chrome_h() + self.pin_h() + self.text_height()) * scale).round() as i32).clamp(top, rc.bottom.max(top)); // 最小化中は rc.bottom が 0 で、top より小さい（clamp は min > max でパニックする）
         // 位置が前回と同じなら何もしない（スクロールのたびに呼ばれるので）
         let placed = [rc.right, rc.bottom, top, vw, hh, body_bottom];
         if self.sb_placed.get() == placed {
