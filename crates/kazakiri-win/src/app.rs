@@ -264,7 +264,6 @@ struct App {
     status_placed: Cell<[i32; 3]>,
     status_sig: RefCell<String>,
     status_texts: RefCell<Vec<String>>,
-    status_kinds: RefCell<Vec<Option<u8>>>,
     status_font: Cell<HFONT>,
     /// 横のスクロールバーを出しているか
     hbar_on: Cell<bool>,
@@ -557,7 +556,8 @@ impl App {
                 WM_NOTIFY if wparam.0 as i32 == chrome::ID_STATUS => {
                     let nm = &*(lparam.0 as *const windows::Win32::UI::Controls::NMMOUSE);
                     if nm.hdr.code == windows::Win32::UI::Controls::NM_CLICK {
-                        let d = self.status_click(nm.dwItemSpec);
+                        let x = nm.pt.x as f32 / (GetDpiForWindow(self.hwnd) as f32 / 96.0);
+                        let d = self.status_click(x);
                         return (DONE, d);
                     }
                     (Some(LRESULT(0)), None)

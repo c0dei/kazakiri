@@ -74,7 +74,6 @@ pub(super) unsafe fn run_inner() -> std::result::Result<(), (&'static str, windo
             status_placed: Cell::new([0; 3]),
             status_sig: RefCell::new(String::new()),
             status_texts: RefCell::new(Vec::new()),
-            status_kinds: RefCell::new(Vec::new()),
             status_font: Cell::new(HFONT::default()),
             hbar_on: Cell::new(true),
             sb_placed: Cell::new([0; 6]),
