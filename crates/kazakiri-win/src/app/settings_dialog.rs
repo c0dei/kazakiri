@@ -141,11 +141,10 @@ struct Pal {
     cardb: D2D1_COLOR_F,
     text: D2D1_COLOR_F,
     dim: D2D1_COLOR_F,
-    knob: D2D1_COLOR_F,
 }
 
-const PAL_DARK: Pal = Pal { bg: rgb(0x20, 0x20, 0x20), card: rgb(0x2b, 0x2b, 0x2b), cardb: rgb(0x38, 0x38, 0x38), text: rgb(0xf2, 0xf2, 0xf2), dim: rgb(0x9a, 0x9a, 0x9a), knob: rgb(0x11, 0x11, 0x11) };
-const PAL_LIGHT: Pal = Pal { bg: rgb(0xf3, 0xf3, 0xf3), card: rgb(0xfb, 0xfb, 0xfb), cardb: rgb(0xe5, 0xe5, 0xe5), text: rgb(0x1a, 0x1a, 0x1a), dim: rgb(0x6b, 0x6b, 0x6b), knob: rgb(0xff, 0xff, 0xff) };
+const PAL_DARK: Pal = Pal { bg: rgb(0x20, 0x20, 0x20), card: rgb(0x2b, 0x2b, 0x2b), cardb: rgb(0x38, 0x38, 0x38), text: rgb(0xf2, 0xf2, 0xf2), dim: rgb(0x9a, 0x9a, 0x9a) };
+const PAL_LIGHT: Pal = Pal { bg: rgb(0xf3, 0xf3, 0xf3), card: rgb(0xfb, 0xfb, 0xfb), cardb: rgb(0xe5, 0xe5, 0xe5), text: rgb(0x1a, 0x1a, 0x1a), dim: rgb(0x6b, 0x6b, 0x6b) };
 
 /// いまのアクセントカラー（設定で選んだ色、なければ Windows の設定の色）
 fn accent_now() -> D2D1_COLOR_F {
@@ -222,7 +221,8 @@ fn relayout(dlg: HWND) {
         for (y, h, toggle, choice) in rows {
             let y = y - scroll;
             if let Some(id) = toggle {
-                put(id, PAGE_X + 4, PAGE_Y + y + 4, new_w - 8, h - 8);
+                let (tx, ty, tw, th) = toggle_rect(y, h, new_w);
+                put(id, tx, ty, tw, th);
                 moving.push(id);
             }
             if let Some((first, kind, n)) = choice {
@@ -381,8 +381,6 @@ struct Ctrls {
     /// 選択肢のいま選んでいるもの（先頭の ID → 番号）
     sel: HashMap<i32, usize>,
     rows: Vec<Row>,
-    /// スイッチの状態（ID → オン）
-    toggles: HashMap<i32, bool>,
     all: Vec<(i32, HWND)>,
     /// 分類ごとの部品：(ID, 分類の番号, 検索用の文字列)
     pages: Vec<(i32, usize, String)>,
@@ -420,24 +418,32 @@ fn set_text(id: i32, s: &str) {
     }
 }
 
+/// チェックボックス（標準の `BS_AUTOCHECKBOX`）の状態は、部品そのものが持つ
 fn set_checked(id: i32, on: bool) {
-    CTRLS.with(|c| {
-        if let Some(ct) = c.borrow_mut().as_mut() {
-            ct.toggles.insert(id, on);
+    let h = ctl(id);
+    if !h.0.is_null() {
+        unsafe {
+            SendMessageW(h, BM_SETCHECK, Some(WPARAM(if on { BST_CHECKED.0 as usize } else { BST_UNCHECKED.0 as usize })), Some(LPARAM(0)));
         }
-    });
+    }
 }
 
 fn is_checked(id: i32) -> bool {
-    CTRLS.with(|c| c.borrow().as_ref().and_then(|ct| ct.toggles.get(&id).copied())).unwrap_or(false)
+    let h = ctl(id);
+    !h.0.is_null() && unsafe { SendMessageW(h, BM_GETCHECK, Some(WPARAM(0)), Some(LPARAM(0))).0 } == BST_CHECKED.0 as isize
 }
+
+/// チェックボックスの位置と大きさ（DIP）。カードの左上に置き、押せる範囲はカードの中ほぼ全体。
+/// 箱と題は部品が描き、説明文はダイアログが、その下に（題の文字に合わせて）描く
+fn toggle_rect(y: i32, h: i32, w: i32) -> (i32, i32, i32, i32) {
+    (PAGE_X + 12, PAGE_Y + y + 8, w - 24, h - 12)
+}
+
+/// 説明文を、チェックボックスの題の文字に合わせて右へずらす量（DIP。箱の幅と間）
+const TOGGLE_INDENT: i32 = 24;
 
 fn is_toggle(id: i32) -> bool {
     CTRLS.with(|c| c.borrow().as_ref().is_some_and(|ct| ct.rows.iter().any(|r| r.toggle == Some(id))))
-}
-
-fn flip_checked(id: i32) {
-    set_checked(id, !is_checked(id));
 }
 
 /// アプリの今の設定を、ダイアログの各部品に写す
@@ -1043,12 +1049,12 @@ unsafe fn create(owner: HWND) {
         if let Some(&(_, h)) = all.iter().find(|(i, _)| *i == ID_TITLE) {
             SendMessageW(h, WM_SETFONT, Some(WPARAM(big_font.0 as usize)), Some(LPARAM(1)));
         }
-        // スイッチの行・選択肢ごとに、カードの上に透明なボタンを重ねる（Tab で止まり、Space で押せる。クリックもこのボタンが受ける）
+        // スイッチの行は標準のチェックボックス、選択肢ごとにはカードの上に透明なボタンを重ねる（Tab で止まり、Space で押せる）
         for r in &rows {
             if let Some(id) = r.toggle {
-                let hw = make_child(dlg, w!("BUTTON"), "", BS_OWNERDRAW as u32 | BS_NOTIFY as u32 | WS_TABSTOP.0, 0, id, font);
-                let (x, y) = (PAGE_X + 4, PAGE_Y + r.y + 4);
-                let _ = SetWindowPos(hw, None, p(x), p(y), p(CARD_W - 8), p(r.h - 8), SWP_NOZORDER | SWP_NOACTIVATE);
+                let hw = make_child(dlg, w!("BUTTON"), r.title, BS_AUTOCHECKBOX as u32 | BS_TOP as u32 | BS_LEFT as u32 | WS_TABSTOP.0, 0, id, font);
+                let (x, y, w, h) = toggle_rect(r.y, r.h, CARD_W);
+                let _ = SetWindowPos(hw, None, p(x), p(y), p(w), p(h), SWP_NOZORDER | SWP_NOACTIVATE);
                 all.push((id, hw));
                 pages.push((id, r.page, String::new()));
             }
@@ -1077,7 +1083,7 @@ unsafe fn create(owner: HWND) {
             BG_BRUSH[i].store(CreateSolidBrush(rgb_ref(&pal.bg)).0 as isize, Ordering::Relaxed);
             EDIT_BRUSH[i].store(CreateSolidBrush(rgb_ref(&edit_bg)).0 as isize, Ordering::Relaxed);
         }
-        CTRLS.with(|c| *c.borrow_mut() = Some(Ctrls { card_w: CARD_W, places, sel: HashMap::new(), rows, toggles: HashMap::new(), all, pages, visible: Vec::new(), cur: 0, scroll: 0, page_h }));
+        CTRLS.with(|c| *c.borrow_mut() = Some(Ctrls { card_w: CARD_W, places, sel: HashMap::new(), rows, all, pages, visible: Vec::new(), cur: 0, scroll: 0, page_h }));
         fill_cats("");
         SET_DLG.store(dlg.0 as isize, Ordering::Relaxed);
         // キーボードのフォーカス枠は、マウスで押したときには出さない（Tab などを使うと、IsDialogMessage が出す状態に変える）
@@ -1238,7 +1244,7 @@ fn mix(a: &D2D1_COLOR_F, b: &D2D1_COLOR_F, t: f32) -> D2D1_COLOR_F {
 
 /// 大きさをドラッグで変えている最中の、簡易な背景（GDI。縁は滑らかでないが、Direct2D のように描画結果を読み戻さないので速い）
 #[allow(clippy::too_many_arguments)]
-unsafe fn gdi_cards(hdc: HDC, rc: &RECT, scale: f32, rows: &[PaintRow], toggles: &HashMap<i32, bool>, card_w: i32, sel: &HashMap<i32, usize>, scroll: i32, content: i32, pal: &Pal, acc: &D2D1_COLOR_F) {
+unsafe fn gdi_cards(hdc: HDC, rc: &RECT, scale: f32, rows: &[PaintRow], card_w: i32, sel: &HashMap<i32, usize>, scroll: i32, content: i32, pal: &Pal, acc: &D2D1_COLOR_F) {
     unsafe {
         let px = |v: i32| (v as f32 * scale).round() as i32;
         let bg = CreateSolidBrush(rgb_ref(&pal.bg));
@@ -1262,7 +1268,7 @@ unsafe fn gdi_cards(hdc: HDC, rc: &RECT, scale: f32, rows: &[PaintRow], toggles:
                 let _ = DeleteObject(b.into());
             }
         };
-        for &(y, _, _, toggle, rh, _, heading, choice) in rows {
+        for &(y, _, _, _, rh, _, heading, choice) in rows {
             if heading {
                 continue;
             }
@@ -1272,21 +1278,6 @@ unsafe fn gdi_cards(hdc: HDC, rc: &RECT, scale: f32, rows: &[PaintRow], toggles:
             shape(hdc, Some(&pal.card), Some(&pal.cardb), &|h| {
                 let _ = RoundRect(h, x0, y0, x1, y1, d, d);
             });
-            if let Some(id) = toggle {
-                let on = toggles.get(&id).copied().unwrap_or(false);
-                let (tw, th) = (px(40), px(20));
-                let (tx1, ty0) = (x1 - px(16), (y0 + y1) / 2 - th / 2);
-                let tx0 = tx1 - tw;
-                shape(hdc, if on { Some(acc) } else { None }, Some(if on { acc } else { &pal.dim }), &|h| {
-                    let _ = RoundRect(h, tx0, ty0, tx1, ty0 + th, th, th);
-                });
-                let r = px(5);
-                let kx = if on { tx1 - px(10) - 1 } else { tx0 + px(10) + 1 };
-                let knob = if on { &pal.knob } else { &pal.dim };
-                shape(hdc, Some(knob), None, &|h| {
-                    let _ = Ellipse(h, kx - r, ty0 + th / 2 - r, kx + r, ty0 + th / 2 + r);
-                });
-            }
             if let Some((first, kind, n)) = choice {
                 let selected = sel.get(&first).copied();
                 let rects = choice_rects(y, rh, card_w, kind, n);
@@ -1349,11 +1340,10 @@ unsafe fn paint_bg(hwnd: HWND, hdc: HDC) {
         let _ = GetClientRect(hwnd, &mut rc);
         let pal = pal();
         // 行の位置は、スクロール量だけ上へずらす
-        let (rows, toggles, card_w, sel, scroll, content) = CTRLS.with(|c| {
-            c.borrow().as_ref().map_or((Vec::new(), HashMap::new(), CARD_W, HashMap::new(), 0, 0), |ct| {
+        let (rows, card_w, sel, scroll, content) = CTRLS.with(|c| {
+            c.borrow().as_ref().map_or((Vec::new(), CARD_W, HashMap::new(), 0, 0), |ct| {
                 (
                     ct.rows.iter().filter(|r| r.page == ct.cur).map(|r| (r.y - ct.scroll, r.title, r.desc, r.toggle, r.h, r.preview, r.heading, r.choice)).collect::<Vec<_>>(),
-                    ct.toggles.clone(),
                     ct.card_w,
                     ct.sel.clone(),
                     ct.scroll,
@@ -1372,7 +1362,7 @@ unsafe fn paint_bg(hwnd: HWND, hdc: HDC) {
         let px = |v: i32| v as f32 * scale;
         let mut drawn = false;
         if SIZING.load(Ordering::Relaxed) {
-            gdi_cards(hdc, &rc, scale, &rows, &toggles, card_w, &sel, scroll, content, pal, &acc);
+            gdi_cards(hdc, &rc, scale, &rows, card_w, &sel, scroll, content, pal, &acc);
             drawn = true;
         } else if let Some(factory) = factory {
             let props = D2D1_RENDER_TARGET_PROPERTIES {
@@ -1396,7 +1386,7 @@ unsafe fn paint_bg(hwnd: HWND, hdc: HDC) {
                     if let Ok(brush) = rt.CreateSolidColorBrush(&pal.card, None) {
                         // 行（カード）は、表示領域（タイトルの下から、ボタンの行の上まで）の中だけに描く
                         rt.PushAxisAlignedClip(&windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F { left: 0.0, top: px(PAGE_Y), right: rc.right as f32, bottom: rc.bottom as f32 - px(FOOTER_H) }, D2D1_ANTIALIAS_MODE_ALIASED);
-                        for &(y, _, _, toggle, rh, _, heading, choice) in &rows {
+                        for &(y, _, _, _, rh, _, heading, choice) in &rows {
                             if heading {
                                 continue;
                             }
@@ -1406,20 +1396,6 @@ unsafe fn paint_bg(hwnd: HWND, hdc: HDC) {
                             rt.FillRoundedRectangle(&rrect(x0, y0, x1, y1, px(8)), &brush);
                             brush.SetColor(&pal.card);
                             rt.FillRoundedRectangle(&rrect(x0 + 1.0, y0 + 1.0, x1 - 1.0, y1 - 1.0, px(8) - 1.0), &brush);
-                            if let Some(id) = toggle {
-                                let on = toggles.get(&id).copied().unwrap_or(false);
-                                // 標準のチェックボックスの形（四角の枠と、オンのときのチェックマーク）
-                                let size = px(16);
-                                let (bx1, by0) = (x1 - px(16), (y0 + y1) / 2.0 - size / 2.0);
-                                let bx0 = bx1 - size;
-                                brush.SetColor(&pal.text);
-                                rt.DrawRectangle(&rect(bx0 + 0.5, by0 + 0.5, bx1 - 0.5, by0 + size - 0.5), &brush, 1.0, None);
-                                if on {
-                                    let p = |fx: f32, fy: f32| Vector2 { X: bx0 + size * fx, Y: by0 + size * fy };
-                                    rt.DrawLine(p(0.22, 0.52), p(0.42, 0.74), &brush, 1.6, None);
-                                    rt.DrawLine(p(0.42, 0.74), p(0.80, 0.26), &brush, 1.6, None);
-                                }
-                            }
                             // 選択肢：切り替え（システム・ライト・ダーク）と、色の見本
                             if let Some((first, kind, n)) = choice {
                                 let selected = sel.get(&first).copied();
@@ -1509,16 +1485,19 @@ unsafe fn paint_bg(hwnd: HWND, hdc: HDC) {
             let x0 = px(PAGE_X + 16) as i32;
             let y0 = px(PAGE_Y + y) as i32;
             let (ty, dy) = if desc.is_empty() { (y0 + (px(ROW_H) as i32 - lh) / 2, 0) } else { (y0 + px(10) as i32, y0 + px(10) as i32 + lh + px(2) as i32) };
-            // スイッチの行はスイッチの手前まで、入力欄のある行は入力欄の手前まで
-            let limit = if toggle.is_some() { px(PAGE_X + card_w - 76) as i32 } else { x0 + px(card_w - 32 - 330) as i32 };
-            SetTextColor(hdc, rgb_ref(&pal.text));
-            let mut t: Vec<u16> = title.encode_utf16().collect();
-            let mut r = RECT { left: x0, top: ty, right: limit.max(x0 + 40), bottom: ty + lh };
-            DrawTextW(hdc, &mut t, &mut r, DT_LEFT | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
+            // チェックボックスの行は、題を部品が描く（ここでは説明だけ、題の文字の位置に合わせて描く）。入力欄のある行は入力欄の手前まで
+            let limit = if toggle.is_some() { px(PAGE_X + card_w - 16) as i32 } else { x0 + px(card_w - 32 - 330) as i32 };
+            if toggle.is_none() {
+                SetTextColor(hdc, rgb_ref(&pal.text));
+                let mut t: Vec<u16> = title.encode_utf16().collect();
+                let mut r = RECT { left: x0, top: ty, right: limit.max(x0 + 40), bottom: ty + lh };
+                DrawTextW(hdc, &mut t, &mut r, DT_LEFT | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
+            }
             if !desc.is_empty() {
                 SetTextColor(hdc, rgb_ref(&pal.dim));
                 let mut d: Vec<u16> = desc.encode_utf16().collect();
-                let mut r = RECT { left: x0, top: dy, right: limit.max(x0 + 40), bottom: dy + lh };
+                let dx = if toggle.is_some() { x0 + px(TOGGLE_INDENT - 4) as i32 } else { x0 };
+                let mut r = RECT { left: dx, top: dy, right: limit.max(dx + 40), bottom: dy + lh };
                 DrawTextW(hdc, &mut d, &mut r, DT_LEFT | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
             }
         }
@@ -1546,9 +1525,6 @@ unsafe extern "system" fn dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
             WM_COMMAND => {
                 let id = (wparam.0 & 0xFFFF) as i32;
                 let code = ((wparam.0 >> 16) & 0xFFFF) as u32;
-                if code == BN_CLICKED && is_toggle(id) {
-                    flip_checked(id);
-                }
                 // フォーカスが入った部品が表示領域の外なら、見える位置までスクロールする
                 // （BN_SETFOCUS = 6、EN_SETFOCUS = 0x100、CBN_SETFOCUS = 3。ほかの通知でも、見えていれば何もしない）
                 if code == 6 || code == 0x100 || code == 3 {
@@ -1610,13 +1586,15 @@ unsafe extern "system" fn dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                 paint_bg(hwnd, HDC(wparam.0 as *mut _));
                 LRESULT(1)
             }
-            WM_SETCURSOR => {
-                // スイッチの上は手の形
-                let child = HWND(wparam.0 as *mut _);
-                let id = GetDlgCtrlID(child);
-                if id != 0 && is_toggle(id) {
-                    SetCursor(LoadCursorW(None, IDC_HAND).ok());
-                    return LRESULT(1);
+            WM_NOTIFY => {
+                // チェックボックスの題の文字色（ダークのテーマでも、部品の既定の黒にならないように）
+                let nm = &*(lparam.0 as *const NMHDR);
+                if nm.code == NM_CUSTOMDRAW && is_toggle(nm.idFrom as i32) {
+                    let cd = &*(lparam.0 as *const NMCUSTOMDRAW);
+                    if cd.dwDrawStage == CDDS_PREPAINT {
+                        SetTextColor(cd.hdc, rgb_ref(&pal().text));
+                    }
+                    return LRESULT(CDRF_DODEFAULT as isize);
                 }
                 DefWindowProcW(hwnd, msg, wparam, lparam)
             }
@@ -1661,7 +1639,8 @@ unsafe extern "system" fn dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                 // 見出し・説明の文字：背景はそのまま見せる
                 SetBkMode(hdc, TRANSPARENT);
                 let is_title = HWND(lparam.0 as *mut _) == ctl(ID_TITLE);
-                SetTextColor(hdc, rgb_ref(if is_title { &p.text } else { &p.dim }));
+                let is_check = msg == WM_CTLCOLORBTN && is_toggle(GetDlgCtrlID(HWND(lparam.0 as *mut _)));
+                SetTextColor(hdc, rgb_ref(if is_title || is_check { &p.text } else { &p.dim }));
                 // 静的な文字と、カードの上に重ねた透明なボタン（スイッチ・切り替え・色の見本）は、下のカードを塗りつぶさない。
                 // 通常のボタン（保存・閉じる・＋・－ など）は、ダイアログの地の色で塗る（NULL だと、角に白い下地が出る）
                 if msg == WM_CTLCOLORSTATIC {
