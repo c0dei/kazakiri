@@ -81,7 +81,7 @@ impl App {
             // パートは 1 つだけ（枠なし）。中身は全部、自前で描く（パートごとの枠は、標準の部品だと白い線で出てしまうため）
             // 余白・区切りの線を 0 に（標準の部品が、枠の白い線を残さないように）
             let borders = [0i32, 0, 0];
-            SendMessageW(self.status, SB_SETBORDERS, Some(WPARAM(0)), Some(LPARAM(borders.as_ptr() as isize)));
+            SendMessageW(self.status, 0x0405 /* SB_SETBORDERS */, Some(WPARAM(0)), Some(LPARAM(borders.as_ptr() as isize)));
             let edge = [-1i32];
             SendMessageW(self.status, SB_SETPARTS, Some(WPARAM(1)), Some(LPARAM(edge.as_ptr() as isize)));
             SendMessageW(self.status, SB_SETTEXTW, Some(WPARAM(SBT_OWNERDRAW as usize | SBT_NOBORDERS as usize)), Some(LPARAM(0)));
