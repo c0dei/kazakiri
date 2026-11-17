@@ -912,11 +912,12 @@ unsafe fn create(owner: HWND) {
             ..Default::default()
         };
         RegisterClassExW(&wc);
+        // WS_EX_COMPOSITED：部品も含めて 1 枚に描いてから出す（標準の部品を動かすスクロール・サイズ変更で、ちらつかないように）
         let Ok(dlg) = CreateWindowExW(
-            WINDOW_EX_STYLE(0),
+            WS_EX_COMPOSITED,
             CLASS,
             w!("設定"),
-            WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MAXIMIZEBOX,
+            WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MAXIMIZEBOX | WS_CLIPCHILDREN,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
             480,
