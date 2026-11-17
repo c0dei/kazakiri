@@ -793,7 +793,7 @@ unsafe fn on_command(dlg: HWND, id: i32, code: u32) {
         }
         // ドロップダウン（テーマ・アクセントカラー）：選んだ印を下書きに写す（反映は「保存」のとき）
         if id == ID_THEME_BASE || id == ID_ACCENT_BASE {
-            if code == CBN_SELCHANGE as u32 {
+            if code == CBN_SELCHANGE {
                 let i = SendMessageW(ctl(id), CB_GETCURSEL, None, None).0;
                 if let Ok(i) = usize::try_from(i) {
                     select_choice(id, i);
@@ -854,7 +854,7 @@ fn set_combo_sel(id: i32, idx: Option<usize>) {
     let h = ctl(id);
     if !h.0.is_null() {
         unsafe {
-            SendMessageW(h, CB_SETCURSEL, Some(WPARAM(idx.map_or(usize::MAX, |i| i))), Some(LPARAM(0)));
+            SendMessageW(h, CB_SETCURSEL, Some(WPARAM(idx.unwrap_or(usize::MAX))), Some(LPARAM(0)));
         }
     }
 }
