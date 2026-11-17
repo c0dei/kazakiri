@@ -429,8 +429,17 @@ fn set_text(id: i32, s: &str) {
 }
 
 /// チェックボックス（標準の `BS_AUTOCHECKBOX`）の状態は、部品そのものが持つ
+/// チェックボックス本体（標準の部品）。`ctl(id)` は、その親の「ホスト」ウィンドウ
+fn check_hwnd(id: i32) -> HWND {
+    let host = ctl(id);
+    if host.0.is_null() {
+        return HWND::default();
+    }
+    unsafe { GetWindow(host, GW_CHILD).unwrap_or_default() }
+}
+
 fn set_checked(id: i32, on: bool) {
-    let h = ctl(id);
+    let h = check_hwnd(id);
     if !h.0.is_null() {
         unsafe {
             SendMessageW(h, BM_SETCHECK, Some(WPARAM(if on { BST_CHECKED.0 as usize } else { BST_UNCHECKED.0 as usize })), Some(LPARAM(0)));
@@ -439,8 +448,41 @@ fn set_checked(id: i32, on: bool) {
 }
 
 fn is_checked(id: i32) -> bool {
-    let h = ctl(id);
+    let h = check_hwnd(id);
     !h.0.is_null() && unsafe { SendMessageW(h, BM_GETCHECK, Some(WPARAM(0)), Some(LPARAM(0))).0 } == BST_CHECKED.0 as isize
+}
+
+/// チェックボックスのホスト：カードと同じ単色で背景を塗り、中のチェックボックスの色（文字・背景）を決める。
+/// クリックなどの通知（WM_COMMAND）は、ダイアログへ渡す。大きさは、中のチェックボックスにそのまま写す
+unsafe extern "system" fn check_host_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    unsafe {
+        let card = HBRUSH(CARD_BRUSH[DARK.load(Ordering::Relaxed) as usize].load(Ordering::Relaxed) as *mut _);
+        match msg {
+            WM_ERASEBKGND => {
+                let mut rc = RECT::default();
+                let _ = GetClientRect(hwnd, &mut rc);
+                FillRect(HDC(wparam.0 as *mut _), &rc, card);
+                LRESULT(1)
+            }
+            WM_CTLCOLORBTN | WM_CTLCOLORSTATIC => {
+                let hdc = HDC(wparam.0 as *mut _);
+                SetTextColor(hdc, rgb_ref(&pal().text));
+                SetBkColor(hdc, rgb_ref(&pal().card));
+                SetBkMode(hdc, OPAQUE);
+                LRESULT(card.0 as isize)
+            }
+            WM_SIZE => {
+                let mut rc = RECT::default();
+                let _ = GetClientRect(hwnd, &mut rc);
+                if let Ok(child) = GetWindow(hwnd, GW_CHILD) {
+                    let _ = SetWindowPos(child, None, 0, 0, rc.right, rc.bottom, SWP_NOZORDER | SWP_NOACTIVATE);
+                }
+                LRESULT(0)
+            }
+            WM_COMMAND => SendMessageW(GetParent(hwnd).unwrap_or_default(), WM_COMMAND, Some(wparam), Some(lparam)),
+            _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+        }
+    }
 }
 
 /// 標準部品ギャラリー用：チェックボックスにサブクラスの描画をつける（色の元は、ギャラリーのブラシと配色）
@@ -624,9 +666,11 @@ fn set_theme(dark: bool) {
     }
     unsafe {
         let all: Vec<(i32, HWND)> = CTRLS.with(|c| c.borrow().as_ref().map(|ct| ct.all.clone()).unwrap_or_default());
-        for (_, h) in all {
-            let name = w!("DarkMode_Explorer");
-            let _ = SetWindowTheme(h, if dark { name } else { PCWSTR::null() }, PCWSTR::null());
+        for (id, h) in all {
+            // チェックボックスは、ホストの子。ドロップダウンは CFD（Explorer だと、ダークでも白くなる。ギャラリーで確認）
+            let target = if is_toggle(id) { GetWindow(h, GW_CHILD).unwrap_or(h) } else { h };
+            let name = if id == ID_THEME_BASE || id == ID_ACCENT_BASE { w!("DarkMode_CFD") } else { w!("DarkMode_Explorer") };
+            let _ = SetWindowTheme(target, if dark { name } else { PCWSTR::null() }, PCWSTR::null());
         }
         let v = BOOL::from(dark);
         let _ = DwmSetWindowAttribute(dlg, DWMWA_USE_IMMERSIVE_DARK_MODE, &v as *const BOOL as *const _, std::mem::size_of::<BOOL>() as u32);
@@ -999,6 +1043,7 @@ unsafe fn create(owner: HWND) {
             ..Default::default()
         };
         RegisterClassExW(&wc);
+        RegisterClassExW(&WNDCLASSEXW { cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32, lpfnWndProc: Some(check_host_proc), hInstance: instance.into(), hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(), lpszClassName: w!("KazakiriCheckHost"), ..Default::default() });
         // どのビルドか分かるように、題にコミットの短い識別子を付ける（CI のビルドだけ）
         let title = wide(&format!("設定  ({})", option_env!("GITHUB_SHA").map_or("local", |s| s.get(..7).unwrap_or(s))));
         // WS_EX_COMPOSITED：部品も含めて 1 枚に描いてから出す（標準の部品を動かすスクロール・サイズ変更で、ちらつかないように）
@@ -1173,8 +1218,9 @@ unsafe fn create(owner: HWND) {
         // スイッチの行は標準のチェックボックス、選択肢ごとにはカードの上に透明なボタンを重ねる（Tab で止まり、Space で押せる）
         for r in &rows {
             if let Some(id) = r.toggle {
-                let hw = make_child(dlg, w!("BUTTON"), r.title, BS_AUTOCHECKBOX as u32 | BS_LEFT as u32 | WS_TABSTOP.0, 0, id, font);
-                let _ = windows::Win32::UI::Shell::SetWindowSubclass(hw, Some(check_subclass), 1, 0);
+                // チェックボックスは、単色で背景を塗る「ホスト」の子にする（標準部品が親の背景を借りても、色と位置が必ず合う）
+                let hw = make_child(dlg, w!("KazakiriCheckHost"), "", WS_CLIPCHILDREN.0, WS_EX_CONTROLPARENT.0, id + 10000, font);
+                let _ = make_child(hw, w!("BUTTON"), r.title, BS_AUTOCHECKBOX as u32 | BS_LEFT as u32 | WS_TABSTOP.0, 0, id, font);
                 let (x, y, w, h) = toggle_rect(r.y, r.h, CARD_W);
                 let _ = SetWindowPos(hw, None, p(x), p(y), p(w), p(h), SWP_NOZORDER | SWP_NOACTIVATE);
                 all.push((id, hw));
