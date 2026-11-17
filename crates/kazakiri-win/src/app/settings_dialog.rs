@@ -925,11 +925,13 @@ unsafe fn create(owner: HWND) {
             ..Default::default()
         };
         RegisterClassExW(&wc);
+        // どのビルドか分かるように、題にコミットの短い識別子を付ける（CI のビルドだけ）
+        let title = wide(&format!("設定  ({})", option_env!("GITHUB_SHA").map_or("local", |s| s.get(..7).unwrap_or(s))));
         // WS_EX_COMPOSITED：部品も含めて 1 枚に描いてから出す（標準の部品を動かすスクロール・サイズ変更で、ちらつかないように）
         let Ok(dlg) = CreateWindowExW(
             WS_EX_COMPOSITED,
             CLASS,
-            w!("設定"),
+            PCWSTR(title.as_ptr()),
             WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MAXIMIZEBOX | WS_CLIPCHILDREN,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
