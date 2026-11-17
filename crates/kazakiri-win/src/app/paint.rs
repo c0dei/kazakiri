@@ -36,8 +36,7 @@ impl App {
                 mk(&theme::accent(self.settings.dark))?,
             ];
             let md = vec![mk(&theme::accent(self.settings.dark))?, mk(&t.syn_tag)?, mk(&t.syn_str)?, mk(&t.syn_num)?, mk(&t.syn_kw)?, mk(&t.syn_comment)?, mk(&t.syn_tag)?, mk(&t.syn_key)?];
-            let icon = self.load_app_icon(&target);
-            self.gfx = Some(Gfx { target, brush, effects, md, icon });
+            self.gfx = Some(Gfx { target, brush, effects, md });
             if let Some(v) = &self.md {
                 v.reset();
             }

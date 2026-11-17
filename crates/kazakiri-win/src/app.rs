@@ -230,8 +230,6 @@ struct Gfx {
     effects: Vec<IUnknown>,
     /// Markdown のプレビュー用：リンクの色、コードの色、構文の色（文字列・数・予約語・コメント・タグ・キー）
     md: Vec<IUnknown>,
-    /// タブバーの左に出すアプリのアイコン（exe に埋め込んだもの。作れなければ None）
-    icon: Option<ID2D1Bitmap>,
 }
 
 /// 実行中の検索
@@ -279,9 +277,6 @@ struct App {
     hbar_on: Cell<bool>,
     /// 直前に置いたスクロールバーの位置（変わっていなければ、置き直さない）
     sb_placed: Cell<[i32; 6]>,
-    /// ウィンドウのボタン（最小化・最大化・閉じる）の、マウスが上にある／押しているもの
-    cap_hover: Option<u8>,
-    cap_down: Option<u8>,
     d2d: ID2D1Factory,
     dw: IDWriteFactory,
     format: IDWriteTextFormat,
@@ -456,6 +451,10 @@ pub fn run() {
 }
 
 extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    // 標準のメニューバーをダークに塗る非公開メッセージ。DrawMenuBar などの中で同期的に届き、App を借りている最中のこともあるので、借りる前に処理する
+    if let Some(r) = unsafe { dark::bar_message(hwnd, msg, wparam, lparam) } {
+        return r;
+    }
     let result = APP.with(|cell| {
         let Ok(mut guard) = cell.try_borrow_mut() else { return None };
         let app = guard.as_mut()?;
@@ -700,19 +699,6 @@ impl App {
                     (Some(DefWindowProcW(self.hwnd, msg, wparam, l)), None)
                 }
                 // 検索や設定のウィンドウは同じスレッドの IME の状態を使うので、本文用に決めた変換ウィンドウ・候補ウィンドウの位置を残さない
-                WM_NCCALCSIZE if wparam.0 != 0 => (Some(self.nc_calc_size(msg, wparam, lparam)), None),
-                WM_NCHITTEST => (Some(self.nc_hit_test(lparam)), None),
-                WM_NCMOUSEMOVE => {
-                    self.cap_mouse_move(wparam.0 as u32);
-                    (None, None)
-                }
-                0x02A2 => {
-                    // WM_NCMOUSELEAVE
-                    self.cap_mouse_leave();
-                    (DONE, None)
-                }
-                WM_NCLBUTTONDOWN if self.cap_button_down(wparam.0 as u32) => (DONE, None),
-                WM_NCLBUTTONUP if self.cap_button_up(wparam.0 as u32) => (DONE, None),
                 WM_KILLFOCUS => {
                     self.delim_edit = false;
                     self.reset_ime_forms();

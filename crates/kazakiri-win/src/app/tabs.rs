@@ -11,6 +11,9 @@ use super::edit::Pending;
 use super::results::{JobKind, ResultKind};
 use super::*;
 
+/// タブの並びの左端（DIP）
+const TAB_X0: f32 = 4.0;
+
 /// タブの中の余白（左）と、閉じるボタンの幅
 const PAD: f32 = 12.0;
 const CLOSE_W: f32 = 22.0;
@@ -357,7 +360,7 @@ impl App {
         let boxes = self.tab_boxes();
         let Some(b) = boxes.get(self.active) else { return };
         // タブを並べられる幅：左のマークの右から、ウィンドウのボタンの左まで
-        let w = (self.client_w_dip() - super::caption::TAB_X0 - self.controls_w() - 8.0).max(60.0);
+        let w = (self.client_w_dip() - TAB_X0 - 8.0).max(60.0);
         if b.x0 < self.tab_scroll {
             self.tab_scroll = b.x0;
         } else if b.x1 > self.tab_scroll + w {
@@ -369,7 +372,7 @@ impl App {
 
     /// タブバーの中の x 座標 → (タブの番号, 閉じるボタンの上か)
     fn tab_at(&self, x: f32) -> Option<(usize, bool)> {
-        let x = x - super::caption::TAB_X0 + self.tab_scroll;
+        let x = x - TAB_X0 + self.tab_scroll;
         let boxes = self.tab_boxes();
         let i = boxes.iter().position(|b| x >= b.x0 && x < b.x1)?;
         Some((i, x >= boxes[i].x1 - CLOSE_W))
@@ -409,7 +412,7 @@ impl App {
         let Some((from, _)) = self.tab_drag else { return };
         // 端にいるときは、はみ出した分だけ近いタブに合わせる
         let total = self.tab_boxes().last().map_or(0.0, |b| b.x1);
-        let x0 = super::caption::TAB_X0;
+        let x0 = TAB_X0;
         let probe = (x - x0 + self.tab_scroll).clamp(0.0, (total - 1.0).max(0.0)) - self.tab_scroll + x0;
         let Some((to, _)) = self.tab_at(probe) else { return };
         if to == from {
@@ -491,9 +494,8 @@ impl App {
         unsafe {
             brush.SetColor(&t.status_bg);
             rt.FillRectangle(&rect(0.0, 0.0, w, h), brush);
-            self.draw_caption(rt, brush, w)?;
             // タブは、左のマークの右から、ウィンドウのボタンの左までの間だけ
-            let (tab_x0, tab_x1) = (super::caption::TAB_X0, w - self.controls_w());
+            let (tab_x0, tab_x1) = (TAB_X0, w);
             rt.PushAxisAlignedClip(&rect(tab_x0, 0.0, tab_x1, h), D2D1_ANTIALIAS_MODE_ALIASED);
             for (i, b) in self.tab_boxes().iter().enumerate() {
                 let (x0, x1) = (b.x0 - self.tab_scroll + tab_x0, b.x1 - self.tab_scroll + tab_x0);

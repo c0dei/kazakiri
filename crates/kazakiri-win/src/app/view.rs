@@ -97,6 +97,7 @@ impl App {
         let v = BOOL::from(self.settings.dark);
         unsafe {
             let _ = DwmSetWindowAttribute(self.hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &v as *const BOOL as *const _, size_of::<BOOL>() as u32);
+            super::dark::set_bar(self.settings.dark, self.theme);
             super::dark::apply(self.hwnd, self.settings.dark);
         }
     }
