@@ -16,6 +16,11 @@ mod settings;
 
 #[cfg(windows)]
 fn main() {
+    // 落ちたときの手がかり：パニックの内容を、一時フォルダの kazakiri-crash.log に書く
+    std::panic::set_hook(Box::new(|info| {
+        let path = std::env::temp_dir().join("kazakiri-crash.log");
+        let _ = std::fs::write(path, format!("{info}\n"));
+    }));
     app::run();
 }
 

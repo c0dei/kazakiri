@@ -18,7 +18,7 @@ impl App {
         unsafe {
             let icc = INITCOMMONCONTROLSEX { dwSize: std::mem::size_of::<INITCOMMONCONTROLSEX>() as u32, dwICC: ICC_BAR_CLASSES };
             let _ = InitCommonControlsEx(&icc);
-            let h = CreateWindowExW(WINDOW_EX_STYLE(0), w!("msctls_statusbar32"), PCWSTR::null(), WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WINDOW_STYLE(CCS_NODIVIDER as u32), 0, 0, 0, 0, Some(hwnd), Some(HMENU(ID_STATUS as usize as *mut _)), Some(instance), None).unwrap_or_default();
+            let h = CreateWindowExW(WINDOW_EX_STYLE(0), w!("msctls_statusbar32"), PCWSTR::null(), WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS, 0, 0, 0, 0, Some(hwnd), Some(HMENU(ID_STATUS as usize as *mut _)), Some(instance), None).unwrap_or_default();
             // 色を自分で決めるため、テーマの描画はやめる
             let _ = SetWindowTheme(h, w!(""), w!(""));
             h
@@ -79,9 +79,6 @@ impl App {
                 SendMessageW(self.status, WM_SETFONT, Some(WPARAM(self.status_font.get().0 as usize)), Some(LPARAM(1)));
             }
             // パートは 1 つだけ（枠なし）。中身は全部、自前で描く（パートごとの枠は、標準の部品だと白い線で出てしまうため）
-            // 余白・区切りの線を 0 に（標準の部品が、枠の白い線を残さないように）
-            let borders = [0i32, 0, 0];
-            SendMessageW(self.status, 0x0405 /* SB_SETBORDERS */, Some(WPARAM(0)), Some(LPARAM(borders.as_ptr() as isize)));
             let edge = [-1i32];
             SendMessageW(self.status, SB_SETPARTS, Some(WPARAM(1)), Some(LPARAM(edge.as_ptr() as isize)));
             SendMessageW(self.status, SB_SETTEXTW, Some(WPARAM(SBT_OWNERDRAW as usize | SBT_NOBORDERS as usize)), Some(LPARAM(0)));
