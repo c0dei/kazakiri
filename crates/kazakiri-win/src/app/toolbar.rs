@@ -24,7 +24,6 @@ pub(super) enum Icon {
     Preview,
     Design,
     ColPick,
-    Menu,
     New,
     Open,
     Save,
@@ -45,8 +44,6 @@ pub(super) enum Icon {
 
 /// ツールバーのボタン（None は区切り）。(アイコン, コマンドの ID, 説明)
 const BUTTONS: &[Option<(Icon, u32, &str)>] = &[
-    Some((Icon::Menu, menu::ID_MENU, "メニュー (F10)")),
-    None,
     Some((Icon::New, menu::ID_NEW, "新規作成 (Ctrl+N)")),
     Some((Icon::Open, menu::ID_OPEN, "開く (Ctrl+O)")),
     Some((Icon::Save, menu::ID_SAVE, "上書き保存 (Ctrl+S)")),
@@ -457,7 +454,7 @@ impl App {
     }
 
 
-    /// ☰ ボタンの左下（画面の座標）。メニューをここから開く
+    /// 先頭のボタンの左下（画面の座標）。メニューをここから開く
     pub(super) fn menu_anchor(&self) -> POINT {
         let x0 = self.tool_boxes().first().map_or(0.0, |b| b.0);
         let scale = unsafe { GetDpiForWindow(self.hwnd) } as f32 / 96.0;
@@ -757,11 +754,6 @@ impl App {
                     ln(6.0, 3.0, 6.0, 13.0);
                     ln(10.0, 3.0, 10.0, 13.0);
                     fr(6.0, 3.0, 10.0, 13.0);
-                }
-                Icon::Menu => {
-                    ln(2.5, 4.0, 13.5, 4.0);
-                    ln(2.5, 8.0, 13.5, 8.0);
-                    ln(2.5, 12.0, 13.5, 12.0);
                 }
                 Icon::New => {
                     rc(3.0, 1.5, 12.0, 14.5);

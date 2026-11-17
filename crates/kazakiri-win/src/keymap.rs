@@ -144,7 +144,6 @@ const DEFAULTS: &[(&str, &str)] = &[
     ("zoom_out", "Ctrl+Minus"),
     ("zoom_reset", "Ctrl+0"),
     ("command_palette", "Ctrl+Shift+P"),
-    ("main_menu", "F10"),
 ];
 
 /// 仮想キーコード

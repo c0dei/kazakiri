@@ -921,8 +921,6 @@ impl App {
                     (DONE, None)
                 }
                 WM_KEYDOWN => (DONE, self.on_key(VIRTUAL_KEY(wparam.0 as u16))),
-                // F10 はシステムキーとして届く。☰ のメニュー（keys.ini で変えられる割り当て）を開く
-                WM_SYSKEYDOWN if VIRTUAL_KEY(wparam.0 as u16) == VK_F10 => (DONE, self.on_key(VK_F10)),
                 // Alt+C / Alt+R：検索オプションの切り替え。
                 // DefWindowProc にも渡す（渡さないと Alt を離したときにメニューが開いてしまう）
                 // 検索欄で Alt+Enter：すべて検索して一覧に。置換欄で Alt+A：すべて置換
