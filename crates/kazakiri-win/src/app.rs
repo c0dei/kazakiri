@@ -78,6 +78,7 @@ mod find_dialog;
 mod findbar;
 mod palette;
 mod caption;
+mod gallery;
 mod chrome;
 mod bookmarks;
 mod diffview;
@@ -436,6 +437,11 @@ struct App {
     stick_bottom: bool,
     /// 行の開始位置 → レイアウト。直前に描いた行だけを持つ
     layout_cache: RefCell<HashMap<u64, CachedLine>>,
+}
+
+/// 標準部品ギャラリー（試験用。`--gallery`）
+pub fn run_gallery() {
+    gallery::run();
 }
 
 pub fn run() {

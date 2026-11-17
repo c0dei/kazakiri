@@ -443,6 +443,17 @@ fn is_checked(id: i32) -> bool {
     !h.0.is_null() && unsafe { SendMessageW(h, BM_GETCHECK, Some(WPARAM(0)), Some(LPARAM(0))).0 } == BST_CHECKED.0 as isize
 }
 
+/// 標準部品ギャラリー用：チェックボックスにサブクラスの描画をつける（色の元は、ギャラリーのブラシと配色）
+pub(super) unsafe fn attach_check_subclass(h: HWND, card_brushes: &[AtomicIsize; 2], dark: bool) {
+    unsafe {
+        DARK.store(dark, Ordering::Relaxed);
+        for i in 0..2 {
+            CARD_BRUSH[i].store(card_brushes[i].load(Ordering::Relaxed), Ordering::Relaxed);
+        }
+        let _ = windows::Win32::UI::Shell::SetWindowSubclass(h, Some(check_subclass), 1, 0);
+    }
+}
+
 /// チェックボックスの描画を自分で受ける（部品は標準のまま。メッセージ・キー操作・読み上げは標準の動き）。
 /// 背景はカードと同じ色、箱は OS のテーマ（ダークなら `DarkMode_Explorer`）の本物の絵、題は自前の色で描く。
 /// 標準の描画は、親から背景を借りる途中で、位置や色が合わずに帯が出てしまうため

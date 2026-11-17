@@ -23,6 +23,10 @@ fn main() {
     }));
     let _ = std::fs::remove_file(std::env::temp_dir().join("kazakiri-start.log"));
     app::crumb(&format!("start build={}", option_env!("GITHUB_SHA").unwrap_or("local")));
+    if std::env::args().any(|a| a == "--gallery") {
+        app::run_gallery();
+        return;
+    }
     app::run();
     app::crumb("exit");
 }
