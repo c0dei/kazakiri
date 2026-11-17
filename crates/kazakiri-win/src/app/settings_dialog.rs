@@ -161,6 +161,15 @@ fn choice_rects(row_y: i32, row_h: i32, card_w: i32, kind: u8, n: usize) -> Vec<
     (0..n as i32).map(|i| (right - total + i * (w + gap), top + (row_h - h) / 2, right - total + i * (w + gap) + w, top + (row_h - h) / 2 + h)).collect()
 }
 
+/// ドロップダウン（テーマ・アクセントカラー）の位置と大きさ（DIP）。高さは、開いた一覧の分も含む
+fn combo_rect(row_y: i32, row_h: i32, card_w: i32) -> (i32, i32, i32, i32) {
+    let right = PAGE_X + card_w - 16;
+    (right - 170, PAGE_Y + row_y + (row_h - 28) / 2, 170, 28 + 180)
+}
+
+const THEME_NAMES: [&str; 3] = ["システム", "ライト", "ダーク"];
+const ACCENT_NAMES: [&str; 6] = ["Windows の設定の色", "青", "緑", "橙", "ピンク", "紫"];
+
 /// アクセントカラーの見本 i（0 は Windows の設定の色）
 fn swatch_color(i: usize) -> D2D1_COLOR_F {
     if i == 0 {
@@ -227,10 +236,10 @@ fn relayout(dlg: HWND) {
                 moving.push(id);
             }
             if let Some((first, kind, n)) = choice {
-                for (i, (x0, y0, x1, y1)) in choice_rects(y, h, new_w, kind, n).into_iter().enumerate() {
-                    put(first + i as i32, x0, y0, x1 - x0, y1 - y0);
-                    moving.push(first + i as i32);
-                }
+                let _ = (kind, n);
+                let (cx, cy, cw, ch) = combo_rect(y, h, new_w);
+                put(first, cx, cy, cw, ch);
+                moving.push(first);
             }
         }
         thread_local! {
@@ -504,6 +513,8 @@ fn sync() {
             };
         }
     });
+    set_combo_sel(ID_THEME_BASE, Some(s.theme_mode.min(2) as usize));
+    set_combo_sel(ID_ACCENT_BASE, accent_idx);
     set_theme(s.dark);
     // 部品に写しただけで、変更ではない（入力欄を書き換えた通知で立った印を戻す）
     DIRTY.store(false, Ordering::Relaxed);
@@ -780,6 +791,17 @@ unsafe fn on_command(dlg: HWND, id: i32, code: u32) {
             }
             return;
         }
+        // ドロップダウン（テーマ・アクセントカラー）：選んだ印を下書きに写す（反映は「保存」のとき）
+        if id == ID_THEME_BASE || id == ID_ACCENT_BASE {
+            if code == CBN_SELCHANGE as u32 {
+                let i = SendMessageW(ctl(id), CB_GETCURSEL, None, None).0;
+                if let Ok(i) = usize::try_from(i) {
+                    select_choice(id, i);
+                    mark_dirty(dlg);
+                }
+            }
+            return;
+        }
         if code != BN_CLICKED && id != IDOK.0 && id != IDCANCEL.0 {
             return;
         }
@@ -803,9 +825,6 @@ unsafe fn on_command(dlg: HWND, id: i32, code: u32) {
             ID_SIZE_INC => step_size(ID_SIZE, 1.0, settings::MIN_FONT, settings::MAX_FONT),
             ID_UISIZE_DEC => step_size(ID_UISIZE, -1.0, settings::MIN_FONT, 40.0),
             ID_UISIZE_INC => step_size(ID_UISIZE, 1.0, settings::MIN_FONT, 40.0),
-            // テーマ・アクセントカラー：選んだ印だけ変える
-            i if (ID_THEME_BASE..ID_THEME_BASE + 3).contains(&i) => select_choice(ID_THEME_BASE, (i - ID_THEME_BASE) as usize),
-            i if (ID_ACCENT_BASE..ID_ACCENT_BASE + 1 + ACCENTS.len() as i32).contains(&i) => select_choice(ID_ACCENT_BASE, (i - ID_ACCENT_BASE) as usize),
             ID_BKDIR_PICK => {
                 if let Some(d) = pick_folder_titled(dlg, "バックアップを置くフォルダを選んでください") {
                     set_text(ID_BKDIR, &d);
@@ -827,6 +846,16 @@ unsafe fn on_command(dlg: HWND, id: i32, code: u32) {
             _ => {}
         }
         mark_dirty(dlg);
+    }
+}
+
+/// ドロップダウンの選択を部品に写す
+fn set_combo_sel(id: i32, idx: Option<usize>) {
+    let h = ctl(id);
+    if !h.0.is_null() {
+        unsafe {
+            SendMessageW(h, CB_SETCURSEL, Some(WPARAM(idx.map_or(usize::MAX, |i| i))), Some(LPARAM(0)));
+        }
     }
 }
 
@@ -1061,13 +1090,19 @@ unsafe fn create(owner: HWND) {
                 pages.push((id, r.page, String::new()));
             }
             if let Some((first, kind, n)) = r.choice {
-                for (i, (x0, y0, x1, y1)) in choice_rects(r.y, r.h, CARD_W, kind, n).into_iter().enumerate() {
-                    let id = first + i as i32;
-                    let hw = make_child(dlg, w!("BUTTON"), "", BS_OWNERDRAW as u32 | BS_NOTIFY as u32 | WS_TABSTOP.0, 0, id, font);
-                    let _ = SetWindowPos(hw, None, p(x0), p(y0), p(x1 - x0), p(y1 - y0), SWP_NOZORDER | SWP_NOACTIVATE);
-                    all.push((id, hw));
-                    pages.push((id, r.page, String::new()));
+                let _ = n;
+                // ドロップダウン（標準のコンボボックス）。アクセントカラーは、色の丸を出すため、項目だけ自前で描く
+                let style = CBS_DROPDOWNLIST as u32 | WS_VSCROLL.0 | WS_TABSTOP.0 | if kind == 1 { CBS_OWNERDRAWFIXED as u32 | CBS_HASSTRINGS as u32 } else { 0 };
+                let hw = make_child(dlg, w!("COMBOBOX"), "", style, 0, first, font);
+                let (cx, cy, cw, ch) = combo_rect(r.y, r.h, CARD_W);
+                let _ = SetWindowPos(hw, None, p(cx), p(cy), p(cw), p(ch), SWP_NOZORDER | SWP_NOACTIVATE);
+                let names: &[&str] = if kind == 0 { &THEME_NAMES } else { &ACCENT_NAMES };
+                for name in names {
+                    let w = wide(name);
+                    SendMessageW(hw, CB_ADDSTRING, None, Some(LPARAM(w.as_ptr() as isize)));
                 }
+                all.push((first, hw));
+                pages.push((first, r.page, String::new()));
             }
         }
         // 検索欄の薄い案内文
@@ -1176,6 +1211,36 @@ unsafe fn draw_preview(hdc: HDC, x: i32, y: i32, h: i32, scale: f32, pal: &Pal) 
     }
 }
 
+/// アクセントカラーのドロップダウンの 1 項目（色の丸と名前）。部品は標準のコンボボックスで、項目の中身だけ描く
+unsafe fn draw_accent_item(di: &DRAWITEMSTRUCT) {
+    unsafe {
+        let p = pal();
+        let dark = DARK.load(Ordering::Relaxed);
+        let selected = di.itemState.0 & ODS_SELECTED.0 != 0 && di.itemState.0 & ODS_COMBOBOXEDIT.0 == 0;
+        let bg = if selected { if dark { rgb(0x3a, 0x3a, 0x3a) } else { rgb(0xe0, 0xe0, 0xe0) } } else if dark { rgb(0x1f, 0x1f, 0x1f) } else { rgb(0xff, 0xff, 0xff) };
+        let b = CreateSolidBrush(rgb_ref(&bg));
+        FillRect(di.hDC, &di.rcItem, b);
+        let _ = DeleteObject(b.into());
+        let Ok(i) = usize::try_from(di.itemID as i32) else { return };
+        if i >= ACCENT_NAMES.len() {
+            return;
+        }
+        let h = di.rcItem.bottom - di.rcItem.top;
+        let r = h / 4;
+        let (cx, cy) = (di.rcItem.left + h / 2 + 2, di.rcItem.top + h / 2);
+        let c = CreateSolidBrush(rgb_ref(&swatch_color(i)));
+        let old = SelectObject(di.hDC, c.into());
+        let _ = Ellipse(di.hDC, cx - r, cy - r, cx + r, cy + r);
+        SelectObject(di.hDC, old);
+        let _ = DeleteObject(c.into());
+        SetBkMode(di.hDC, TRANSPARENT);
+        SetTextColor(di.hDC, rgb_ref(&p.text));
+        let mut t: Vec<u16> = ACCENT_NAMES[i].encode_utf16().collect();
+        let mut rc = RECT { left: di.rcItem.left + h + 4, top: di.rcItem.top, right: di.rcItem.right, bottom: di.rcItem.bottom };
+        DrawTextW(di.hDC, &mut t, &mut rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    }
+}
+
 /// 左の分類の 1 行：アイコン・名前、選んでいる行は左にアクセントカラーの帯
 unsafe fn draw_cat_item(di: &DRAWITEMSTRUCT) {
     const ICONS: [&str; 9] = ["\u{E713}", "\u{E8CB}", "\u{E790}", "\u{E890}", "\u{E721}", "\u{E74E}", "\u{E823}", "\u{E8A5}", "\u{E765}"];
@@ -1247,7 +1312,7 @@ fn mix(a: &D2D1_COLOR_F, b: &D2D1_COLOR_F, t: f32) -> D2D1_COLOR_F {
 
 /// 大きさをドラッグで変えている最中の、簡易な背景（GDI。縁は滑らかでないが、Direct2D のように描画結果を読み戻さないので速い）
 #[allow(clippy::too_many_arguments)]
-unsafe fn gdi_cards(hdc: HDC, rc: &RECT, scale: f32, rows: &[PaintRow], card_w: i32, sel: &HashMap<i32, usize>, scroll: i32, content: i32, pal: &Pal, acc: &D2D1_COLOR_F) {
+unsafe fn gdi_cards(hdc: HDC, rc: &RECT, scale: f32, rows: &[PaintRow], card_w: i32, scroll: i32, content: i32, pal: &Pal) {
     unsafe {
         let px = |v: i32| (v as f32 * scale).round() as i32;
         let bg = CreateSolidBrush(rgb_ref(&pal.bg));
@@ -1271,7 +1336,7 @@ unsafe fn gdi_cards(hdc: HDC, rc: &RECT, scale: f32, rows: &[PaintRow], card_w: 
                 let _ = DeleteObject(b.into());
             }
         };
-        for &(y, _, _, _, rh, _, heading, choice) in rows {
+        for &(y, _, _, _, rh, _, heading, _) in rows {
             if heading {
                 continue;
             }
@@ -1281,39 +1346,6 @@ unsafe fn gdi_cards(hdc: HDC, rc: &RECT, scale: f32, rows: &[PaintRow], card_w: 
             shape(hdc, Some(&pal.card), Some(&pal.cardb), &|h| {
                 let _ = RoundRect(h, x0, y0, x1, y1, d, d);
             });
-            if let Some((first, kind, n)) = choice {
-                let selected = sel.get(&first).copied();
-                let rects = choice_rects(y, rh, card_w, kind, n);
-                if kind == 0 {
-                    if let (Some(a), Some(b)) = (rects.first(), rects.last()) {
-                        shape(hdc, None, Some(&pal.dim), &|h| {
-                            let _ = RoundRect(h, px(a.0), px(a.1), px(b.2), px(b.3), px(12), px(12));
-                        });
-                    }
-                }
-                for (i, &(a0, a1, a2, a3)) in rects.iter().enumerate() {
-                    let on = selected == Some(i);
-                    if kind == 0 {
-                        if on {
-                            let fill = mix(&pal.card, acc, 0.28);
-                            shape(hdc, Some(&fill), Some(acc), &|h| {
-                                let _ = RoundRect(h, px(a0) + 2, px(a1) + 2, px(a2) - 2, px(a3) - 2, px(10), px(10));
-                            });
-                        }
-                    } else {
-                        let (cx, cy, r) = ((px(a0) + px(a2)) / 2, (px(a1) + px(a3)) / 2, px(11));
-                        shape(hdc, Some(&swatch_color(i)), None, &|h| {
-                            let _ = Ellipse(h, cx - r, cy - r, cx + r, cy + r);
-                        });
-                        if on {
-                            let r2 = r + px(3);
-                            shape(hdc, None, Some(&pal.text), &|h| {
-                                let _ = Ellipse(h, cx - r2, cy - r2, cx + r2, cy + r2);
-                            });
-                        }
-                    }
-                }
-            }
         }
         let _ = RestoreDC(hdc, saved);
         // スクロール位置の目印
@@ -1343,12 +1375,11 @@ unsafe fn paint_bg(hwnd: HWND, hdc: HDC) {
         let _ = GetClientRect(hwnd, &mut rc);
         let pal = pal();
         // 行の位置は、スクロール量だけ上へずらす
-        let (rows, card_w, sel, scroll, content) = CTRLS.with(|c| {
-            c.borrow().as_ref().map_or((Vec::new(), CARD_W, HashMap::new(), 0, 0), |ct| {
+        let (rows, card_w, scroll, content) = CTRLS.with(|c| {
+            c.borrow().as_ref().map_or((Vec::new(), CARD_W, 0, 0), |ct| {
                 (
                     ct.rows.iter().filter(|r| r.page == ct.cur).map(|r| (r.y - ct.scroll, r.title, r.desc, r.toggle, r.h, r.preview, r.heading, r.choice)).collect::<Vec<_>>(),
                     ct.card_w,
-                    ct.sel.clone(),
                     ct.scroll,
                     ct.page_h.get(ct.cur).copied().unwrap_or(0),
                 )
@@ -1365,7 +1396,7 @@ unsafe fn paint_bg(hwnd: HWND, hdc: HDC) {
         let px = |v: i32| v as f32 * scale;
         let mut drawn = false;
         if SIZING.load(Ordering::Relaxed) {
-            gdi_cards(hdc, &rc, scale, &rows, card_w, &sel, scroll, content, pal, &acc);
+            gdi_cards(hdc, &rc, scale, &rows, card_w, scroll, content, pal);
             drawn = true;
         } else if let Some(factory) = factory {
             let props = D2D1_RENDER_TARGET_PROPERTIES {
@@ -1389,7 +1420,7 @@ unsafe fn paint_bg(hwnd: HWND, hdc: HDC) {
                     if let Ok(brush) = rt.CreateSolidColorBrush(&pal.card, None) {
                         // 行（カード）は、表示領域（タイトルの下から、ボタンの行の上まで）の中だけに描く
                         rt.PushAxisAlignedClip(&windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F { left: 0.0, top: px(PAGE_Y), right: rc.right as f32, bottom: rc.bottom as f32 - px(FOOTER_H) }, D2D1_ANTIALIAS_MODE_ALIASED);
-                        for &(y, _, _, _, rh, _, heading, choice) in &rows {
+                        for &(y, _, _, _, rh, _, heading, _) in &rows {
                             if heading {
                                 continue;
                             }
@@ -1399,36 +1430,6 @@ unsafe fn paint_bg(hwnd: HWND, hdc: HDC) {
                             rt.FillRoundedRectangle(&rrect(x0, y0, x1, y1, px(8)), &brush);
                             brush.SetColor(&pal.card);
                             rt.FillRoundedRectangle(&rrect(x0 + 1.0, y0 + 1.0, x1 - 1.0, y1 - 1.0, px(8) - 1.0), &brush);
-                            // 選択肢：切り替え（システム・ライト・ダーク）と、色の見本
-                            if let Some((first, kind, n)) = choice {
-                                let selected = sel.get(&first).copied();
-                                let rects = choice_rects(y, rh, card_w, kind, n);
-                                if kind == 0 {
-                                    if let (Some(a), Some(b)) = (rects.first(), rects.last()) {
-                                        brush.SetColor(&pal.dim);
-                                        rt.DrawRoundedRectangle(&rrect(px(a.0) + 0.5, px(a.1) + 0.5, px(b.2) - 0.5, px(b.3) - 0.5, px(6)), &brush, 1.0, None);
-                                    }
-                                }
-                                for (i, &(a0, a1, a2, a3)) in rects.iter().enumerate() {
-                                    let on = selected == Some(i);
-                                    if kind == 0 {
-                                        if on {
-                                            brush.SetColor(&D2D1_COLOR_F { a: 0.28, ..acc });
-                                            rt.FillRoundedRectangle(&rrect(px(a0) + 2.0, px(a1) + 2.0, px(a2) - 2.0, px(a3) - 2.0, px(5)), &brush);
-                                            brush.SetColor(&acc);
-                                            rt.DrawRoundedRectangle(&rrect(px(a0) + 2.5, px(a1) + 2.5, px(a2) - 2.5, px(a3) - 2.5, px(5)), &brush, 1.0, None);
-                                        }
-                                    } else {
-                                        let (cx, cy, r) = ((px(a0) + px(a2)) / 2.0, (px(a1) + px(a3)) / 2.0, px(11));
-                                        brush.SetColor(&swatch_color(i));
-                                        rt.FillEllipse(&D2D1_ELLIPSE { point: Vector2 { X: cx, Y: cy }, radiusX: r, radiusY: r }, &brush);
-                                        if on {
-                                            brush.SetColor(&pal.text);
-                                            rt.DrawEllipse(&D2D1_ELLIPSE { point: Vector2 { X: cx, Y: cy }, radiusX: r + px(3), radiusY: r + px(3) }, &brush, 1.5, None);
-                                        }
-                                    }
-                                }
-                            }
                         }
                         rt.PopAxisAlignedClip();
                         // ページが表示領域より長いときだけ、右端にスクロール位置の目印（細い線）を出す
@@ -1533,11 +1534,6 @@ unsafe extern "system" fn dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                 if code == 6 || code == 0x100 || code == 3 {
                     ensure_visible(hwnd, id);
                 }
-                // 選択肢のフォーカスが動いたら、前の枠が残らないように描き直す（BN_SETFOCUS = 6, BN_KILLFOCUS = 7）
-                if (code == 6 || code == 7) && (ID_THEME_BASE..ID_ACCENT_BASE + 1 + ACCENTS.len() as i32).contains(&id) {
-                    let _ = InvalidateRect(Some(hwnd), None, true);
-                    return LRESULT(0);
-                }
                 on_command(hwnd, id, code);
                 LRESULT(0)
             }
@@ -1604,28 +1600,16 @@ unsafe extern "system" fn dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                 DefWindowProcW(hwnd, msg, wparam, lparam)
             }
             WM_DRAWITEM => {
-                // カードの上に重ねた透明なボタン：フォーカスがあるときだけ、枠を描く（ないときはカードの色で消す）
                 let di = &*(lparam.0 as *const DRAWITEMSTRUCT);
                 if di.CtlType == ODT_LISTBOX {
                     draw_cat_item(di);
                     return LRESULT(1);
                 }
-                let p = pal();
-                let focused = di.itemState.0 & ODS_FOCUS.0 != 0 && di.itemState.0 & ODS_NOFOCUSRECT.0 == 0;
-                let acc = accent_now();
-                let is_choice = (ID_THEME_BASE..ID_ACCENT_BASE + 1 + ACCENTS.len() as i32).contains(&(di.CtlID as i32));
-                let mut rc = di.rcItem;
-                if is_choice {
-                    // 選択肢：フォーカスがないときは何も描かない（切り替えの外枠を欠けさせない）。あるときは内側に枠
-                    if !focused {
-                        return LRESULT(1);
-                    }
-                    rc = RECT { left: rc.left + 3, top: rc.top + 3, right: rc.right - 3, bottom: rc.bottom - 3 };
+                if di.CtlType == ODT_COMBOBOX {
+                    draw_accent_item(di);
+                    return LRESULT(1);
                 }
-                let brush = CreateSolidBrush(rgb_ref(if focused { &acc } else { &p.card }));
-                FrameRect(di.hDC, &rc, brush);
-                let _ = DeleteObject(brush.into());
-                LRESULT(1)
+                LRESULT(0)
             }
             WM_CTLCOLORDLG | WM_CTLCOLORSTATIC | WM_CTLCOLORBTN | WM_CTLCOLOREDIT | WM_CTLCOLORLISTBOX => {
                 let hdc = HDC(wparam.0 as *mut _);
@@ -1658,9 +1642,6 @@ unsafe extern "system" fn dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                         SetBkMode(hdc, OPAQUE);
                         SetBkColor(hdc, rgb_ref(&p.card));
                         return LRESULT(CARD_BRUSH[i].load(Ordering::Relaxed));
-                    }
-                    if (ID_THEME_BASE..ID_ACCENT_BASE + 1 + ACCENTS.len() as i32).contains(&id) {
-                        return LRESULT(GetStockObject(NULL_BRUSH).0 as isize);
                     }
                 }
                 LRESULT(BG_BRUSH[i].load(Ordering::Relaxed))
