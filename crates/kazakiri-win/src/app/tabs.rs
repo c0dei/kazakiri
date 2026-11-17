@@ -494,6 +494,9 @@ impl App {
         unsafe {
             brush.SetColor(&t.status_bg);
             rt.FillRectangle(&rect(0.0, 0.0, w, h), brush);
+            // タブの下の線（選択中のタブの下だけ、タブがこの線を隠す）
+            brush.SetColor(&t.dim);
+            rt.FillRectangle(&rect(0.0, h - 1.0, w, h), brush);
             // タブは、左のマークの右から、ウィンドウのボタンの左までの間だけ
             let (tab_x0, tab_x1) = (TAB_X0, w);
             rt.PushAxisAlignedClip(&rect(tab_x0, 0.0, tab_x1, h), D2D1_ANTIALIAS_MODE_ALIASED);
@@ -504,13 +507,20 @@ impl App {
                 }
                 let active = i == self.active;
                 let hovered = self.hover == Some(super::toolbar::Hover::Tab(i));
+                // 四角いタブ。選択中は、上にアクセントカラーの線、下はツールバーとつなげる。選択していないタブは、枠線だけ
                 if active {
-                    // 上の角を丸めたカード（下はツールバーとつなげる）
                     brush.SetColor(&if self.settings.toolbar { t.toolbar_bg } else { t.bg });
-                    rt.FillRoundedRectangle(&rrect(x0 + 2.0, 4.0, x1 - 2.0, h + 8.0, 8.0), brush);
-                } else if hovered {
-                    brush.SetColor(&t.panel_head);
-                    rt.FillRoundedRectangle(&rrect(x0 + 2.0, 6.0, x1 - 2.0, h - 2.0, 6.0), brush);
+                    rt.FillRectangle(&rect(x0, 4.0, x1, h), brush);
+                    brush.SetColor(&t.dim);
+                    rt.FillRectangle(&rect(x0, 4.0, x0 + 1.0, h), brush);
+                    rt.FillRectangle(&rect(x1 - 1.0, 4.0, x1, h), brush);
+                    brush.SetColor(&theme::accent(self.settings.dark));
+                    rt.FillRectangle(&rect(x0, 4.0, x1, 6.0), brush);
+                } else {
+                    brush.SetColor(if hovered { &t.panel_head } else { &t.gutter_bg });
+                    rt.FillRectangle(&rect(x0, 6.0, x1, h - 1.0), brush);
+                    brush.SetColor(&t.dim);
+                    rt.DrawRectangle(&rect(x0 + 0.5, 6.5, x1 - 0.5, h - 0.5), brush, 1.0, None);
                 }
                 brush.SetColor(if active { &t.text } else { &t.gutter_text });
                 let ty = (h - self.ui_line_h) / 2.0 + 1.0;

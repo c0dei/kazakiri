@@ -85,7 +85,7 @@ const FKEYS: &[(&str, u32)] = &[
 
 /// ツールバーの 1 行目の高さと、モードバー（2 行目）の高さ
 pub(super) const ROW1_H: f32 = 34.0;
-pub(super) const MODE_H: f32 = 28.0;
+pub(super) const MODE_H: f32 = 34.0;
 
 /// モードバーのボタンのアイコン（文字ではなくアイコンで出す。説明はツールチップ）
 fn mode_icon(id: u32) -> Option<Icon> {
@@ -117,8 +117,8 @@ const MODES: &[Option<(&str, u32, &str)>] = &[
     Some(("セル選択", menu::ID_CELL_MODE, "セル選択：ドラッグでセルの四角を選ぶ（Excel のように）。コピー・削除・入力は選んだセルの全行に効く")),
     Some(("見出し", menu::ID_CSV_HEADER, "見出し：1 行目を見出しにして、上に固定する")),
     None,
-    Some(("列で昇順", menu::ID_SORT_ASC, "昇順に並べ替え：対象の列（見出しをクリックして選ぶ）で")),
-    Some(("列で降順", menu::ID_SORT_DESC, "降順に並べ替え：対象の列（見出しをクリックして選ぶ）で")),
+    Some(("昇順", menu::ID_SORT_ASC, "昇順に並べ替え：対象の列（見出しをクリックして選ぶ）で")),
+    Some(("降順", menu::ID_SORT_DESC, "降順に並べ替え：対象の列（見出しをクリックして選ぶ）で")),
     Some(("列フィルタ", menu::ID_FILTER, "列フィルタ：対象の列（見出しをクリックして選ぶ）の条件で行を絞り込む")),
     None,
     Some(("行フィルター", menu::ID_FILTER_LINES, "行フィルター：検索語を入力して、一致した行だけを新しいタブに出す (Ctrl+Shift+L)")),
@@ -132,11 +132,11 @@ const MD_FROM: usize = 12;
 
 const BTN_W: f32 = 30.0;
 const SEP_W: f32 = 20.0;
-/// MODES のうち、「CSV」「TSV」の 2 つ（枠で囲んで 1 つのグループに見せる）
-const DELIM_GROUP: std::ops::RangeInclusive<usize> = 0..=1;
 /// 区切り文字の欄の中の、記号を出す枠の幅
-const DELIM_BOX_W: f32 = 40.0;
+const DELIM_BOX_W: f32 = 34.0;
 const BTN_PAD: f32 = 8.0;
+/// モードバーのボタンの左右の余白
+const MODE_PAD: f32 = 10.0;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Hover {
@@ -222,9 +222,9 @@ impl App {
                             x += w + 8.0;
                         }
                     }
-                    let _ = label;
-                    // 区切り文字の欄は、アイコンのあとに記号を入れる枠を足した幅。ほかはアイコン 1 つの幅
-                    let w = if *id == menu::ID_DELIM_FIELD { 7.0 + 16.0 + 6.0 + DELIM_BOX_W + 9.0 } else { BTN_W };
+                    // 文字つきのボタン：余白・アイコン・文字・余白。区切り文字の欄は、そのあとに記号を入れる枠が付く
+                    let lw = unsafe { self.ui_text_width(&label.encode_utf16().collect::<Vec<_>>()) }.unwrap_or(0.0);
+                    let w = if *id == menu::ID_DELIM_FIELD { MODE_PAD + 16.0 + 6.0 + lw + 8.0 + DELIM_BOX_W + 8.0 } else { MODE_PAD + 16.0 + 6.0 + lw + MODE_PAD + 2.0 };
                     out.push((x, x + w, i));
                     x += w + 2.0;
                 }
@@ -527,25 +527,42 @@ impl App {
         Ok(())
     }
 
+    /// モードバーのボタンの枠：細い枠線（選択中はアクセントカラーの枠と淡い塗り、ホバー中は淡い塗り）
+    unsafe fn draw_mode_frame(&self, rt: &ID2D1RenderTarget, brush: &ID2D1SolidColorBrush, (x0, x1): (f32, f32), hovered: bool, on: bool) {
+        let (t, h) = (self.theme, MODE_H);
+        let accent = theme::accent(self.settings.dark);
+        unsafe {
+            let r = rrect(x0 + 0.5, 4.5, x1 - 0.5, h - 4.5, 4.0);
+            if on {
+                brush.SetColor(&D2D1_COLOR_F { a: 0.22, ..accent });
+                rt.FillRoundedRectangle(&r, brush);
+            } else if hovered {
+                brush.SetColor(&t.panel_head);
+                rt.FillRoundedRectangle(&r, brush);
+            }
+            brush.SetColor(if on { &accent } else { &t.dim });
+            rt.DrawRoundedRectangle(&r, brush, 1.0, None);
+        }
+    }
+
     /// 区切り文字の欄：題と、いまの区切りを入れた枠。入力待ちのあいだは、アクセントカラーの枠
     unsafe fn draw_delim_field(&self, rt: &ID2D1RenderTarget, brush: &ID2D1SolidColorBrush, (x0, x1): (f32, f32), label: &str, hovered: bool, editing: bool) -> Result<()> {
         let (t, h) = (self.theme, MODE_H);
         unsafe {
-            if hovered && !editing {
-                brush.SetColor(&t.panel_head);
-                rt.FillRoundedRectangle(&rrect(x0, 3.0, x1, h - 3.0, 4.0), brush);
-            }
-            brush.SetColor(&t.text);
-            let _ = label;
-            self.draw_icon(rt, brush, Icon::Split, x0 + 7.0, (h - 16.0) / 2.0);
-            let (bx1, by0, by1) = (x1 - 9.0, 3.0, h - 3.0);
+            let (bx1, by0, by1) = (x1 - 2.0, 4.5, h - 4.5);
             let bx0 = bx1 - DELIM_BOX_W;
+            // 左：アイコンと「区切り」の題のボタン。右：いまの区切りを入れる枠（入力待ちのときは、その枠にキーを打つ）
+            self.draw_mode_frame(rt, brush, (x0, bx0 - 6.0), hovered && !editing, false);
+            brush.SetColor(&t.text);
+            self.draw_icon(rt, brush, Icon::Split, x0 + MODE_PAD, (h - 16.0) / 2.0);
+            self.draw_ui_str(rt, brush, label, x0 + MODE_PAD + 16.0 + 6.0, (h - self.ui_line_h) / 2.0, bx0 - 8.0)?;
             // 入力待ち、または、カンマ・タブ以外の区切りを指定しているときは、アクセントカラーの枠
             let custom = self.csv.as_ref().is_some_and(|v| !matches!(v.delim, ',' | '\t'));
-            brush.SetColor(if editing || custom { &theme::accent(self.settings.dark) } else { &t.dim });
-            rt.FillRoundedRectangle(&rrect(bx0, by0, bx1, by1, 5.0), brush);
+            let accent = theme::accent(self.settings.dark);
             brush.SetColor(&t.bg);
-            rt.FillRoundedRectangle(&rrect(bx0 + 1.0, by0 + 1.0, bx1 - 1.0, by1 - 1.0, 4.0), brush);
+            rt.FillRoundedRectangle(&rrect(bx0, by0, bx1, by1, 4.0), brush);
+            brush.SetColor(if editing || custom { &accent } else { &t.dim });
+            rt.DrawRoundedRectangle(&rrect(bx0 + 0.5, by0 + 0.5, bx1 - 0.5, by1 - 0.5, 4.0), brush, 1.0, None);
             // いまの区切り（表示していないときは、最後に使った区切り）
             let d = self.csv.as_ref().map_or(self.last_csv_delim, |v| v.delim);
             let shown = match d {
@@ -583,12 +600,6 @@ impl App {
                     rt.FillRectangle(&rect(cx, 7.0, cx + 1.0, h - 7.0), brush);
                 }
             }
-            // 区切り文字のグループを枠で囲む
-            let first = boxes.iter().find(|b| b.2 == *DELIM_GROUP.start());
-            let last = boxes.iter().find(|b| b.2 == *DELIM_GROUP.end());
-            if let (Some(a), Some(b)) = (first, last) {
-                rt.DrawRoundedRectangle(&rrect(a.0 - 2.5, 2.5, b.1 + 2.5, h - 2.5, 5.0), brush, 1.0, None);
-            }
             for &(x0, x1, i) in &boxes {
                 let Some((label, id, _)) = MODES[i] else { continue };
                 let hovered = self.hover == Some(Hover::Mode(i));
@@ -597,15 +608,12 @@ impl App {
                     self.draw_delim_field(rt, brush, (x0, x1), label, hovered, on)?;
                     continue;
                 }
-                if hovered || on {
-                    brush.SetColor(if on { &t.panel_sel } else { &t.panel_head });
-                    rt.FillRoundedRectangle(&rrect(x0, 3.0, x1, h - 3.0, 4.0), brush);
-                }
+                self.draw_mode_frame(rt, brush, (x0, x1), hovered, on);
                 brush.SetColor(&t.text);
-                let _ = label;
                 if let Some(icon) = mode_icon(id) {
-                    self.draw_icon(rt, brush, icon, x0 + (x1 - x0 - 16.0) / 2.0, (h - 16.0) / 2.0);
+                    self.draw_icon(rt, brush, icon, x0 + MODE_PAD, (h - 16.0) / 2.0);
                 }
+                self.draw_ui_str(rt, brush, label, x0 + MODE_PAD + 16.0 + 6.0, (h - self.ui_line_h) / 2.0, x1 - 2.0)?;
             }
             // CSV 表示のあいだ、並べ替え・列フィルタの対象の列を、ドロップダウンの形で見せる（押すと列の一覧が欄の下に開く）
             if let (Some(label), Some((x0, x1))) = (self.colpick_label(), self.colpick_box()) {
