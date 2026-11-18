@@ -103,6 +103,10 @@ impl App {
                 rt.SetTransform(&Matrix3x2::translation(0.0, self.tab_h()));
                 self.draw_toolbar(&rt, brush, fw)?;
             }
+            if self.find_h() > 0.0 {
+                rt.SetTransform(&Matrix3x2::translation(0.0, self.tab_h() + self.tb_h()));
+                self.draw_findrow_bg(&rt, brush, fw);
+            }
             rt.SetTransform(&Matrix3x2::translation(0.0, self.chrome_h()));
             let pin = self.pin_h();
             if pin > 0.0 {
@@ -303,7 +307,7 @@ impl App {
                 if wide {
                     brush.SetColor(&self.theme.select);
                     rt.FillRectangle(&rect(x + x1, y, x + x2, y + self.line_h), brush);
-                } else if self.prompt.is_none() {
+                } else if !self.text_prompt() {
                     brush.SetColor(&self.theme.caret);
                     rt.FillRectangle(&rect(x + x1 - 0.5, y + 1.0, x + x1 + 1.5, y + self.line_h - 1.0), brush);
                 }
@@ -311,7 +315,7 @@ impl App {
             brush.SetColor(&self.theme.text);
             rt.DrawTextLayout(Vector2 { X: x, Y: y }, layout, brush, D2D1_DRAW_TEXT_OPTIONS_NONE);
             // マルチカーソル：ほかのカーソル
-            if let (Some(doc), false) = (&self.doc, self.prompt.is_some()) {
+            if let (Some(doc), false) = (&self.doc, self.text_prompt()) {
                 for &(_, head) in self.extra_cursors() {
                     if head >= line.start && head <= line.end {
                         let (ua, _) = self.span_units(doc, line, head, head, d);
@@ -326,7 +330,7 @@ impl App {
             // カーソル
             if let (Some(doc), Some(_)) = (&self.doc, self.sel) {
                 let c = self.caret();
-                if c >= line.start && c <= line.end && self.prompt.is_none() {
+                if c >= line.start && c <= line.end && !self.text_prompt() {
                     let (ua, _) = self.span_units(doc, line, c, c, d);
                     // 折り返しの境目は、次の折り返し行の先頭に出す
                     if ua >= ra && (ua < rb || (last && ua == rb)) {
@@ -508,9 +512,6 @@ impl App {
 
     /// 入力欄のカード（本文の右上に浮かせる）の位置。(x0, y0, x1, y1)。ツールバーとタブバーを除いた座標
     pub(super) fn prompt_card(&self) -> (f32, f32, f32, f32) {
-        if self.is_find_bar() {
-            return self.find_layout().card;
-        }
         if self.prompt == Some(Prompt::Palette) {
             return self.palette_layout().card;
         }
@@ -522,10 +523,6 @@ impl App {
 
     /// 入力欄（カードの中の入力の枠）の位置。(x0, y0, x1, y1)
     pub(super) fn prompt_input_rect(&self) -> (f32, f32, f32, f32) {
-        if self.is_find_bar() {
-            let l = self.find_layout();
-            return if self.prompt_focus == 1 { l.repl.unwrap_or(l.find) } else { l.find };
-        }
         if self.prompt == Some(Prompt::Palette) {
             return self.palette_layout().input;
         }
@@ -543,7 +540,7 @@ impl App {
     pub(super) unsafe fn draw_prompt_bar(&self, rt: &ID2D1RenderTarget, brush: &ID2D1SolidColorBrush, _w: f32, _h: f32) -> Result<()> {
         let Some(prompt) = self.prompt else { return Ok(()) };
         if self.is_find_bar() {
-            return unsafe { self.draw_find_bar(rt, brush) };
+            return Ok(());
         }
         if prompt == Prompt::Palette {
             return unsafe { self.draw_palette(rt, brush) };

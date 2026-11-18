@@ -12,7 +12,7 @@ impl App {
             return Some(self.command(id));
         }
         // ツールバー・モードバーの、ボタンのないところ
-        if y >= -self.tb_h() && y < 0.0 {
+        if y >= -(self.tb_h() + self.find_h()) && y < 0.0 {
             return Some(None);
         }
         // ステータスバーの文字コード・改行コード・行桁・タブ幅・挿入／上書き
@@ -48,35 +48,19 @@ impl App {
         }
         // キー割り当て（keys.ini）。入力欄が開いているときはタブの切り替えだけ効く
         if let Some(id) = self.keymap.lookup(ctrl, shift, vk.0) {
-            let bar_ok = (self.is_find_bar() && matches!(id, menu::ID_FIND_NEXT | menu::ID_FIND_PREV | menu::ID_FIND | menu::ID_REPLACE)) || (self.prompt == Some(Prompt::Palette) && id == menu::ID_PALETTE);
-            if self.prompt.is_none() || bar_ok || matches!(id, menu::ID_NEXT_TAB | menu::ID_PREV_TAB) {
+            let bar_ok = self.prompt == Some(Prompt::Palette) && id == menu::ID_PALETTE;
+            if !self.text_prompt() || bar_ok || matches!(id, menu::ID_NEXT_TAB | menu::ID_PREV_TAB) {
                 return unsafe { self.command(id) };
             }
         }
-        if self.prompt.is_some() {
+        if self.text_prompt() {
             match vk {
                 VK_ESCAPE => {
                     self.prompt = None;
                     self.comp = None;
                     self.invalidate();
                 }
-                // 検索・置換バー：Enter で次を検索（置換欄では置換して次へ）、Shift+Enter で前を検索、Tab で欄を移る
-                VK_RETURN if self.is_find_bar() => {
-                    let act = if self.prompt_focus == 1 && self.prompt == Some(Prompt::Replace) {
-                        FindAct::ReplOne
-                    } else if shift {
-                        FindAct::Prev
-                    } else {
-                        FindAct::Next
-                    };
-                    self.find_bar_do(act);
-                }
                 VK_UP | VK_DOWN | VK_PRIOR | VK_NEXT | VK_HOME | VK_END if self.prompt == Some(Prompt::Palette) => self.palette_move(vk),
-                VK_TAB if self.prompt == Some(Prompt::Replace) => {
-                    self.prompt_focus = if shift { 0 } else { 1 - self.prompt_focus.min(1) };
-                    self.comp = None;
-                    self.invalidate();
-                }
                 VK_RETURN => return self.submit_prompt(),
                 VK_BACK => {
                     self.prompt_buf().pop();
@@ -95,7 +79,10 @@ impl App {
         }
         match vk {
             VK_ESCAPE => {
-                if self.search.is_some() {
+                if self.is_find_bar() && self.search.is_none() {
+                    // 検索・置換の行を開いたまま本文にいるとき：Esc で閉じる
+                    self.close_find_bar();
+                } else if self.search.is_some() {
                     self.cancel_search();
                     self.message = "検索を中止しました".into();
                 } else if let Some(job) = self.rjob.take() {
@@ -177,7 +164,7 @@ impl App {
             _ => char::from_u32(ch),
         };
         let Some(c) = c else { return };
-        if self.prompt.is_some() {
+        if self.text_prompt() {
             self.prompt_buf().push(c);
             self.find_bar_changed();
         } else {

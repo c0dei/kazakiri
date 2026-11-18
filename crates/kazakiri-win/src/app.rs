@@ -78,6 +78,7 @@ mod find_dialog;
 mod findbar;
 mod palette;
 mod caption;
+mod findrow;
 mod gallery;
 mod chrome;
 mod bookmarks;
@@ -142,7 +143,6 @@ enum FindAct {
     Case,
     Regex,
     Word,
-    Close,
 }
 
 /// 入力欄（ステータスバー上の簡易プロンプト）
@@ -273,6 +273,13 @@ struct App {
     status_sig: RefCell<String>,
     status_texts: RefCell<Vec<String>>,
     status_font: Cell<HFONT>,
+    /// 検索・置換の行（標準の部品。findrow.rs）
+    findrow: RefCell<Option<findrow::FindRow>>,
+    findrow_font: Cell<HFONT>,
+    findrow_theme: Cell<Option<bool>>,
+    findrow_shown: Cell<bool>,
+    findrow_placed: Cell<[i32; 5]>,
+    findrow_focus: Cell<bool>,
     /// 横のスクロールバーを出しているか
     hbar_on: Cell<bool>,
     /// 直前に置いたスクロールバーの位置（変わっていなければ、置き直さない）
@@ -453,6 +460,10 @@ pub fn run() {
 extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     // 標準のメニューバーをダークに塗る非公開メッセージ。DrawMenuBar などの中で同期的に届き、App を借りている最中のこともあるので、借りる前に処理する
     if let Some(r) = unsafe { dark::bar_message(hwnd, msg, wparam, lparam) } {
+        return r;
+    }
+    // 検索・置換の行の部品の色（描画の最中に同期で届くので、App を借りる前に答える）
+    if let Some(r) = unsafe { findrow::ctl_color(hwnd, msg, wparam, lparam) } {
         return r;
     }
     // ステータスバーの描画（owner-draw）は、SB_SETTEXT などの中で同期的に届くので、App を借りる前に処理する
@@ -734,6 +745,11 @@ impl App {
                     self.menus.refresh_view(self.csv.as_ref().map(|v| (v.delim, v.header)), self.is_split_view(), [self.diff_ign_edge, self.diff_ign_case, self.split_sync, self.csv_letters, self.cell_mode], (self.md_mode() == Some(mdview::MdMode::Split), self.md_mode() == Some(mdview::MdMode::Design)), &self.settings);
                     (DONE, None)
                 }
+                // 検索・置換の行の部品（入力欄・ボタン）からの通知
+                WM_COMMAND if lparam.0 != 0 && findrow::is_findrow_id(loword(wparam.0) as i32) => {
+                    self.findrow_command(loword(wparam.0) as i32, hiword(wparam.0));
+                    (DONE, None)
+                }
                 WM_COMMAND => (DONE, self.command(loword(wparam.0))),
                 WM_VSCROLL if self.md_mode() == Some(mdview::MdMode::Design) => {
                     let code = SCROLLBAR_COMMAND(loword(wparam.0) as i32);
@@ -824,10 +840,6 @@ impl App {
                         self.tab_drag_start(x);
                         return (DONE, d);
                     }
-                    // 検索・置換バー（本文の右上に浮かぶ）の上の操作。バーの外を押したら、バーは閉じて本文の操作に進む
-                    if self.find_bar_click(x, y) {
-                        return (DONE, None);
-                    }
                     if self.prompt_chip_click(x, y) {
                         return (DONE, None);
                     }
@@ -862,7 +874,7 @@ impl App {
                 WM_MBUTTONDOWN => {
                     let (x, y) = self.mouse_pos(lparam);
                     // タブを中ボタンでクリックしたら閉じる
-                    (DONE, if (-self.chrome_h()..-self.tb_h()).contains(&y) { self.tab_click(x, true) } else { None })
+                    (DONE, if (-self.chrome_h()..-(self.tb_h() + self.find_h())).contains(&y) { self.tab_click(x, true) } else { None })
                 }
                 WM_LBUTTONDBLCLK => {
                     let (x, y) = self.mouse_pos(lparam);
@@ -870,15 +882,15 @@ impl App {
                     if let Some(r) = self.chrome_press(x, y) {
                         return (DONE, r);
                     }
-                    if y >= -self.tb_h() && y < 0.0 {
+                    if y >= -(self.tb_h() + self.find_h()) && y < 0.0 {
                         return (DONE, None);
                     }
                     if y < 0.0 {
                         self.tab_double_click(x);
                         return (DONE, None);
                     }
-                    // 検索・置換バーの上は、素早い 2 回目のクリックも 1 回目と同じ操作（本文の単語選択にしない）
-                    if self.find_bar_click(x, y) || self.prompt_chip_click(x, y) {
+                    // 入力欄のチップの上は、素早い 2 回目のクリックも 1 回目と同じ操作（本文の単語選択にしない）
+                    if self.prompt_chip_click(x, y) {
                         return (DONE, None);
                     }
                     if let Some(r) = self.palette_click(x, y) {
@@ -934,7 +946,7 @@ impl App {
                     (DONE, None)
                 }
                 WM_SYSKEYDOWN
-                    if self.prompt.is_none()
+                    if !self.text_prompt()
                         && GetKeyState(VK_SHIFT.0 as i32) < 0
                         && matches!(VIRTUAL_KEY(wparam.0 as u16), VK_LEFT | VK_RIGHT | VK_UP | VK_DOWN) =>
                 {

@@ -154,10 +154,17 @@ impl App {
         self.prompt_focus = 0;
         self.comp = None;
         self.find_bar_changed();
+        // 標準の入力欄の行を出して、入力欄に入る
+        self.focus_findrow();
     }
 
     pub(super) fn is_find_bar(&self) -> bool {
         matches!(self.prompt, Some(Prompt::Find | Prompt::Replace))
+    }
+
+    /// 本文のキー入力を横取りする入力欄（行へ移動・列フィルタ・パレットなど）が開いているか。検索・置換は標準の入力欄が受けるので含めない
+    pub(super) fn text_prompt(&self) -> bool {
+        self.prompt.is_some() && !self.is_find_bar()
     }
 
     /// 入力中の欄（検索・置換バーでは、いま入力している欄。それ以外は入力欄）
@@ -182,7 +189,7 @@ impl App {
     /// 検索・置換バーの操作（Enter・ボタン）
     pub(super) fn find_bar_do(&mut self, act: FindAct) {
         self.find_bar_changed();
-        if self.last_find.is_empty() && !matches!(act, FindAct::Close | FindAct::Case | FindAct::Regex | FindAct::Word) {
+        if self.last_find.is_empty() && !matches!(act, FindAct::Case | FindAct::Regex | FindAct::Word) {
             self.message = "検索する文字列を入力してください".into();
             self.invalidate();
             return;
@@ -202,10 +209,6 @@ impl App {
             FindAct::Case => self.opts.case_sensitive = !self.opts.case_sensitive,
             FindAct::Regex => self.opts.regex = !self.opts.regex,
             FindAct::Word => self.opts.whole_word = !self.opts.whole_word,
-            FindAct::Close => {
-                self.prompt = None;
-                self.comp = None;
-            }
         }
         self.invalidate();
     }

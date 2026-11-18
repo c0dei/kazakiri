@@ -320,8 +320,10 @@ impl App {
     /// マウスの位置（本文の座標。タブバーの上が負）にあるボタン
     pub(super) fn hover_at(&self, x: f32, y: f32) -> Option<Hover> {
         let tb = self.tb_h();
+        // 検索・置換の行（モードバーの下）の分だけ、ツールバーの下端が上にずれる
+        let fh = self.find_h();
         // いちばん上がタブバー、その下がツールバー（1 行目）とモードバー（2 行目）
-        if (-(self.tab_h() + tb)..-tb).contains(&y) {
+        if (-(self.tab_h() + tb + fh)..-(tb + fh)).contains(&y) {
             return self.tab_hover(x);
         }
         if let Some((x0, y0, x1, y1)) = self.palette_pill() {
@@ -330,9 +332,9 @@ impl App {
                 return Some(Hover::Palette);
             }
         }
-        if tb > 0.0 && (-tb..0.0).contains(&y) {
+        if tb > 0.0 && (-(tb + fh)..-fh).contains(&y) {
             // 上の行はツールバー、下の行はモードバー
-            if y < -self.mode_h() {
+            if y < -(fh + self.mode_h()) {
                 return self.tool_boxes().into_iter().find(|&(x0, x1, _)| x >= x0 && x < x1).map(|(_, _, i)| Hover::Tool(i));
             }
             if let Some((x0, x1)) = self.colpick_box() {
@@ -476,7 +478,7 @@ impl App {
 
     /// ツールバーの行（1 行目）の座標 → 本文の座標の y からの変換用：ツールバーの上端
     pub(super) fn toolbar_top(&self) -> f32 {
-        -self.tb_h()
+        -(self.tb_h() + self.find_h())
     }
 
     pub(super) unsafe fn draw_toolbar(&self, rt: &ID2D1RenderTarget, brush: &ID2D1SolidColorBrush, w: f32) -> Result<()> {

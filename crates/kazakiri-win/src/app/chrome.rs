@@ -69,7 +69,7 @@ impl App {
     }
 
     /// 画面の部品のフォント（設定の ui_font。なければ Yu Gothic UI）の HFONT
-    unsafe fn ui_hfont(&self) -> HFONT {
+    pub(super) unsafe fn ui_hfont(&self) -> HFONT {
         unsafe {
             let dpi = GetDpiForWindow(self.hwnd).max(96) as f32;
             let height = -((self.settings.ui_font_size * dpi / 96.0).round() as i32);

@@ -464,7 +464,7 @@ impl App {
 
     /// 変換中の文字と候補ウィンドウをカーソルの位置に出す
     pub(super) fn update_ime_position(&self) {
-        if self.prompt.is_some() {
+        if self.text_prompt() {
             return self.update_ime_position_prompt();
         }
         let Some(doc) = self.doc.clone() else { return };
@@ -632,7 +632,7 @@ impl App {
             }
             let _ = ImmReleaseContext(self.hwnd, himc);
             match s {
-                Some(s) if self.prompt.is_some() => {
+                Some(s) if self.text_prompt() => {
                     // 入力欄は 1 行。改行は入れない
                     let add: String = s.chars().filter(|c| !c.is_control()).collect();
                     self.prompt_buf().push_str(&add);

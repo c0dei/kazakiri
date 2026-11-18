@@ -142,7 +142,7 @@ impl App {
     /// ステータスバー（と、あれば機能ボタンの列）の高さ
     /// 本文より上の部分（タブバー＋ツールバー＋モードバー）の高さ。いちばん上がタブバー（タイトルバーを兼ねる）
     pub(super) fn chrome_h(&self) -> f32 {
-        self.tb_h() + self.tab_h()
+        self.tb_h() + self.tab_h() + self.find_h()
     }
 
     pub(super) fn status_h(&self) -> f32 {
@@ -295,6 +295,7 @@ impl App {
     /// 横は本文の下端（結果パネル・ステータスバーの上）
     pub(super) fn layout_scrollbars(&self) {
         self.layout_status();
+        self.layout_findrow();
         let mut rc = RECT::default();
         let scale = unsafe { GetDpiForWindow(self.hwnd) } as f32 / 96.0;
         unsafe {
