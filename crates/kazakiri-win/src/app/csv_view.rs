@@ -266,12 +266,12 @@ impl Disp {
             let (max_w, truncate) = view.limits.get();
             // 上限を超えるフィールドは、「…」で省略して、列をそろえる（元の文字列の位置は、省略した部分では末尾に寄せる）
             let mut shown_w = csv::display_width(f);
-            if truncate && max_w > 0 && shown_w > colw && colw >= 2 {
+            if truncate && max_w > 0 && shown_w > colw && colw >= 3 {
                 let (mut w, mut vis_units) = (0usize, 0u32);
                 let mut vis = String::new();
                 for c in f.chars() {
                     let cw = csv::char_width(c);
-                    if w + cw > colw - 1 {
+                    if w + cw > colw - 2 {
                         break;
                     }
                     w += cw;
@@ -283,7 +283,7 @@ impl Disp {
                 if let Some(last) = segs.last_mut() {
                     last.2 = vis_units;
                 }
-                shown_w = w + 1;
+                shown_w = w + 2; // 「…」は全角幅（日本語のフォントでは 2 桁分）
             } else {
                 units.extend(f.encode_utf16().map(|u| if u == 0x09 { 0x20 } else { u }));
             }

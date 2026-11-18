@@ -455,6 +455,11 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
     if let Some(r) = unsafe { dark::bar_message(hwnd, msg, wparam, lparam) } {
         return r;
     }
+    // ステータスバーの描画（owner-draw）は、SB_SETTEXT などの中で同期的に届くので、App を借りる前に処理する
+    if msg == WM_DRAWITEM && wparam.0 as i32 == chrome::ID_STATUS {
+        unsafe { chrome::draw_status_item(&*(lparam.0 as *const windows::Win32::UI::Controls::DRAWITEMSTRUCT)) };
+        return LRESULT(1);
+    }
     let result = APP.with(|cell| {
         let Ok(mut guard) = cell.try_borrow_mut() else { return None };
         let app = guard.as_mut()?;
@@ -563,10 +568,6 @@ impl App {
                     WM_RBUTTONUP | WM_CONTEXTMENU => (DONE, Some(Deferred::TrayMenu(true))),
                     _ => (DONE, None),
                 },
-                WM_DRAWITEM if wparam.0 as i32 == chrome::ID_STATUS => {
-                    self.draw_status_part(&*(lparam.0 as *const windows::Win32::UI::Controls::DRAWITEMSTRUCT));
-                    (Some(LRESULT(1)), None)
-                }
                 WM_NOTIFY if wparam.0 as i32 == chrome::ID_STATUS => {
                     let nm = &*(lparam.0 as *const windows::Win32::UI::Controls::NMMOUSE);
                     if nm.hdr.code == windows::Win32::UI::Controls::NM_CLICK {

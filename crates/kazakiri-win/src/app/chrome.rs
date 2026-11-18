@@ -9,6 +9,49 @@ use windows::Win32::UI::Controls::*;
 use super::find_dialog::rgb_ref;
 use super::*;
 
+/// ステータスバーの描画に使うもの（`update_status` が決める）。描画は App を借りずに行う
+#[derive(Default)]
+struct StatusDraw {
+    left: String,
+    /// 左のメッセージを描く右端（DIP）
+    left_right: f32,
+    /// 右の各部分：(文字, 左端, 右端)（DIP）
+    items: Vec<(String, f32, f32)>,
+    bg: COLORREF,
+    fg: COLORREF,
+    scale: f32,
+}
+
+thread_local! {
+    static STATUS_DRAW: std::cell::RefCell<StatusDraw> = std::cell::RefCell::new(StatusDraw::default());
+}
+
+/// ステータスバーを描く（WM_DRAWITEM。パートは 1 つ）。`wndproc` の先頭から、App を借りる前に呼ぶ
+pub(super) unsafe fn draw_status_item(di: &DRAWITEMSTRUCT) {
+    STATUS_DRAW.with(|d| {
+        let d = d.borrow();
+        unsafe {
+            let bg = CreateSolidBrush(d.bg);
+            FillRect(di.hDC, &di.rcItem, bg);
+            let _ = DeleteObject(bg.into());
+            if d.scale <= 0.0 {
+                return;
+            }
+            SetBkMode(di.hDC, TRANSPARENT);
+            SetTextColor(di.hDC, d.fg);
+            let line = |t: &str, x: f32, right: f32| {
+                let mut u: Vec<u16> = t.encode_utf16().collect();
+                let mut r = RECT { left: di.rcItem.left + (x * d.scale) as i32, top: di.rcItem.top, right: di.rcItem.left + (right * d.scale) as i32, bottom: di.rcItem.bottom };
+                DrawTextW(di.hDC, &mut u, &mut r, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
+            };
+            for (t, x0, x1) in &d.items {
+                line(t, *x0, *x1);
+            }
+            line(&d.left, 8.0, d.left_right);
+        }
+    });
+}
+
 /// ステータスバーの部品の ID
 pub(super) const ID_STATUS: i32 = 9001;
 
@@ -72,6 +115,24 @@ impl App {
             return;
         }
         *self.status_sig.borrow_mut() = sig;
+        // 描画に使う位置を、ここで決めておく（描画は、App を借りずにできる：描く最中にステータスバーが同期で描き直されても、空白にならない）
+        let scale = unsafe { GetDpiForWindow(self.hwnd) } as f32 / 96.0;
+        let w = self.client_w_dip();
+        let width = |t: &str| unsafe { self.ui_text_width(&t.encode_utf16().collect::<Vec<_>>()) }.unwrap_or(0.0);
+        let total: String = segs.iter().map(|(t, _)| t.as_str()).collect();
+        let rw = width(&total).min(w * 0.75);
+        let mut x0 = w - rw - 8.0;
+        let mut items = Vec::new();
+        for (t, _) in &segs {
+            let x1 = x0 + width(t);
+            if !t.trim().is_empty() {
+                items.push((t.clone(), x0, x1 + 4.0));
+            }
+            x0 = x1;
+        }
+        STATUS_DRAW.with(|d| {
+            *d.borrow_mut() = StatusDraw { left: left.clone(), left_right: (w - rw - 24.0).max(8.0), items, bg: rgb_ref(&self.theme.status_bg), fg: rgb_ref(&self.theme.status_text), scale };
+        });
         let mut texts = vec![left];
         for (s, _) in segs {
             texts.push(s);
@@ -87,43 +148,9 @@ impl App {
             SendMessageW(self.status, SB_SETTEXTW, Some(WPARAM(SBT_OWNERDRAW as usize | SBT_NOBORDERS as usize)), Some(LPARAM(0)));
             let bg = rgb_ref(&self.theme.status_bg);
             SendMessageW(self.status, SB_SETBKCOLOR, Some(WPARAM(0)), Some(LPARAM(bg.0 as isize)));
-            let _ = InvalidateRect(Some(self.status), None, true);
+            let _ = InvalidateRect(Some(self.status), None, false);
         }
         *self.status_texts.borrow_mut() = texts;
-    }
-
-    /// ステータスバーを描く（WM_DRAWITEM。パートは 1 つ）。左にメッセージ、右に行・桁・文字コードなどを、`status_hit` と同じ並べ方で
-    pub(super) unsafe fn draw_status_part(&self, di: &DRAWITEMSTRUCT) {
-        unsafe {
-            let bg = CreateSolidBrush(rgb_ref(&self.theme.status_bg));
-            FillRect(di.hDC, &di.rcItem, bg);
-            let _ = DeleteObject(bg.into());
-            let texts = self.status_texts.borrow();
-            let Some((left, segs)) = texts.split_first() else { return };
-            let scale = GetDpiForWindow(self.hwnd) as f32 / 96.0;
-            let w = (di.rcItem.right - di.rcItem.left) as f32 / scale;
-            let width = |s: &str| self.ui_text_width(&s.encode_utf16().collect::<Vec<_>>()).unwrap_or(0.0);
-            SetBkMode(di.hDC, TRANSPARENT);
-            SetTextColor(di.hDC, rgb_ref(&self.theme.status_text));
-            // 右のパートの並び。位置は `status_hit` と同じ（右端から、合計の幅の分だけ左へ）
-            let total: String = segs.concat();
-            let rw = width(&total).min(w * 0.75);
-            let mut x0 = w - rw - 8.0;
-            let line = |t: &str, x: f32, right: f32| {
-                let mut u: Vec<u16> = t.encode_utf16().collect();
-                let mut r = RECT { left: di.rcItem.left + (x * scale) as i32, top: di.rcItem.top, right: di.rcItem.left + (right * scale) as i32, bottom: di.rcItem.bottom };
-                DrawTextW(di.hDC, &mut u, &mut r, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
-            };
-            for s in segs {
-                let x1 = x0 + width(s);
-                // 空白だけの区切りは、描かずに位置だけ進める
-                if !s.trim().is_empty() {
-                    line(s, x0, x1 + 4.0);
-                }
-                x0 = x1;
-            }
-            line(left, 8.0, (w - rw - 24.0).max(8.0));
-        }
     }
 
     /// ステータスバーをクリックした（NM_CLICK。x は DIP）。クリックで動く所なら、その操作
