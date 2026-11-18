@@ -42,6 +42,10 @@ pub struct Settings {
     pub backup_numbered: bool,
     /// 自動保存の間隔（分）。0 なら自動保存しない
     pub autosave_min: usize,
+    /// CSV の列幅の上限（半角の文字数）。0 なら上限なし（長いフィールドの分だけ列が広がる）
+    pub csv_max_col_width: usize,
+    /// 列幅の上限を超えるフィールドは、「…」で省略して表示する（列は必ずそろう）。オフなら、その行だけ列がずれる
+    pub csv_truncate: bool,
     pub toolbar: bool,
     /// ツールバーの下の、CSV の区切りなどのボタンの行
     pub modebar: bool,
@@ -58,7 +62,7 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { font: String::new(), font_size: 14.0, ui_font: String::new(), ui_font_size: 13.0, dark: false, whitespace: false, log_colors: true, tab_width: 4, wrap: false, grep_backup: true, syntax: true, tray: true, grep_close: false, wheel_lines: 3, md_auto: false, backup_save: false, backup_dir: String::new(), backup_numbered: false, autosave_min: 0, toolbar: true, modebar: true, fkeys: false, theme_mode: 0, accent: None, line_numbers: true, window: None }
+        Settings { font: String::new(), font_size: 14.0, ui_font: String::new(), ui_font_size: 13.0, dark: false, whitespace: false, log_colors: true, tab_width: 4, wrap: false, grep_backup: true, syntax: true, tray: true, grep_close: false, wheel_lines: 3, md_auto: false, backup_save: false, backup_dir: String::new(), backup_numbered: false, autosave_min: 0, csv_max_col_width: 100, csv_truncate: false, toolbar: true, modebar: true, fkeys: false, theme_mode: 0, accent: None, line_numbers: true, window: None }
     }
 }
 
@@ -121,6 +125,8 @@ impl Settings {
                 "backup_dir" => s.backup_dir = v.to_string(),
                 "backup_numbered" => s.backup_numbered = flag(v),
                 "autosave_min" => s.autosave_min = v.parse::<usize>().map_or(0, |n| n.min(1440)),
+                "csv_max_col_width" => s.csv_max_col_width = v.parse::<usize>().map_or(100, |n| n.min(10_000)),
+                "csv_truncate" => s.csv_truncate = flag(v),
                 "toolbar" => s.toolbar = flag(v),
                 "modebar" => s.modebar = flag(v),
                 "fkeys" => s.fkeys = flag(v),
@@ -152,12 +158,14 @@ impl Settings {
     pub fn to_text(&self) -> String {
         format!(
             "# kazakiri の設定（アプリから変更すると上書きされます）\n\
-             font = {}\nfont_size = {}\nui_font = {}\nui_font_size = {}\ndark = {}\nwhitespace = {}\nlog_colors = {}\ntab_width = {}\nwrap = {}\ngrep_backup = {}\nsyntax = {}\ntray = {}\ngrep_close = {}\nwheel_lines = {}\nmd_auto = {}\nbackup_save = {}\nbackup_dir = {}\nbackup_numbered = {}\nautosave_min = {}\ntoolbar = {}\nmodebar = {}\nfkeys = {}\ntheme = {}\naccent = {}\nline_numbers = {}\n{}",
+             font = {}\nfont_size = {}\nui_font = {}\nui_font_size = {}\ndark = {}\nwhitespace = {}\nlog_colors = {}\ntab_width = {}\nwrap = {}\ngrep_backup = {}\nsyntax = {}\ntray = {}\ngrep_close = {}\nwheel_lines = {}\nmd_auto = {}\nbackup_save = {}\nbackup_dir = {}\nbackup_numbered = {}\nautosave_min = {}\ntoolbar = {}\nmodebar = {}\nfkeys = {}\ntheme = {}\naccent = {}\nline_numbers = {}\ncsv_max_col_width = {}\ncsv_truncate = {}\n{}",
             self.font, self.font_size, self.ui_font, self.ui_font_size, self.dark, self.whitespace, self.log_colors, self.tab_width, self.wrap, self.grep_backup, self.syntax, self.tray, self.grep_close, self.wheel_lines, self.md_auto, self.backup_save, self.backup_dir, self.backup_numbered, self.autosave_min, self.toolbar, self.modebar,
             self.fkeys,
             ["system", "light", "dark"][self.theme_mode.min(2) as usize],
             self.accent.map_or("system".to_string(), |c| format!("{c:06X}")),
             self.line_numbers,
+            self.csv_max_col_width,
+            self.csv_truncate,
             self.window.map_or(String::new(), |(x, y, w, h, m)| format!("window = {x}, {y}, {w}, {h}, {}\n", i32::from(m)))
         )
     }
@@ -179,7 +187,7 @@ mod tests {
 
     #[test]
     fn roundtrip_and_defaults() {
-        let s = Settings { font: "Consolas".into(), font_size: 16.5, ui_font: "Meiryo UI".into(), ui_font_size: 12.0, dark: true, whitespace: true, log_colors: false, tab_width: 8, wrap: true, grep_backup: false, syntax: false, tray: false, grep_close: true, wheel_lines: 5, md_auto: true, backup_save: true, backup_dir: "D:\\bk".into(), backup_numbered: true, autosave_min: 3, toolbar: false, modebar: false, fkeys: false, theme_mode: 2, accent: Some(0x0067C0), line_numbers: false, window: Some((10, 20, 900, 700, true)) };
+        let s = Settings { font: "Consolas".into(), font_size: 16.5, ui_font: "Meiryo UI".into(), ui_font_size: 12.0, dark: true, whitespace: true, log_colors: false, tab_width: 8, wrap: true, grep_backup: false, syntax: false, tray: false, grep_close: true, wheel_lines: 5, md_auto: true, backup_save: true, backup_dir: "D:\\bk".into(), backup_numbered: true, autosave_min: 3, csv_max_col_width: 0, csv_truncate: true, toolbar: false, modebar: false, fkeys: false, theme_mode: 2, accent: Some(0x0067C0), line_numbers: false, window: Some((10, 20, 900, 700, true)) };
         assert_eq!(Settings::parse(&s.to_text()), s);
         let broken = Settings::parse("font_size = abc\nunknown = 1\ntab_width = 99\n");
         assert_eq!(broken.font_size, 14.0);

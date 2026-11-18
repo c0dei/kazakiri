@@ -14,8 +14,8 @@ use kazakiri_core::{EditKind, Line, SearchControl};
 
 use super::*;
 
-/// 列の幅の上限（半角の文字数）。これより長いフィールドはその行だけ列がずれる（全角 50 文字ほどの備考欄までは、そろう）
-const MAX_COL_WIDTH: usize = 100;
+/// 列の幅の上限の既定（半角の文字数）。設定（csv_max_col_width）で変えられる。0 は上限なし
+pub(super) const DEFAULT_MAX_COL_WIDTH: usize = 100;
 /// 並べ替えの完了通知
 pub(super) const WM_SORT_DONE: u32 = WM_APP + 6;
 /// 引用符の中の改行（前の行から続く行）の一覧ができた
@@ -36,21 +36,36 @@ pub(super) struct CsvView {
     widths: RefCell<Vec<usize>>,
     /// 幅が変わったら増える（描画済みのレイアウトを作り直す目印）
     pub generation: Cell<u64>,
+    /// 列幅の上限（0 は上限なし）と、上限を超えるフィールドを「…」で省略するか（設定から）
+    limits: Cell<(usize, bool)>,
     /// 並べ替え・列フィルタの対象の列（0 始まり）。None ならカーソルのある列
     pub target: Option<usize>,
 }
 
 impl CsvView {
     pub fn new(delim: char) -> CsvView {
-        CsvView { delim, header: true, widths: RefCell::new(Vec::new()), generation: Cell::new(0), target: None }
+        CsvView { delim, header: true, widths: RefCell::new(Vec::new()), generation: Cell::new(0), limits: Cell::new((DEFAULT_MAX_COL_WIDTH, false)), target: None }
+    }
+
+    /// 設定の、列幅の上限と省略の有無を渡す。変わったら、測り直す（描画済みのレイアウトも作り直す）
+    pub fn set_limits(&self, max_w: usize, truncate: bool) {
+        if self.limits.get() != (max_w, truncate) {
+            self.limits.set((max_w, truncate));
+            self.widths.borrow_mut().clear();
+            self.generation.set(self.generation.get() + 1);
+        }
     }
 
     /// 行を見て列の幅を広げる。広がったら true
     pub fn measure(&self, text: &str) -> bool {
+        let cap = match self.limits.get().0 {
+            0 => usize::MAX,
+            n => n,
+        };
         let mut widths = self.widths.borrow_mut();
         let mut changed = false;
         for (k, r) in csv::split_fields(text, self.delim).into_iter().enumerate() {
-            let w = csv::display_width(&text[r]).min(MAX_COL_WIDTH);
+            let w = csv::display_width(&text[r]).min(cap);
             if k >= widths.len() {
                 widths.push(w);
                 changed = true;
@@ -247,10 +262,34 @@ impl Disp {
             let disp_start = units.len() as u32;
             segs.push((src_pos, disp_start, flen));
             // フィールドの中のタブは、列の幅の計算（半角 1 文字分）に合わせて空白 1 つで見せる（タブ位置まで広がって列がずれるのを防ぐ）
-            units.extend(f.encode_utf16().map(|u| if u == 0x09 { 0x20 } else { u }));
+            let colw = widths.get(k).copied().unwrap_or(0);
+            let (max_w, truncate) = view.limits.get();
+            // 上限を超えるフィールドは、「…」で省略して、列をそろえる（元の文字列の位置は、省略した部分では末尾に寄せる）
+            let mut shown_w = csv::display_width(f);
+            if truncate && max_w > 0 && shown_w > colw && colw >= 2 {
+                let (mut w, mut vis_units) = (0usize, 0u32);
+                let mut vis = String::new();
+                for c in f.chars() {
+                    let cw = csv::char_width(c);
+                    if w + cw > colw - 1 {
+                        break;
+                    }
+                    w += cw;
+                    vis_units += c.len_utf16() as u32;
+                    vis.push(c);
+                }
+                units.extend(vis.encode_utf16().map(|u| if u == 0x09 { 0x20 } else { u }));
+                units.push(0x2026);
+                if let Some(last) = segs.last_mut() {
+                    last.2 = vis_units;
+                }
+                shown_w = w + 1;
+            } else {
+                units.extend(f.encode_utf16().map(|u| if u == 0x09 { 0x20 } else { u }));
+            }
             src_pos += flen;
             if k + 1 < n {
-                let pad = widths.get(k).copied().unwrap_or(0).saturating_sub(csv::display_width(f)) + 1;
+                let pad = colw.saturating_sub(shown_w) + 1;
                 units.extend(std::iter::repeat_n(b' ' as u16, pad));
                 cols.push((disp_start, units.len() as u32));
                 // 区切り文字（元は 1 文字）を │ で表示する
@@ -357,10 +396,32 @@ impl App {
         let Some(doc) = self.doc.clone() else { return };
         let ext = doc.path().and_then(|p| p.extension()).map(|e| e.to_string_lossy().to_lowercase());
         self.csv = match ext.as_deref() {
-            Some("tsv") | Some("tab") => Some(CsvView::new('\t')),
-            Some("csv") => Some(CsvView::new(self.guess_delim())),
+            Some("tsv") | Some("tab") => Some(self.new_csv_view('\t')),
+            Some("csv") => Some(self.new_csv_view(self.guess_delim())),
             _ => None,
         };
+    }
+
+    /// 設定の列幅の上限などを入れた CsvView
+    fn new_csv_view(&self, delim: char) -> CsvView {
+        let v = CsvView::new(delim);
+        v.set_limits(self.settings.csv_max_col_width, self.settings.csv_truncate);
+        v
+    }
+
+    /// 設定が変わった：開いている CSV の表示に、新しい列幅の上限などを渡す
+    pub(super) fn apply_csv_limits(&mut self) {
+        let (m, t) = (self.settings.csv_max_col_width, self.settings.csv_truncate);
+        if let Some(v) = &self.csv {
+            v.set_limits(m, t);
+        }
+        for tab in &self.tabs {
+            if let Some(v) = &tab.csv {
+                v.set_limits(m, t);
+            }
+        }
+        self.layout_cache.borrow_mut().clear();
+        self.invalidate();
     }
 
     fn guess_delim(&self) -> char {
@@ -373,7 +434,7 @@ impl App {
     pub(super) fn toggle_csv(&mut self) {
         self.csv = match self.csv {
             Some(_) => None,
-            None => Some(CsvView::new(self.guess_delim())),
+            None => Some(self.new_csv_view(self.guess_delim())),
         };
         self.message = match &self.csv {
             Some(v) => format!("CSV/TSV モード（区切り: {}）", delim_name(v.delim)),
@@ -387,7 +448,7 @@ impl App {
             self.last_csv_delim = d;
         }
         let header = self.csv.as_ref().is_none_or(|v| v.header);
-        let mut v = CsvView::new(d);
+        let mut v = self.new_csv_view(d);
         v.header = header;
         self.csv = Some(v);
         self.message = format!("区切り: {}", delim_name(d));

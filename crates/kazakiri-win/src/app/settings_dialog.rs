@@ -71,6 +71,8 @@ const ID_BKDIR: i32 = 233;
 const ID_BKDIR_PICK: i32 = 234;
 const ID_BKNUM: i32 = 235;
 const ID_AUTOMIN: i32 = 236;
+const ID_CSVW: i32 = 242;
+const ID_CSVTRUNC: i32 = 243;
 const ID_KEYS: i32 = 240;
 const ID_CLOSE: i32 = 241;
 
@@ -593,6 +595,10 @@ fn sync() {
     set_checked(ID_MDAUTO, s.md_auto);
     set_checked(ID_BKSAVE, s.backup_save);
     set_checked(ID_BKNUM, s.backup_numbered);
+    set_checked(ID_CSVTRUNC, s.csv_truncate);
+    if unsafe { GetFocus() } != ctl(ID_CSVW) {
+        set_text(ID_CSVW, &s.csv_max_col_width.to_string());
+    }
     if unsafe { GetFocus() } != ctl(ID_BKDIR) {
         set_text(ID_BKDIR, &s.backup_dir);
     }
@@ -829,10 +835,20 @@ fn commit_edits() {
     let wheel = text_of(ID_WHEEL).trim().parse::<usize>().ok();
     let bk_dir = text_of(ID_BKDIR).trim().to_string();
     let auto_min = text_of(ID_AUTOMIN).trim().parse::<usize>().ok().map(|n| n.min(1440));
+    let csv_trunc = is_checked(ID_CSVTRUNC);
+    let csv_w = text_of(ID_CSVW).trim().parse::<usize>().ok().map(|n| n.min(10_000));
     with_app(|app| {
         if bk_dir != app.settings.backup_dir {
             app.settings.backup_dir = bk_dir.clone();
             app.settings.save();
+        }
+        // CSV の列幅の上限と省略：変わったら、開いている CSV の表示にも渡す
+        let new_w = csv_w.unwrap_or(app.settings.csv_max_col_width);
+        if (new_w, csv_trunc) != (app.settings.csv_max_col_width, app.settings.csv_truncate) {
+            app.settings.csv_max_col_width = new_w;
+            app.settings.csv_truncate = csv_trunc;
+            app.settings.save();
+            app.apply_csv_limits();
         }
         if let Some(n) = auto_min.filter(|&n| n != app.settings.autosave_min) {
             app.settings.autosave_min = n;
@@ -907,7 +923,7 @@ unsafe fn on_command(dlg: HWND, id: i32, code: u32) {
             return;
         }
         // 入力欄を書き換えた：下書きを変えただけ（反映は「保存」のとき）
-        if matches!(id, ID_FONT | ID_SIZE | ID_TAB | ID_UIFONT | ID_UISIZE | ID_WHEEL | ID_BKDIR | ID_AUTOMIN) {
+        if matches!(id, ID_FONT | ID_SIZE | ID_TAB | ID_UIFONT | ID_UISIZE | ID_WHEEL | ID_BKDIR | ID_AUTOMIN | ID_CSVW) {
             if code == EN_CHANGE_CODE {
                 mark_dirty(dlg);
             }
@@ -1161,6 +1177,12 @@ unsafe fn create(owner: HWND) {
         card(&mut rows, &mut cur, 3, "モードバー", "CSV・Markdown のときの操作の行", Some(ID_MODEBAR), None);
         card(&mut rows, &mut cur, 3, "機能ボタンの列", "ステータスバーの上の「検索 Ctrl+F …」", Some(ID_FKEYS), None);
         card(&mut rows, &mut cur, 3, "通知領域のアイコン", "クリックで新規作成・開くなど", Some(ID_TRAY), None);
+        // CSV（表示の分類の末尾）
+        heading(&mut rows, &mut cur, 3, "CSV");
+        let y = card(&mut rows, &mut cur, 3, "列幅の上限", "半角の文字数。0 で上限なし（極端に長いフィールドがあると、その列が広がる）", None, None);
+        put(3, ID_CSVW, w!("EDIT"), "", edit | ES_NUMBER as u32 | flat, 0, right - 60, mid(y, 26), 60, 26);
+        places.push(Place { id: ID_CSVW, anchor: cr(right - 60), x: right - 60, y: mid(y, 26), w: 60, h: 26 });
+        card(&mut rows, &mut cur, 3, "上限を超える部分を「…」で省略", "オンなら、長いフィールドは省略して、列を必ずそろえる。オフなら、その行だけ列がずれる", Some(ID_CSVTRUNC), None);
         // 検索・GREP
         card(&mut rows, &mut cur, 4, "GREP 置換の前にバックアップ", ".bak を作る", Some(ID_BACKUP), None);
         // バックアップ

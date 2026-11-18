@@ -31,7 +31,7 @@ pub(super) struct Tab {
     sel: Option<(u64, u64)>,
     hit: Option<(u64, u64)>,
     goal_x: Option<f32>,
-    csv: Option<CsvView>,
+    pub(super) csv: Option<CsvView>,
     follow: bool,
     stick_bottom: bool,
     pending_goto: Option<(u64, u64, u64)>,
