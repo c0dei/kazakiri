@@ -52,10 +52,60 @@ struct Colors {
     text: COLORREF,
     row_c: COLORREF,
     edit_c: COLORREF,
+    /// ボタンの枠、選択中の枠（アクセントカラー）、選択中・押したときの塗り
+    line: COLORREF,
+    accent: COLORREF,
+    on_fill: COLORREF,
 }
 
 thread_local! {
     static COLORS: Cell<Option<Colors>> = const { Cell::new(None) };
+    /// 切り替えボタン（Aa・.*・単語）の、いまの状態
+    static FLAGS: Cell<[bool; 3]> = const { Cell::new([false; 3]) };
+}
+
+/// ボタン（自前描画の標準ボタン）を描く。角は設定（corner）で四角／角丸。モードバーのボタンと同じ見た目
+pub(super) unsafe fn draw_button(di: &DRAWITEMSTRUCT) {
+    let Some(c) = COLORS.with(|c| c.get()) else { return };
+    unsafe {
+        let hdc = di.hDC;
+        let id = di.CtlID as i32;
+        let on = match id {
+            ID_CASE => FLAGS.with(|f| f.get()[0]),
+            ID_REGEX => FLAGS.with(|f| f.get()[1]),
+            ID_WORD => FLAGS.with(|f| f.get()[2]),
+            _ => false,
+        };
+        let pressed = di.itemState.0 & ODS_SELECTED.0 != 0;
+        let rc = di.rcItem;
+        FillRect(hdc, &rc, c.row);
+        let fill = CreateSolidBrush(if on || pressed { c.on_fill } else { c.row_c });
+        let pen = CreatePen(PS_SOLID, 1, if on { c.accent } else { c.line });
+        let (old_b, old_p) = (SelectObject(hdc, fill.into()), SelectObject(hdc, pen.into()));
+        if super::util::corner_round() {
+            let r = (8.0 * GetDpiForWindow(di.hwndItem).max(96) as f32 / 96.0) as i32;
+            let _ = RoundRect(hdc, rc.left, rc.top, rc.right, rc.bottom, r, r);
+        } else {
+            let _ = Rectangle(hdc, rc.left, rc.top, rc.right, rc.bottom);
+        }
+        SelectObject(hdc, old_b);
+        SelectObject(hdc, old_p);
+        let _ = DeleteObject(fill.into());
+        let _ = DeleteObject(pen.into());
+        // 題
+        let mut buf = [0u16; 64];
+        let n = GetWindowTextW(di.hwndItem, &mut buf) as usize;
+        let old_f = SelectObject(hdc, HGDIOBJ(SendMessageW(di.hwndItem, WM_GETFONT, None, None).0 as *mut _));
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, c.text);
+        let mut r = rc;
+        DrawTextW(hdc, &mut buf[..n], &mut r, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+        SelectObject(hdc, old_f);
+        if di.itemState.0 & ODS_FOCUS.0 != 0 && di.itemState.0 & ODS_NOFOCUSRECT.0 == 0 {
+            let f = RECT { left: rc.left + 3, top: rc.top + 3, right: rc.right - 3, bottom: rc.bottom - 3 };
+            let _ = DrawFocusRect(hdc, &f);
+        }
+    }
 }
 
 /// `wndproc` の先頭から、App を借りる前に呼ぶ。検索・置換の行の部品の色を答える
@@ -107,9 +157,10 @@ impl App {
                 self.findrow_font.set(self.ui_hfont());
             }
             let font = self.findrow_font.get();
-            let edit = ES_AUTOHSCROLL as u32 | WS_TABSTOP.0 | WS_BORDER.0;
-            let toggle = BS_AUTOCHECKBOX as u32 | BS_PUSHLIKE as u32 | WS_TABSTOP.0;
-            let push = BS_PUSHBUTTON as u32 | WS_TABSTOP.0;
+            // 入力欄は枠なし（枠は背景に自前で描く。角の四角／角丸を設定で切り替えるため）。ボタンは自前描画（標準のボタンは角が OS 任せ）
+            let edit = ES_AUTOHSCROLL as u32 | WS_TABSTOP.0;
+            let toggle = BS_OWNERDRAW as u32 | WS_TABSTOP.0;
+            let push = BS_OWNERDRAW as u32 | WS_TABSTOP.0;
             let mk = |class: PCWSTR, text: &str, style: u32, id: i32| (id, make_child(self.hwnd, class, text, style, 0, id, font));
             let all = vec![
                 mk(w!("STATIC"), "検索", 0, ID_LABEL),
@@ -140,16 +191,21 @@ impl App {
     /// 色のブラシを、いまのテーマに合わせて作り直す（変わったときだけ）
     unsafe fn update_findrow_colors(&self) {
         let (row_c, edit_c, text) = (rgb_ref(&self.theme.toolbar_bg), if self.settings.dark { COLORREF(0x001f_1f1f) } else { COLORREF(0x00ff_ffff) }, rgb_ref(&self.theme.text));
+        let acc = theme::accent(self.settings.dark);
+        let (line, accent) = (rgb_ref(&self.theme.dim), rgb_ref(&acc));
+        // 選択中の塗り：アクセントカラーを、行の色に 22% 混ぜる
+        let mixc = |a: f32, b: f32| ((a * 0.22 + b * 0.78) * 255.0).round() as u32;
+        let on_fill = COLORREF(mixc(acc.r, self.theme.toolbar_bg.r) | (mixc(acc.g, self.theme.toolbar_bg.g) << 8) | (mixc(acc.b, self.theme.toolbar_bg.b) << 16));
         unsafe {
             let old = COLORS.with(|c| c.get());
-            if old.is_some_and(|o| o.row_c == row_c && o.edit_c == edit_c && o.text == text) {
+            if old.is_some_and(|o| o.row_c == row_c && o.edit_c == edit_c && o.text == text && o.line == line && o.accent == accent && o.on_fill == on_fill) {
                 return;
             }
             if let Some(o) = old {
                 let _ = DeleteObject(o.row.into());
                 let _ = DeleteObject(o.edit.into());
             }
-            COLORS.with(|c| c.set(Some(Colors { row: CreateSolidBrush(row_c), edit: CreateSolidBrush(edit_c), text, row_c, edit_c })));
+            COLORS.with(|c| c.set(Some(Colors { row: CreateSolidBrush(row_c), edit: CreateSolidBrush(edit_c), text, row_c, edit_c, line, accent, on_fill })));
         }
     }
 
@@ -179,8 +235,7 @@ impl App {
                 for (id, h) in &fr.all {
                     let name = match *id {
                         ID_FIND | ID_REPL => w!("DarkMode_CFD"),
-                        ID_LABEL | ID_RLABEL => continue,
-                        _ => w!("DarkMode_Explorer"),
+                        _ => continue,
                     };
                     let _ = SetWindowTheme(*h, if self.settings.dark { name } else { PCWSTR::null() }, PCWSTR::null());
                 }
@@ -203,7 +258,13 @@ impl App {
                 let edit_w = (w * 0.28).clamp(160.0, 340.0);
                 let ex = 52.0;
                 place(ID_LABEL, 12.0, 36.0, 0);
-                place(ID_FIND, ex, edit_w, 0);
+                // 入力欄：枠（背景に自前で描く）の内側に、文字の高さで置く
+                let th = self.ui_line_h;
+                let place_edit = |id: i32, row: i32| {
+                    let ty = 5.0 + (26.0 - th) / 2.0;
+                    let _ = SetWindowPos(fr.h(id), None, s(ex + 6.0), y0 + row * row_h + s(ty), s(edit_w - 12.0), s(th), SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+                };
+                place_edit(ID_FIND, 0);
                 let mut x = ex + edit_w + 8.0;
                 for (id, bw) in [(ID_CASE, 34.0), (ID_REGEX, 34.0), (ID_WORD, 50.0)] {
                     place(id, x, bw, 0);
@@ -217,7 +278,7 @@ impl App {
                 place(ID_CLOSE, (w - 8.0 - 30.0).max(x), 30.0, 0);
                 if replace {
                     place(ID_RLABEL, 12.0, 36.0, 1);
-                    place(ID_REPL, ex, edit_w, 1);
+                    place_edit(ID_REPL, 1);
                     place(ID_ONE, ex + edit_w + 8.0, 56.0, 1);
                     place(ID_ALL, ex + edit_w + 8.0 + 56.0 + 4.0, 92.0, 1);
                 } else {
@@ -225,6 +286,7 @@ impl App {
                         let _ = ShowWindow(fr.h(id), SW_HIDE);
                     }
                 }
+                self.findrow_frames.set([(ex, 5.0, ex + edit_w, 31.0), (ex, 5.0 + ROW_H, ex + edit_w, 31.0 + ROW_H)]);
                 self.findrow_shown.set(true);
             }
             // 中身を写す（入力欄は、違うときだけ。入力中の文字をこちらで書き換えて、カーソルが動かないように）
@@ -235,11 +297,11 @@ impl App {
                     let _ = SetWindowTextW(h, PCWSTR(t.as_ptr()));
                 }
             }
-            for (id, on) in [(ID_CASE, self.opts.case_sensitive), (ID_REGEX, self.opts.regex), (ID_WORD, self.opts.whole_word)] {
-                let h = fr.h(id);
-                let want = if on { BST_CHECKED.0 } else { BST_UNCHECKED.0 } as isize;
-                if SendMessageW(h, BM_GETCHECK, None, None).0 != want {
-                    SendMessageW(h, BM_SETCHECK, Some(WPARAM(want as usize)), None);
+            let flags = [self.opts.case_sensitive, self.opts.regex, self.opts.whole_word];
+            if FLAGS.with(|f| f.get()) != flags {
+                FLAGS.with(|f| f.set(flags));
+                for id in [ID_CASE, ID_REGEX, ID_WORD] {
+                    let _ = InvalidateRect(Some(fr.h(id)), None, false);
                 }
             }
             // 開いた直後（Ctrl+F など）：入力欄に入って、全選択
@@ -279,6 +341,11 @@ impl App {
                 }
                 self.find_bar_changed();
             }
+            // 入力欄の枠の色（入力中はアクセントカラー）のために、フォーカスの出入りで描き直す
+            (ID_FIND | ID_REPL, 0x0100 | 0x0200) => {
+                self.invalidate();
+                return;
+            }
             (ID_CASE, 0) => self.find_bar_do(FindAct::Case),
             (ID_REGEX, 0) => self.find_bar_do(FindAct::Regex),
             (ID_WORD, 0) => self.find_bar_do(FindAct::Word),
@@ -317,6 +384,18 @@ impl App {
             rt.FillRectangle(&rect(0.0, 0.0, w, h), brush);
             brush.SetColor(&self.theme.dim);
             rt.FillRectangle(&rect(0.0, h - 1.0, w, h), brush);
+            // 入力欄の枠（四角／角丸は設定）。入力中の欄は、アクセントカラーの枠
+            let rows = if self.prompt == Some(Prompt::Replace) { 2 } else { 1 };
+            let focus = GetFocus();
+            let hs = self.findrow.borrow();
+            for (i, (x0, y0, x1, y1)) in self.findrow_frames.get().into_iter().enumerate().take(rows) {
+                let id = if i == 0 { ID_FIND } else { ID_REPL };
+                let focused = hs.as_ref().is_some_and(|f| f.h(id) == focus);
+                brush.SetColor(if focused { &theme::accent(self.settings.dark) } else { &self.theme.dim });
+                rt.FillRoundedRectangle(&rrect(x0, y0, x1, y1, 4.0), brush);
+                brush.SetColor(&self.theme.bg);
+                rt.FillRoundedRectangle(&rrect(x0 + 1.0, y0 + 1.0, x1 - 1.0, y1 - 1.0, 3.0), brush);
+            }
         }
     }
 }

@@ -52,10 +52,21 @@ pub(super) fn on_off(b: bool) -> &'static str {
     if b { "オン" } else { "オフ" }
 }
 
+/// 画面の部品の角を丸くするか（設定の corner。オフなら四角）
+static CORNER_ROUND: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub(super) fn set_corner_round(on: bool) {
+    CORNER_ROUND.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub(super) fn corner_round() -> bool {
+    CORNER_ROUND.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// 角丸の四角。設定で四角にしているときは、半径を使わない
 pub(super) fn rrect(l: f32, t: f32, r: f32, b: f32, radius: f32) -> D2D1_ROUNDED_RECT {
-    // 角は丸めない（標準の部品に合わせる）。呼び出し側の半径は使わない
-    let _ = radius;
-    D2D1_ROUNDED_RECT { rect: rect(l, t, r, b), radiusX: 0.0, radiusY: 0.0 }
+    let radius = if corner_round() { radius.min(6.0) } else { 0.0 };
+    D2D1_ROUNDED_RECT { rect: rect(l, t, r, b), radiusX: radius, radiusY: radius }
 }
 
 pub(super) fn rect(l: f32, t: f32, r: f32, b: f32) -> D2D_RECT_F {

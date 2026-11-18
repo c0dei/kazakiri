@@ -73,6 +73,7 @@ const ID_BKNUM: i32 = 235;
 const ID_AUTOMIN: i32 = 236;
 const ID_CSVW: i32 = 242;
 const ID_CSVTRUNC: i32 = 243;
+const ID_CORNER: i32 = 244;
 const ID_KEYS: i32 = 240;
 const ID_CLOSE: i32 = 241;
 
@@ -596,6 +597,7 @@ fn sync() {
     set_checked(ID_BKSAVE, s.backup_save);
     set_checked(ID_BKNUM, s.backup_numbered);
     set_checked(ID_CSVTRUNC, s.csv_truncate);
+    set_checked(ID_CORNER, s.corner_round);
     if unsafe { GetFocus() } != ctl(ID_CSVW) {
         set_text(ID_CSVW, &s.csv_max_col_width.to_string());
     }
@@ -836,11 +838,22 @@ fn commit_edits() {
     let bk_dir = text_of(ID_BKDIR).trim().to_string();
     let auto_min = text_of(ID_AUTOMIN).trim().parse::<usize>().ok().map(|n| n.min(1440));
     let csv_trunc = is_checked(ID_CSVTRUNC);
+    let corner = is_checked(ID_CORNER);
     let csv_w = text_of(ID_CSVW).trim().parse::<usize>().ok().map(|n| n.min(10_000));
     with_app(|app| {
         if bk_dir != app.settings.backup_dir {
             app.settings.backup_dir = bk_dir.clone();
             app.settings.save();
+        }
+        // 角の四角／角丸：画面の部品（ボタン・タブ・入力欄）にすぐ反映する
+        if corner != app.settings.corner_round {
+            app.settings.corner_round = corner;
+            app.settings.save();
+            super::util::set_corner_round(corner);
+            app.layout_cache.borrow_mut().clear();
+            unsafe {
+                let _ = RedrawWindow(Some(app.hwnd), None, None, RDW_INVALIDATE | RDW_ALLCHILDREN);
+            }
         }
         // CSV の列幅の上限と省略：変わったら、開いている CSV の表示にも渡す
         let new_w = csv_w.unwrap_or(app.settings.csv_max_col_width);
@@ -1142,6 +1155,7 @@ unsafe fn create(owner: HWND) {
         heading(&mut rows, &mut cur, 2, "テーマ");
         card(&mut rows, &mut cur, 2, "アプリのテーマ", "Windows の設定に合わせる、または固定する", None, Some((ID_THEME_BASE, 0, 3)));
         card(&mut rows, &mut cur, 2, "アクセントカラー", "選択・ボタン・フォーカスに使う色。左端は Windows の設定の色", None, Some((ID_ACCENT_BASE, 1, 1 + ACCENTS.len())));
+        card(&mut rows, &mut cur, 2, "角を丸くする", "ボタン・タブ・入力欄など、画面の部品の角。オフで四角", Some(ID_CORNER), None);
         heading(&mut rows, &mut cur, 2, "フォント");
         // フォント名の欄（書くか、「選択...」でフォント選択のウィンドウから選ぶ）と、大きさの − [数] ＋
         for (title, desc, id_font, id_pick, id_dec, id_size, id_inc) in [

@@ -507,15 +507,33 @@ impl App {
                 }
                 let active = i == self.active;
                 let hovered = self.hover == Some(super::toolbar::Hover::Tab(i));
-                // 四角いタブ。選択中は、上にアクセントカラーの線、下はツールバーとつなげる。選択していないタブは、枠線だけ
+                // 選択中は、上にアクセントカラーの線、下はツールバーとつなげる。選択していないタブは、枠線だけ。四角／角丸は設定（corner）
+                let round = super::util::corner_round();
+                let accent = theme::accent(self.settings.dark);
                 if active {
-                    brush.SetColor(&if self.settings.toolbar { t.toolbar_bg } else { t.bg });
-                    rt.FillRectangle(&rect(x0, 4.0, x1, h), brush);
+                    let fill = if self.settings.toolbar { t.toolbar_bg } else { t.bg };
+                    if round {
+                        // 下はツールバーの面で隠れる位置まで伸ばす（上の角だけが見える）
+                        brush.SetColor(&fill);
+                        rt.FillRoundedRectangle(&rrect(x0, 4.0, x1, h + 8.0, 6.0), brush);
+                        brush.SetColor(&t.dim);
+                        rt.DrawRoundedRectangle(&rrect(x0 + 0.5, 4.5, x1 - 0.5, h + 8.0, 6.0), brush, 1.0, None);
+                        brush.SetColor(&accent);
+                        rt.FillRectangle(&rect(x0 + 6.0, 4.0, x1 - 6.0, 6.0), brush);
+                    } else {
+                        brush.SetColor(&fill);
+                        rt.FillRectangle(&rect(x0, 4.0, x1, h), brush);
+                        brush.SetColor(&t.dim);
+                        rt.FillRectangle(&rect(x0, 4.0, x0 + 1.0, h), brush);
+                        rt.FillRectangle(&rect(x1 - 1.0, 4.0, x1, h), brush);
+                        brush.SetColor(&accent);
+                        rt.FillRectangle(&rect(x0, 4.0, x1, 6.0), brush);
+                    }
+                } else if round {
+                    brush.SetColor(if hovered { &t.panel_head } else { &t.gutter_bg });
+                    rt.FillRoundedRectangle(&rrect(x0 + 0.5, 6.5, x1 - 0.5, h - 0.5, 6.0), brush);
                     brush.SetColor(&t.dim);
-                    rt.FillRectangle(&rect(x0, 4.0, x0 + 1.0, h), brush);
-                    rt.FillRectangle(&rect(x1 - 1.0, 4.0, x1, h), brush);
-                    brush.SetColor(&theme::accent(self.settings.dark));
-                    rt.FillRectangle(&rect(x0, 4.0, x1, 6.0), brush);
+                    rt.DrawRoundedRectangle(&rrect(x0 + 0.5, 6.5, x1 - 0.5, h - 0.5, 6.0), brush, 1.0, None);
                 } else {
                     brush.SetColor(if hovered { &t.panel_head } else { &t.gutter_bg });
                     rt.FillRectangle(&rect(x0, 6.0, x1, h - 1.0), brush);

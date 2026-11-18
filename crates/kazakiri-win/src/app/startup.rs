@@ -51,6 +51,7 @@ pub(super) unsafe fn run_inner() -> std::result::Result<(), (&'static str, windo
             _ => theme::system_prefers_dark(),
         };
         theme::set_accent_override(settings.accent);
+        util::set_corner_round(settings.corner_round);
         let format = create_format(&dw, &settings.font, settings.font_size).map_err(|e| ("CreateTextFormat", e))?;
         // フォントが見つからない環境でも起動できるよう、計測失敗時は既定値
         let fs = settings.font_size;
@@ -78,6 +79,7 @@ pub(super) unsafe fn run_inner() -> std::result::Result<(), (&'static str, windo
             findrow_shown: Cell::new(false),
             findrow_placed: Cell::new([0; 5]),
             findrow_focus: Cell::new(false),
+            findrow_frames: Cell::new([(0.0, 0.0, 0.0, 0.0); 2]),
             hbar_on: Cell::new(true),
             sb_placed: Cell::new([0; 6]),
             d2d,

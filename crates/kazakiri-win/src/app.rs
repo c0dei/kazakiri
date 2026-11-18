@@ -280,6 +280,8 @@ struct App {
     findrow_shown: Cell<bool>,
     findrow_placed: Cell<[i32; 5]>,
     findrow_focus: Cell<bool>,
+    /// 検索・置換の入力欄の枠（行の上端からの DIP。(x0, y0, x1, y1)）
+    findrow_frames: Cell<[(f32, f32, f32, f32); 2]>,
     /// 横のスクロールバーを出しているか
     hbar_on: Cell<bool>,
     /// 直前に置いたスクロールバーの位置（変わっていなければ、置き直さない）
@@ -461,6 +463,11 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
     // 標準のメニューバーをダークに塗る非公開メッセージ。DrawMenuBar などの中で同期的に届き、App を借りている最中のこともあるので、借りる前に処理する
     if let Some(r) = unsafe { dark::bar_message(hwnd, msg, wparam, lparam) } {
         return r;
+    }
+    // 検索・置換の行のボタンの描画（owner-draw）
+    if msg == WM_DRAWITEM && findrow::is_findrow_id(wparam.0 as i32) {
+        unsafe { findrow::draw_button(&*(lparam.0 as *const windows::Win32::UI::Controls::DRAWITEMSTRUCT)) };
+        return LRESULT(1);
     }
     // 検索・置換の行の部品の色（描画の最中に同期で届くので、App を借りる前に答える）
     if let Some(r) = unsafe { findrow::ctl_color(hwnd, msg, wparam, lparam) } {
