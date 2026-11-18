@@ -154,6 +154,7 @@ pub(super) unsafe fn run_inner() -> std::result::Result<(), (&'static str, windo
             history: crate::history::History::load(),
             replace_scope: None,
             dlg_scope: None,
+            row_scope: None,
             grep_recursive: true,
             grep_enc: 0,
             grep_max_on: false,

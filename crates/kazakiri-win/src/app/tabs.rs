@@ -196,6 +196,7 @@ impl App {
     // ---- 切り替え・追加・削除 ----
 
     pub(super) fn switch_to(&mut self, i: usize) {
+        self.row_scope = None;
         if i == self.active || i >= self.tabs.len() || self.busy_saving() {
             return;
         }

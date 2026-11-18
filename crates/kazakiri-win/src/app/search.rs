@@ -203,7 +203,13 @@ impl App {
             }
             FindAct::ReplAll => {
                 self.history.push(crate::history::Kind::Replace, &self.last_replace.clone());
-                self.replace_scope = None;
+                // 「選択範囲のみ」がオンなら、その範囲の中だけ（置換すると位置がずれるので、1 回でオフに戻す）
+                let scope = self.row_scope.take();
+                if scope.is_some_and(|(_, b)| self.doc.as_ref().is_none_or(|d| b > d.len())) {
+                    self.message = "選択範囲が変わったため、置換しませんでした。もう一度選んでください".into();
+                    return self.invalidate();
+                }
+                self.replace_scope = scope;
                 self.replace_all();
             }
             FindAct::Case => self.opts.case_sensitive = !self.opts.case_sensitive,
