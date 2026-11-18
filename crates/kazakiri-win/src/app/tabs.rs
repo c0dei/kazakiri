@@ -530,10 +530,13 @@ impl App {
                         rt.FillRectangle(&rect(x0, 4.0, x1, 6.0), brush);
                     }
                 } else if round {
+                    // 上の角だけ丸める（下はツールバーと同じく四角）。下に伸ばして、タブの下の線の手前で切る
+                    rt.PushAxisAlignedClip(&rect(x0, 0.0, x1, h - 1.0), D2D1_ANTIALIAS_MODE_ALIASED);
                     brush.SetColor(if hovered { &t.panel_head } else { &t.gutter_bg });
-                    rt.FillRoundedRectangle(&rrect(x0 + 0.5, 6.5, x1 - 0.5, h - 0.5, 6.0), brush);
+                    rt.FillRoundedRectangle(&rrect(x0 + 0.5, 6.5, x1 - 0.5, h + 8.0, 6.0), brush);
                     brush.SetColor(&t.dim);
-                    rt.DrawRoundedRectangle(&rrect(x0 + 0.5, 6.5, x1 - 0.5, h - 0.5, 6.0), brush, 1.0, None);
+                    rt.DrawRoundedRectangle(&rrect(x0 + 0.5, 6.5, x1 - 0.5, h + 8.0, 6.0), brush, 1.0, None);
+                    rt.PopAxisAlignedClip();
                 } else {
                     brush.SetColor(if hovered { &t.panel_head } else { &t.gutter_bg });
                     rt.FillRectangle(&rect(x0, 6.0, x1, h - 1.0), brush);

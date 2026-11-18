@@ -79,6 +79,7 @@ pub(super) unsafe fn run_inner() -> std::result::Result<(), (&'static str, windo
             findrow_shown: Cell::new(false),
             findrow_placed: Cell::new([0; 5]),
             findrow_focus: Cell::new(false),
+            findrow_focus_id: Cell::new(0),
             findrow_frames: Cell::new([(0.0, 0.0, 0.0, 0.0); 2]),
             hbar_on: Cell::new(true),
             sb_placed: Cell::new([0; 6]),

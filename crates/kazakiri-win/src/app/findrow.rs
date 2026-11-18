@@ -229,17 +229,6 @@ impl App {
                 return;
             }
             self.update_findrow_colors();
-            // テーマ：ダークのときだけ、標準部品のダーク用テーマを当てる
-            if self.findrow_theme.get() != Some(self.settings.dark) {
-                self.findrow_theme.set(Some(self.settings.dark));
-                for (id, h) in &fr.all {
-                    let name = match *id {
-                        ID_FIND | ID_REPL => w!("DarkMode_CFD"),
-                        _ => continue,
-                    };
-                    let _ = SetWindowTheme(*h, if self.settings.dark { name } else { PCWSTR::null() }, PCWSTR::null());
-                }
-            }
             let scale = GetDpiForWindow(self.hwnd) as f32 / 96.0;
             let mut rc = RECT::default();
             let _ = GetClientRect(self.hwnd, &mut rc);
@@ -342,7 +331,15 @@ impl App {
                 self.find_bar_changed();
             }
             // 入力欄の枠の色（入力中はアクセントカラー）のために、フォーカスの出入りで描き直す
-            (ID_FIND | ID_REPL, 0x0100 | 0x0200) => {
+            (ID_FIND | ID_REPL, 0x0100) => {
+                self.findrow_focus_id.set(id);
+                self.invalidate();
+                return;
+            }
+            (ID_FIND | ID_REPL, 0x0200) => {
+                if self.findrow_focus_id.get() == id {
+                    self.findrow_focus_id.set(0);
+                }
                 self.invalidate();
                 return;
             }
@@ -386,11 +383,10 @@ impl App {
             rt.FillRectangle(&rect(0.0, h - 1.0, w, h), brush);
             // 入力欄の枠（四角／角丸は設定）。入力中の欄は、アクセントカラーの枠
             let rows = if self.prompt == Some(Prompt::Replace) { 2 } else { 1 };
-            let focus = GetFocus();
-            let hs = self.findrow.borrow();
             for (i, (x0, y0, x1, y1)) in self.findrow_frames.get().into_iter().enumerate().take(rows) {
                 let id = if i == 0 { ID_FIND } else { ID_REPL };
-                let focused = hs.as_ref().is_some_and(|f| f.h(id) == focus);
+                // 入力中の欄：フォーカスの通知（EN_SETFOCUS / EN_KILLFOCUS）で覚えた値を使う（描画の瞬間の GetFocus には頼らない）
+                let focused = self.findrow_focus_id.get() == id;
                 brush.SetColor(if focused { &theme::accent(self.settings.dark) } else { &self.theme.dim });
                 rt.FillRoundedRectangle(&rrect(x0, y0, x1, y1, 4.0), brush);
                 brush.SetColor(&self.theme.bg);

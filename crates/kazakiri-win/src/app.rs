@@ -280,6 +280,8 @@ struct App {
     findrow_shown: Cell<bool>,
     findrow_placed: Cell<[i32; 5]>,
     findrow_focus: Cell<bool>,
+    /// 検索・置換の行で、いま入力している欄の ID（0 は、どちらにも入っていない）
+    findrow_focus_id: Cell<i32>,
     /// 検索・置換の入力欄の枠（行の上端からの DIP。(x0, y0, x1, y1)）
     findrow_frames: Cell<[(f32, f32, f32, f32); 2]>,
     /// 横のスクロールバーを出しているか
