@@ -14,8 +14,8 @@ use kazakiri_core::{EditKind, Line, SearchControl};
 
 use super::*;
 
-/// 列の幅の上限（半角の文字数）。これより長いフィールドはその行だけ列がずれる
-const MAX_COL_WIDTH: usize = 48;
+/// 列の幅の上限（半角の文字数）。これより長いフィールドはその行だけ列がずれる（全角 50 文字ほどの備考欄までは、そろう）
+const MAX_COL_WIDTH: usize = 100;
 /// 並べ替えの完了通知
 pub(super) const WM_SORT_DONE: u32 = WM_APP + 6;
 /// 引用符の中の改行（前の行から続く行）の一覧ができた
