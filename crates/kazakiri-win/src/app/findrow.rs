@@ -61,8 +61,8 @@ struct Colors {
 
 thread_local! {
     static COLORS: Cell<Option<Colors>> = const { Cell::new(None) };
-    /// 切り替えボタン（Aa・.*・単語・選択範囲のみ）の、いまの状態
-    static FLAGS: Cell<[bool; 4]> = const { Cell::new([false; 4]) };
+    /// 切り替えボタン（Aa・.*・単語）の、いまの状態
+    static FLAGS: Cell<[bool; 3]> = const { Cell::new([false; 3]) };
 }
 
 /// ボタン（自前描画の標準ボタン）を描く。角は設定（corner）で四角／角丸。モードバーのボタンと同じ見た目
@@ -75,7 +75,6 @@ pub(super) unsafe fn draw_button(di: &DRAWITEMSTRUCT) {
             ID_CASE => FLAGS.with(|f| f.get()[0]),
             ID_REGEX => FLAGS.with(|f| f.get()[1]),
             ID_WORD => FLAGS.with(|f| f.get()[2]),
-            ID_SEL => FLAGS.with(|f| f.get()[3]),
             _ => false,
         };
         let pressed = di.itemState.0 & ODS_SELECTED.0 != 0;
@@ -177,7 +176,7 @@ impl App {
                 mk(w!("EDIT"), "", edit, ID_REPL),
                 mk(w!("BUTTON"), "置換", push, ID_ONE),
                 mk(w!("BUTTON"), "すべて置換", push, ID_ALL),
-                mk(w!("BUTTON"), "選択範囲のみ", toggle, ID_SEL),
+                mk(w!("BUTTON"), "選択範囲を置換", push, ID_SEL),
             ];
             for (id, h) in &all {
                 if *id == ID_FIND {
@@ -282,7 +281,7 @@ impl App {
                     place_edit(ID_REPL, 1);
                     place(ID_ONE, ex + edit_w + 8.0, 56.0, 1);
                     place(ID_ALL, ex + edit_w + 8.0 + 56.0 + 4.0, 92.0, 1);
-                    place(ID_SEL, ex + edit_w + 8.0 + 56.0 + 4.0 + 92.0 + 10.0, 100.0, 1);
+                    place(ID_SEL, ex + edit_w + 8.0 + 56.0 + 4.0 + 92.0 + 4.0, 116.0, 1);
                 } else {
                     for id in [ID_RLABEL, ID_REPL, ID_ONE, ID_ALL, ID_SEL] {
                         let _ = ShowWindow(fr.h(id), SW_HIDE);
@@ -299,10 +298,10 @@ impl App {
                     let _ = SetWindowTextW(h, PCWSTR(t.as_ptr()));
                 }
             }
-            let flags = [self.opts.case_sensitive, self.opts.regex, self.opts.whole_word, self.row_scope.is_some()];
+            let flags = [self.opts.case_sensitive, self.opts.regex, self.opts.whole_word];
             if FLAGS.with(|f| f.get()) != flags {
                 FLAGS.with(|f| f.set(flags));
-                for id in [ID_CASE, ID_REGEX, ID_WORD, ID_SEL] {
+                for id in [ID_CASE, ID_REGEX, ID_WORD] {
                     let _ = InvalidateRect(Some(fr.h(id)), None, false);
                 }
             }
@@ -324,7 +323,6 @@ impl App {
     /// 検索・置換の行を閉じる
     pub(super) fn close_find_bar(&mut self) {
         self.prompt = None;
-        self.row_scope = None;
         self.comp = None;
         self.layout_findrow();
         self.invalidate();
@@ -364,19 +362,7 @@ impl App {
             (ID_NEXT, 0) => self.find_bar_do(FindAct::Next),
             (ID_ONE, 0) => self.find_bar_do(FindAct::ReplOne),
             (ID_ALL, 0) => self.find_bar_do(FindAct::ReplAll),
-            (ID_SEL, 0) => {
-                if self.row_scope.is_some() {
-                    self.row_scope = None;
-                    self.message = "選択範囲のみ：オフ".into();
-                } else if let Some(r) = self.selection() {
-                    self.row_scope = Some(r);
-                    self.message = "選択範囲のみ：オン（「すべて置換」が選択した範囲の中だけになる）".into();
-                } else {
-                    self.message = "置換する範囲を、先に本文で選んでください".into();
-                }
-                self.layout_findrow();
-                self.invalidate();
-            }
+            (ID_SEL, 0) => self.find_bar_do(FindAct::ReplSel),
             (ID_CLOSE, 0) => {
                 self.close_find_bar();
                 unsafe {

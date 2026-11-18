@@ -140,6 +140,8 @@ enum FindAct {
     Prev,
     ReplOne,
     ReplAll,
+    /// 選んでいる範囲の中だけを、すべて置換
+    ReplSel,
     Case,
     Regex,
     Word,
@@ -397,8 +399,6 @@ struct App {
     replace_scope: Option<(u64, u64)>,
     /// ダイアログを開いたときの、複数行の選択範囲
     dlg_scope: Option<(u64, u64)>,
-    /// 置換の行の「選択範囲のみ」をオンにしたときの範囲（検索で選択が動いても保つ）
-    row_scope: Option<(u64, u64)>,
     /// GREP でサブフォルダも探す
     grep_recursive: bool,
     /// GREP の文字コード（menu::GREP_ENCODINGS の番号）、最大一致数の指定、出力の内容（menu::GREP_OUTPUTS の番号）
