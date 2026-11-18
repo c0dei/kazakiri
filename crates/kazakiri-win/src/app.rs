@@ -14,8 +14,8 @@
 //! | `files` / `search` / `results` | 開く・再読み込み、検索、結果一覧・GREP |
 //! | `edit` / `lines` / `multi` / `rect` / `wrap` / `complete` | 編集、行の操作と変換、複数カーソル、矩形選択、折り返し、補完 |
 //! | `csv_view` / `diffview` / `bookmarks` / `markers` | CSV 表示、差分・分割表示、ブックマーク、カラーマーカー |
-//! | `tabs` / `caption` / `toolbar` / `status_menu` / `view` / `theme` / `dark` | タブ、タイトルバー（ウィンドウのボタン・移動・サイズ変更）、ツールバーとモードバー、ステータスバー、表示設定、配色 |
-//! | `findbar` / `palette` | 本文の上に浮かぶ検索・置換バーと入力欄のカード、コマンドパレット |
+//! | `tabs` / `caption` / `toolbar` / `status_menu` / `view` / `theme` / `dark` | タブ、ウィンドウ幅、ツールバーとモードバー、ステータスバー、表示設定、配色 |
+//! | `findrow` / `findbar` / `palette` | 検索・置換の行（本文の上に固定。標準の入力欄とボタン）、行へ移動・列フィルタの入力欄、コマンドパレット |
 //! | `find_dialog` / `settings_dialog` / `keys_dialog` | 各ダイアログ（検索ダイアログは GREP 用） |
 
 use std::cell::{Cell, RefCell};
@@ -178,8 +178,6 @@ enum Deferred {
     /// 検索・置換・GREP のダイアログを開く（タブの番号）
     ShowFind(usize),
     ShowSettings,
-    /// ツールバー左端の ☰ から、メニューを開く
-    MainMenu,
     /// 本文の右クリックメニュー
     ContextMenu,
     /// 並べ替え・列フィルタの対象の列を選ぶメニュー

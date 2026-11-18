@@ -446,18 +446,6 @@ impl App {
         Ok(())
     }
 
-
-    /// 先頭のボタンの左下（画面の座標）。メニューをここから開く
-    pub(super) fn menu_anchor(&self) -> POINT {
-        let x0 = self.tool_boxes().first().map_or(0.0, |b| b.0);
-        let scale = unsafe { GetDpiForWindow(self.hwnd) } as f32 / 96.0;
-        let mut pt = POINT { x: (x0 * scale) as i32, y: ((self.tab_h() + ROW1_H - 2.0) * scale) as i32 };
-        unsafe {
-            let _ = ClientToScreen(self.hwnd, &mut pt);
-        }
-        pt
-    }
-
     pub(super) unsafe fn draw_toolbar(&self, rt: &ID2D1RenderTarget, brush: &ID2D1SolidColorBrush, w: f32) -> Result<()> {
         let h = ROW1_H;
         let t = self.theme;

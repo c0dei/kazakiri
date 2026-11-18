@@ -24,7 +24,6 @@ const COMMANDS: &[(&str, u32)] = &[
     ("join", ID_JOIN),
     ("settings", ID_SETTINGS),
     ("command_palette", ID_PALETTE),
-    ("main_menu", ID_MENU),
     ("filter_lines", ID_FILTER_LINES),
     ("diff", ID_DIFF),
     ("split_view", ID_SPLIT_VIEW),
