@@ -12,7 +12,6 @@ use std::sync::atomic::{AtomicIsize, Ordering};
 use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE};
 use windows::Win32::UI::Controls::*;
 use windows::Win32::UI::HiDpi::{GetDpiForWindow, SystemParametersInfoForDpi};
-use windows::Win32::UI::Shell::{SHBrowseForFolderW, SHGetPathFromIDListW, BROWSEINFOW, BIF_NEWDIALOGSTYLE, BIF_RETURNONLYFSDIRS};
 
 use super::*;
 
@@ -627,18 +626,21 @@ unsafe fn pick_folder(owner: HWND) -> Option<String> {
     unsafe { pick_folder_titled(owner, "GREP するフォルダを選んでください") }
 }
 
+/// フォルダを選ぶダイアログ（Windows の標準の「フォルダーの選択」。エクスプローラーと同じ新しい形）。選ばなければ None
 pub(super) unsafe fn pick_folder_titled(owner: HWND, title: &str) -> Option<String> {
     unsafe {
-        let title = wide(title);
-        let bi = BROWSEINFOW { hwndOwner: owner, lpszTitle: PCWSTR(title.as_ptr()), ulFlags: BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE, ..Default::default() };
-        let pidl = SHBrowseForFolderW(&bi);
-        if pidl.is_null() {
-            return None;
-        }
-        let mut buf = [0u16; 260];
-        let ok = SHGetPathFromIDListW(pidl, &mut buf).as_bool();
-        windows::Win32::System::Com::CoTaskMemFree(Some(pidl as *const _));
-        ok.then(|| String::from_utf16_lossy(&buf[..buf.iter().position(|&c| c == 0).unwrap_or(0)]))
+        let dlg: IFileOpenDialog = CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER).ok()?;
+        let opts = dlg.GetOptions().ok()?;
+        dlg.SetOptions(opts | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM).ok()?;
+        let t = wide(title);
+        let _ = dlg.SetTitle(PCWSTR(t.as_ptr()));
+        // キャンセルは Err
+        dlg.Show(Some(owner)).ok()?;
+        let item = dlg.GetResult().ok()?;
+        let name = item.GetDisplayName(SIGDN_FILESYSPATH).ok()?;
+        let path = name.to_string().ok();
+        CoTaskMemFree(Some(name.0 as *const _));
+        path
     }
 }
 
