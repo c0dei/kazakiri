@@ -254,7 +254,7 @@ impl Ctrls {
                 self.place(id, 0, 0, 0, 0, false);
             }
         }
-        let content_bottom = cy + 30;
+        let content_bottom = cy + 6;
         let btn_bottom = TOP + 32 * buttons.len() as i32 + 8;
         let height = content_bottom.max(btn_bottom) + 8;
         // ラベル
