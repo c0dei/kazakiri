@@ -387,10 +387,14 @@ impl App {
                 let id = if i == 0 { ID_FIND } else { ID_REPL };
                 // 入力中の欄：フォーカスの通知（EN_SETFOCUS / EN_KILLFOCUS）で覚えた値を使う（描画の瞬間の GetFocus には頼らない）
                 let focused = self.findrow_focus_id.get() == id;
-                brush.SetColor(if focused { &theme::accent(self.settings.dark) } else { &self.theme.dim });
-                rt.FillRoundedRectangle(&rrect(x0, y0, x1, y1, 4.0), brush);
-                brush.SetColor(&self.theme.bg);
-                rt.FillRoundedRectangle(&rrect(x0 + 1.0, y0 + 1.0, x1 - 1.0, y1 - 1.0, 3.0), brush);
+                let edge = if focused { theme::accent(self.settings.dark) } else { self.theme.dim };
+                // 枠は、専用のブラシで描く（共有のブラシの色を何度も替える描き方だと、色が崩れることがあった）
+                if let Ok(b) = rt.CreateSolidColorBrush(&edge, None) {
+                    rt.FillRoundedRectangle(&rrect(x0, y0, x1, y1, 4.0), &b);
+                }
+                if let Ok(b) = rt.CreateSolidColorBrush(&self.theme.bg, None) {
+                    rt.FillRoundedRectangle(&rrect(x0 + 1.0, y0 + 1.0, x1 - 1.0, y1 - 1.0, 3.0), &b);
+                }
             }
         }
     }
