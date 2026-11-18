@@ -47,6 +47,10 @@ pub fn line_hashes(doc: &Document) -> Vec<u64> {
 
 /// オプションを反映した、1 行ごとのハッシュ
 pub fn line_hashes_with(doc: &Document, opts: Opts) -> Vec<u64> {
+    // 行索引はバックグラウンドで作られる。途中の行数で比べると、末尾が欠けるので、できあがるのを待つ
+    while !doc.line_count().1 {
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
     let n = doc.line_count().0;
     let mut out = Vec::with_capacity(n as usize);
     for l in 0..n {
