@@ -233,9 +233,6 @@ pub(super) unsafe fn run_inner() -> std::result::Result<(), (&'static str, windo
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
             // 検索ダイアログ：Tab での移動・Enter・Esc を任せる
             let dlg = find_dialog::FIND_DLG.load(Ordering::Relaxed);
-            if dlg != 0 && find_dialog::accelerator(hwnd, &msg) {
-                continue;
-            }
             if dlg != 0 && IsDialogMessageW(HWND(dlg as *mut _), &msg).as_bool() {
                 continue;
             }

@@ -29,7 +29,6 @@ const CLASS: PCWSTR = w!("KazakiriFindDialog");
 
 // コントロールの ID
 /// タブ（押し込み式のラジオボタン）の ID。+ タブの番号
-const ID_TAB0: i32 = 140;
 const ID_FIND: i32 = 101;
 const ID_REPL: i32 = 102;
 const ID_FOLDER: i32 = 103;
@@ -57,6 +56,8 @@ const ID_ENC: i32 = 131;
 const ID_OUT: i32 = 132;
 const ID_EXTRACT: i32 = 127;
 
+/// 内容の上端（DIP）
+const TOP: i32 = 12;
 const TAB_FIND: usize = 0;
 const TAB_REPLACE: usize = 1;
 const TAB_GREP: usize = 2;
@@ -197,13 +198,13 @@ impl Ctrls {
                     unsafe {
                         let _ = SetWindowTextW(self.ctl(id), PCWSTR(label.as_ptr()));
                     }
-                    self.place(id, 344, 44 + 32 * i as i32, 112, 26, true);
+                    self.place(id, 344, TOP + 32 * i as i32, 112, 26, true);
                 }
                 None => self.place(id, 0, 0, 0, 0, false),
             }
         }
         // 左の入力欄
-        let mut y = 44;
+        let mut y = TOP;
         self.place(ID_FIND, 20, y + 18, 306, 200, true);
         y += 52;
         self.place(ID_REPL, 20, y + 18, 306, 200, replace || grep);
@@ -254,15 +255,10 @@ impl Ctrls {
             }
         }
         let content_bottom = cy + 30;
-        let btn_bottom = 44 + 32 * buttons.len() as i32 + 8;
+        let btn_bottom = TOP + 32 * buttons.len() as i32 + 8;
         let height = content_bottom.max(btn_bottom) + 8;
         // ラベル
         self.set_labels(tab);
-        // タブのボタン
-        for i in 0..3 {
-            self.place(ID_TAB0 + i as i32, 8 + 84 * i as i32, 8, 80, 26, true);
-            self.set_checked(ID_TAB0 + i as i32, i == tab);
-        }
         // 大きさ（クライアント領域が 464 × height）
         unsafe {
             let style = WINDOW_STYLE(GetWindowLongW(self.dlg, GWL_STYLE) as u32);
@@ -283,7 +279,7 @@ impl Ctrls {
     /// 入力欄の上のラベル（タブごとに位置と文言が変わる）
     fn set_labels(&self, tab: usize) {
         let grep = tab == TAB_GREP;
-        let mut y = 44;
+        let mut y = TOP;
         let rows: Vec<(i32, &str, i32)> = {
             let mut v = vec![(1001, "検索する文字列(&F)", y)];
             y += 52;
@@ -338,8 +334,9 @@ pub(super) unsafe fn make_child(parent: HWND, class: PCWSTR, text: &str, style: 
     }
 }
 
-/// ダイアログを（なければ作って）開く。`tab` はタブの番号
-pub(super) unsafe fn show(owner: HWND, tab: usize) {
+/// GREP のダイアログを（なければ作って）開く。検索・置換は、本文の上の検索の行（findrow.rs）
+pub(super) unsafe fn show(owner: HWND, _tab: usize) {
+    let tab = TAB_GREP;
     unsafe {
         if FIND_DLG.load(Ordering::Relaxed) == 0 {
             create(owner);
@@ -387,30 +384,6 @@ pub(super) unsafe fn show(owner: HWND, tab: usize) {
         let _ = SetFocus(Some(first));
         // コンボボックスの入力欄の文字を全部選んで、打てばすぐ置き換わるように
         SendMessageW(first, CB_SETEDITSEL, None, Some(LPARAM(-1_isize << 16)));
-    }
-}
-
-/// ダイアログにフォーカスがあるときの Ctrl+F / Ctrl+H / Ctrl+Shift+F（別のタブへ移る）。処理したら true
-pub(super) unsafe fn accelerator(main: HWND, msg: &MSG) -> bool {
-    unsafe {
-        if msg.message != WM_KEYDOWN {
-            return false;
-        }
-        let dlg = HWND(FIND_DLG.load(Ordering::Relaxed) as *mut _);
-        // メッセージの宛先が、ダイアログ自身かその部品（コンボボックスの入力欄など、孫を含む）のとき
-        if dlg.0.is_null() || (msg.hwnd != dlg && !IsChild(dlg, msg.hwnd).as_bool()) {
-            return false;
-        }
-        let ctrl = GetKeyState(VK_CONTROL.0 as i32) < 0;
-        let shift = GetKeyState(VK_SHIFT.0 as i32) < 0;
-        let tab = match (ctrl, shift, msg.wParam.0 as u16) {
-            (true, false, k) if k == VK_F.0 => TAB_FIND,
-            (true, false, k) if k == VK_H.0 => TAB_REPLACE,
-            (true, true, k) if k == VK_F.0 => TAB_GREP,
-            _ => return false,
-        };
-        show(main, tab);
-        true
     }
 }
 
@@ -555,11 +528,6 @@ unsafe fn create(owner: HWND) {
         let check = st(BS_AUTOCHECKBOX as u32 | WS_TABSTOP.0);
         let push = st(BS_PUSHBUTTON as u32 | WS_TABSTOP.0);
         let mut all: Vec<(i32, HWND)> = Vec::new();
-        for (i, name) in ["検索", "置換", "GREP"].iter().enumerate() {
-            let group = if i == 0 { WS_GROUP.0 } else { 0 };
-            let id = ID_TAB0 + i as i32;
-            all.push((id, make_child(dlg, w!("BUTTON"), name, BS_AUTORADIOBUTTON as u32 | BS_PUSHLIKE as u32 | WS_TABSTOP.0 | group, 0, id, font)));
-        }
         for id in [1001, 1002, 1003, 1004] {
             all.push((id, make_child(dlg, w!("STATIC"), "", 0, 0, id, font)));
         }
@@ -607,16 +575,6 @@ unsafe fn create(owner: HWND) {
         CTRLS.with(|c| *c.borrow_mut() = Some(ct));
         FIND_DLG.store(dlg.0 as isize, Ordering::Relaxed);
     }
-}
-
-fn switch_tab(tab: usize) {
-    CTRLS.with(|c| {
-        if let Ok(mut b) = c.try_borrow_mut() {
-            let Some(ct) = b.as_mut() else { return };
-            // 入力した内容はタブをまたいで残す（レイアウトを変えるだけ）
-            ct.layout(tab);
-        }
-    });
 }
 
 fn current_form() -> Option<Form> {
@@ -691,10 +649,6 @@ unsafe extern "system" fn dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                 let id = (wparam.0 & 0xFFFF) as i32;
                 let code = ((wparam.0 >> 16) & 0xFFFF) as u32;
                 // ボタンの押下と、IsDialogMessage が送る IDOK / IDCANCEL（コンボボックスなどからの通知は除く）
-                if code == BN_CLICKED && (ID_TAB0..ID_TAB0 + 3).contains(&id) {
-                    switch_tab((id - ID_TAB0) as usize);
-                    return LRESULT(0);
-                }
                 let is_check = matches!(id, ID_CASE | ID_REGEX | ID_SUBDIR | ID_BACKUP | ID_SELONLY | ID_WORD | ID_GCLOSE | ID_MAXON | ID_ENC | ID_OUT | ID_FOLDER | ID_FILES | ID_MAXVAL);
                 if (code == BN_CLICKED || id == IDOK.0 || id == IDCANCEL.0) && !is_check {
                     on_command(hwnd, id);
