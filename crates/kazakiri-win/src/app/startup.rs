@@ -112,6 +112,12 @@ pub(super) unsafe fn run_inner() -> std::result::Result<(), (&'static str, windo
             dabbrev: None,
             markers: Vec::new(),
             diffview: None,
+            hexview: None,
+            macro_rec: None,
+            macro_skipped: 0,
+            macro_steps: macros::load_macro(),
+            macro_play: None,
+            mark_cache: RefCell::new(None),
             md: None,
             md_hover: false,
             autosave_busy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -151,6 +157,9 @@ pub(super) unsafe fn run_inner() -> std::result::Result<(), (&'static str, windo
             last_csv_delim: ',',
             last_find: String::new(),
             last_filter: String::new(),
+            last_time: String::new(),
+            last_time_goto: String::new(),
+            time_extract: false,
             history: crate::history::History::load(),
             replace_scope: None,
             dlg_scope: None,
@@ -180,6 +189,7 @@ pub(super) unsafe fn run_inner() -> std::result::Result<(), (&'static str, windo
             recent: recent::load(),
             follow: false,
             stick_bottom: false,
+            ext_warned: false,
             layout_cache: RefCell::new(HashMap::new()),
         };
         // 引数のファイルをそれぞれタブで開く
@@ -218,6 +228,7 @@ pub(super) unsafe fn run_inner() -> std::result::Result<(), (&'static str, windo
             app.tray_add();
         }
         app.restart_autosave_timer();
+        SetTimer(Some(app.hwnd), TIMER_WATCH, WATCH_MS, None);
         app.layout_scrollbars();
         APP.with(|a| *a.borrow_mut() = Some(app));
         DragAcceptFiles(hwnd, true);

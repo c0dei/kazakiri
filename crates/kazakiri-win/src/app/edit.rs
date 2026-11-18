@@ -69,6 +69,11 @@ pub(super) enum Pending {
     SaveCloseAll,
 }
 
+/// 長い行（途中までしか読み込まない行）か
+fn is_long_line(s: u64, e: u64) -> bool {
+    e - s > kazakiri_core::document::MAX_LINE_DISPLAY_BYTES as u64
+}
+
 impl App {
     // ---- 状態 ----
 
@@ -413,7 +418,11 @@ impl App {
 
     /// 行頭からの x 座標（横スクロールを含まない）
     pub(super) fn x_of_offset(&self, doc: &Document, pos: u64) -> f32 {
-        let Some((s, _)) = doc.line_of_offset(pos).and_then(|l| doc.line_range(l)) else { return 0.0 };
+        let Some((s, e)) = doc.line_of_offset(pos).and_then(|l| doc.line_range(l)) else { return 0.0 };
+        // 長い行（途中までしか読み込まない）は、1 桁 ≒ 1 バイトとして、行頭からのバイト数で位置を決める（スクロールバーと同じ）
+        if is_long_line(s, e) {
+            return (pos - s) as f32 * self.char_w;
+        }
         let src = doc.decode(&doc.read(s, pos)).encode_utf16().count();
         let Some(l) = doc.lines(doc.line_of_offset(pos).unwrap_or(0), 1).into_iter().next() else { return 0.0 };
         let d = self.display(&l);
@@ -423,6 +432,11 @@ impl App {
 
     /// 行 `line` の中で x 座標に最も近い位置
     pub(super) fn offset_in_line_at_x(&self, doc: &Document, line: u64, x: f32) -> Option<u64> {
+        if let Some((s, e)) = doc.line_range(line).filter(|&(s, e)| is_long_line(s, e)) {
+            // 長い行：x を行頭からのバイト数に直し、文字の境目に合わせる
+            let off = (s + (x.max(0.0) / self.char_w.max(1.0)) as u64).min(e);
+            return Some(doc.prev_char(doc.next_char(off).min(e + 1)).max(s).min(e));
+        }
         let l = doc.lines(line, 1).into_iter().next()?;
         let d = self.display(&l);
         let idx = unsafe { self.unit_at_x(&d.units[..d.shown], x) }.unwrap_or(0);
@@ -443,11 +457,6 @@ impl App {
             self.top = line;
         } else if line >= self.top + vis {
             self.top = line + 1 - vis;
-        }
-        // 長い行（途中までしか読み込まない）の中では、横の位置は合わせない
-        if doc.line_range(line).is_some_and(|(s, e)| e - s > kazakiri_core::document::MAX_LINE_DISPLAY_BYTES as u64) {
-            self.update_scrollbars();
-            return;
         }
         let x = self.x_of_offset(&doc, pos);
         let w = self.editor_w();
@@ -640,6 +649,7 @@ impl App {
                     true
                 }
                 Some(s) => {
+                    self.macro_push(macros::Step::Text(s.clone()));
                     self.type_text(&s, EditKind::Typing);
                     true
                 }

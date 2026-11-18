@@ -93,7 +93,7 @@ pub(super) enum JobDone {
     Grep { id: u64, query: String, root: PathBuf, res: std::result::Result<GrepResult, String>, elapsed: Duration },
 }
 
-fn post(hwnd: isize, msg: u32, done: JobDone) {
+pub(super) fn post(hwnd: isize, msg: u32, done: JobDone) {
     let ptr = Box::into_raw(Box::new(done));
     if unsafe { PostMessageW(Some(HWND(hwnd as *mut _)), msg, WPARAM(0), LPARAM(ptr as isize)) }.is_err() {
         drop(unsafe { Box::from_raw(ptr) });
@@ -383,6 +383,7 @@ impl App {
     }
 
     pub(super) fn cancel_jobs(&mut self) {
+        self.time_extract = false;
         self.cancel_search();
         if let Some(j) = self.rjob.take() {
             j.cancel();
@@ -409,7 +410,9 @@ impl App {
                     let summary = format!("「{query}」 {} 件{more}  {:.2} 秒", group(found.ranges.len() as u64), elapsed.as_secs_f64());
                     self.message = summary.clone();
                     self.results = Some(Results { kind: ResultKind::InDoc { ranges: found.ranges }, sel: 0, top: 0, summary });
-                    if std::mem::take(&mut self.filter_pending) {
+                    if std::mem::take(&mut self.time_extract) {
+                        self.time_extract_to_tab();
+                    } else if std::mem::take(&mut self.filter_pending) {
                         self.filter_to_tab();
                     } else {
                         self.jump_result(0);

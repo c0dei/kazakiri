@@ -71,6 +71,8 @@ mod theme;
 mod view;
 mod edit;
 mod results;
+mod scrollmarks;
+mod timefilter;
 mod tabs;
 mod rect;
 mod dark;
@@ -83,6 +85,8 @@ mod gallery;
 mod chrome;
 mod bookmarks;
 mod diffview;
+mod hexview;
+mod macros;
 mod autosave;
 mod mdview;
 mod markers;
@@ -118,6 +122,12 @@ const TIMER_TIP: usize = 4;
 const TIMER_AUTOSAVE: usize = 6;
 /// ステータスバーのメッセージを、しばらくしたら行数・列数の表示に戻す
 const TIMER_MSG: usize = 7;
+/// ディスク上のファイルが外部で変わっていないかの定期確認
+const TIMER_WATCH: usize = 8;
+/// マクロの再生の続き
+const TIMER_MACRO: usize = 9;
+/// 外部の変更を確認する間隔（ミリ秒）
+const WATCH_MS: u32 = 2000;
 /// メッセージを出しておく秒数
 const MESSAGE_SECS: u32 = 6;
 /// 長い行の横スクロールで取り出す窓の大きさの上限（バイト）。描画の上限（8192 UTF-16 単位）に収まる大きさ
@@ -159,6 +169,12 @@ enum Prompt {
     Sequence,
     /// 行フィルター（検索語に一致した行だけを新しいタブに）
     LineFilter,
+    /// ログの時刻の範囲で絞り込む（一覧に出す／新しいタブに出す）、時刻へ移動
+    TimeFilter,
+    TimeExtract,
+    TimeGoto,
+    /// マクロを繰り返す回数（0 または空は、検索で見つからなくなるまで）
+    MacroRepeat,
     /// 検索バー（本文の右上に浮かせる。Enter で次を検索）
     Find,
     /// 検索・置換バー（2 段。Tab で置換欄へ）
@@ -333,6 +349,15 @@ struct App {
     markers: Vec<markers::Marker>,
     /// 差分表示（左右に並べた比較）
     diffview: Option<diffview::DiffView>,
+    /// スクロールバー横の、検索の一致の印（画素ごとの有無）。キー：(一致の数, 先頭, 末尾, ファイルの大きさと行数, 帯の高さ)
+    mark_cache: RefCell<scrollmarks::MarkCache>,
+    /// マクロ：記録中の手順（記録中だけ Some）、記録できなかった操作の数、記録済みのマクロ、再生中の状態
+    macro_rec: Option<Vec<macros::Step>>,
+    macro_skipped: u32,
+    macro_steps: Vec<macros::Step>,
+    macro_play: Option<macros::Play>,
+    /// 16 進表示（本文の代わりにバイト列を出す）
+    hexview: Option<hexview::HexView>,
     /// Markdown のプレビュー（分割／デザインビュー）
     md: Option<mdview::MdView>,
     /// プレビューのリンクの飛び先をステータスバーに出している
@@ -393,6 +418,10 @@ struct App {
     last_csv_delim: char,
     last_find: String,
     last_filter: String,
+    /// 時刻での絞り込み・移動の、前回の入力。絞り込みの結果を新しいタブに出すか
+    last_time: String,
+    last_time_goto: String,
+    time_extract: bool,
     /// 検索語・置換語の履歴
     history: crate::history::History,
     /// 置換の対象を絞る範囲（複数行を選んで Ctrl+H したとき）
@@ -441,6 +470,8 @@ struct App {
     follow: bool,
     /// 追記を読み込んだら末尾へスクロールする
     stick_bottom: bool,
+    /// 外部で変更された（編集中のため読み込まなかった・削除された）ことを、すでに知らせたか
+    ext_warned: bool,
     /// 行の開始位置 → レイアウト。直前に描いた行だけを持つ
     layout_cache: RefCell<HashMap<u64, CachedLine>>,
 }
@@ -540,7 +571,7 @@ impl App {
                     let (cw, ch) = self.client_size();
                     // 本文の中だけ I ビーム。ツールバー・タブ・行番号・スクロールバー（右の列・下の行）・結果一覧・ステータスバー・機能ボタンは、
                     // ボタンも含めて通常の矢印
-                    let in_text = self.diffview.is_none() && !self.md_hit(x, y) && y >= 0.0 && x >= self.gutter_width() && x < cw && y < ch - self.status_h() - self.panel_h() - self.hbar_h();
+                    let in_text = self.diffview.is_none() && self.hexview.is_none() && !self.md_hit(x, y) && y >= 0.0 && x >= self.gutter_width() && x < cw && y < ch - self.status_h() - self.panel_h() - self.hbar_h();
                     let on_link = self.md_link_hover(x, y);
                     let id = if let Some(c) = self.prompt_cursor(x, y) {
                         c
@@ -558,7 +589,7 @@ impl App {
                 }
                 WM_RBUTTONDOWN => {
                     let (x, y) = self.mouse_pos(lparam);
-                    if self.diffview.is_none() && !self.md_hit(x, y) && y >= 0.0 && y < self.text_height() && x >= self.gutter_width() {
+                    if self.diffview.is_none() && self.hexview.is_none() && !self.md_hit(x, y) && y >= 0.0 && y < self.text_height() && x >= self.gutter_width() {
                         // 選択の外を右クリックしたら、そこへカーソルを移す（選択の中なら、そのまま）
                         let inside = self.doc.clone().and_then(|d| {
                             let off = self.offset_at(&d, x, y)?;
@@ -577,7 +608,7 @@ impl App {
                     let _ = ScreenToClient(self.hwnd, &mut pt);
                     let scale = GetDpiForWindow(self.hwnd) as f32 / 96.0;
                     let (x, y) = (pt.x as f32 / scale, pt.y as f32 / scale - self.chrome_h());
-                    if self.diffview.is_none() && !self.md_hit(x, y) && y >= 0.0 && y < self.text_height() && x >= self.gutter_width() {
+                    if self.diffview.is_none() && self.hexview.is_none() && !self.md_hit(x, y) && y >= 0.0 && y < self.text_height() && x >= self.gutter_width() {
                         (DONE, Some(Deferred::ContextMenu))
                     } else {
                         (None, None)
@@ -651,6 +682,14 @@ impl App {
                 }
                 WM_TIMER if wparam.0 == TIMER_AUTOSAVE => {
                     self.autosave_tick();
+                    (DONE, None)
+                }
+                WM_TIMER if wparam.0 == TIMER_MACRO => {
+                    self.macro_tick();
+                    (DONE, None)
+                }
+                WM_TIMER if wparam.0 == TIMER_WATCH => {
+                    self.watch_tick();
                     (DONE, None)
                 }
                 WM_TIMER if wparam.0 == TIMER_MSG => {
@@ -767,6 +806,13 @@ impl App {
                     self.md_vscroll(code, si.nTrackPos);
                     (DONE, None)
                 }
+                WM_VSCROLL if self.hexview.is_some() => {
+                    let code = SCROLLBAR_COMMAND(loword(wparam.0) as i32);
+                    let mut si = SCROLLINFO { cbSize: size_of::<SCROLLINFO>() as u32, fMask: SIF_TRACKPOS, ..Default::default() };
+                    let _ = GetScrollInfo(self.vbar, SB_CTL, &mut si);
+                    self.hex_vscroll(code, si.nTrackPos);
+                    (DONE, None)
+                }
                 WM_VSCROLL => {
                     let code = SCROLLBAR_COMMAND(loword(wparam.0) as i32);
                     let page = self.visible_lines() as i64;
@@ -814,6 +860,8 @@ impl App {
                     let scale = GetDpiForWindow(self.hwnd) as f32 / 96.0;
                     if self.md_hit(pt.x as f32 / scale, pt.y as f32 / scale - self.chrome_h()) {
                         self.md_wheel(delta);
+                    } else if self.hexview.is_some() {
+                        self.hex_scroll(-delta * 3 / 120);
                     } else if self.diffview.is_some() {
                         self.diff_wheel(pt.x as f32 / scale, -delta * 3 / 120);
                     } else if GetKeyState(VK_CONTROL.0 as i32) < 0 {
@@ -857,6 +905,9 @@ impl App {
                     }
                     if self.md_hit(x, y) {
                         return (DONE, self.md_click(x, y));
+                    }
+                    if self.hexview.is_some() {
+                        return (DONE, None);
                     }
                     if self.diffview.is_some() {
                         self.diff_focus_at(x);

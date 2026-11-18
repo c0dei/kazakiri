@@ -14,7 +14,7 @@ impl App {
         };
         self.font_prop = unsafe { is_proportional(&self.dw, &configured) };
         // CSV 表示で等幅でないフォントなら、列がそろうよう既定の等幅フォントを使う
-        let over = self.font_prop && self.csv.is_some();
+        let over = self.font_prop && (self.csv.is_some() || self.hexview.is_some());
         let format = if over { unsafe { create_format(&self.dw, "", s.font_size) }.unwrap_or(configured) } else { configured };
         self.font_overridden = over;
         let (char_w, line_h) = unsafe { measure(&self.dw, &format) }.unwrap_or((s.font_size * 0.5, (s.font_size * 1.4).ceil()));

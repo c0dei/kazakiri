@@ -79,6 +79,10 @@ pub const ID_MARK_CLEAR: u32 = 866;
 pub const ID_DIFF: u32 = 870;
 pub const ID_SPLIT_VIEW: u32 = 871;
 pub const ID_MD_SPLIT: u32 = 963;
+pub const ID_HEX_VIEW: u32 = 966;
+pub const ID_TIME_FILTER: u32 = 967;
+pub const ID_TIME_EXTRACT: u32 = 968;
+pub const ID_TIME_GOTO: u32 = 969;
 pub const ID_MD_DESIGN: u32 = 964;
 pub const ID_MD_EXPORT: u32 = 965;
 pub const ID_FILTER_LINES: u32 = 872;
@@ -168,6 +172,9 @@ pub const ID_FIND_PREV: u32 = 302;
 pub const ID_CASE: u32 = 303;
 pub const ID_REGEX: u32 = 304;
 pub const ID_GOTO: u32 = 305;
+pub const ID_MACRO_REC: u32 = 330;
+pub const ID_MACRO_PLAY: u32 = 331;
+pub const ID_MACRO_REPEAT: u32 = 332;
 pub const ID_REPLACE: u32 = 306;
 pub const ID_FIND_ALL: u32 = 307;
 pub const ID_GREP: u32 = 308;
@@ -387,6 +394,11 @@ pub unsafe fn build(km: &Keymap) -> Result<Menus> {
         item(km, insert, ID_INS_CR, "CR のみ(&Y)")?;
         item(km, insert, ID_INS_TAB, "タブ(&B)")?;
         popup(edit, insert, "挿入(&I)")?;
+        let mac = CreatePopupMenu()?;
+        item(km, mac, ID_MACRO_REC, "記録の開始／停止(&R)	Ctrl+Shift+R")?;
+        item(km, mac, ID_MACRO_PLAY, "再生(&P)	Ctrl+Shift+E")?;
+        item(km, mac, ID_MACRO_REPEAT, "回数を指定して再生（0 = 見つからなくなるまで）(&N)...")?;
+        popup(edit, mac, "マクロ(&M)")?;
         let clips = CreatePopupMenu()?;
         let w = wide("（履歴なし）");
         AppendMenuW(clips, MF_STRING | MF_GRAYED, 0, PCWSTR(w.as_ptr()))?;
@@ -415,6 +427,9 @@ pub unsafe fn build(km: &Keymap) -> Result<Menus> {
         item(km, search, ID_LONGEST, "最長の行を検索(&2)")?;
         item(km, search, ID_SHORTEST, "最短の行（空行を除く）を検索(&3)")?;
         item(km, search, ID_FREQUENT, "頻出する行を抽出（新しいタブ）(&4)")?;
+        item(km, search, ID_TIME_FILTER, "ログの時刻の範囲で絞り込み（一覧に出す）(&T)...")?;
+        item(km, search, ID_TIME_EXTRACT, "ログの時刻の範囲を新しいタブに抽出...")?;
+        item(km, search, ID_TIME_GOTO, "ログの時刻へ移動...")?;
         item(km, search, ID_FILTER_LINES, "行フィルター（一致した行だけを新しいタブに）(&I)\tCtrl+Shift+L")?;
         sep(search)?;
         // フォルダ内を検索（GREP）
@@ -485,6 +500,7 @@ pub unsafe fn build(km: &Keymap) -> Result<Menus> {
         sep(view)?;
         item(km, view, ID_SPLIT_VIEW, "分割表示（同じファイルを左右に並べて参照）(&P)")?;
         item(km, view, ID_SPLIT_SYNC, "分割表示で同期スクロール(&Q)")?;
+        item(km, view, ID_HEX_VIEW, "16 進表示(&H)	Ctrl+Shift+H")?;
         item(km, view, ID_MD_SPLIT, "Markdown プレビュー（右に並べる）(&V)\tCtrl+Shift+V")?;
         item(km, view, ID_MD_DESIGN, "Markdown デザインビュー（整形して表示）(&G)\tCtrl+Shift+G")?;
         item(km, view, ID_MD_EXPORT, "Markdown を HTML に書き出し(&H)...")?;
@@ -738,7 +754,7 @@ mod id_tests {
             }
         }
         // 単独のコマンドの ID が、範囲の中に入っていないこと
-        let single = [("TOOLBAR", ID_TOOLBAR), ("FKEYS", ID_FKEYS), ("OVERWRITE", ID_OVERWRITE), ("COMPLETE", ID_COMPLETE), ("MODEBAR", ID_MODEBAR), ("COLPICK", ID_COLPICK), ("MARK_CLEAR", ID_MARK_CLEAR), ("DIFF", ID_DIFF), ("SPLIT_VIEW", ID_SPLIT_VIEW), ("FILTER_LINES", ID_FILTER_LINES), ("CSV_MODE", ID_CSV_MODE), ("TSV", ID_TSV), ("DELIM_FIELD", ID_DELIM_FIELD), ("PALETTE", ID_PALETTE)];
+        let single = [("TOOLBAR", ID_TOOLBAR), ("FKEYS", ID_FKEYS), ("OVERWRITE", ID_OVERWRITE), ("COMPLETE", ID_COMPLETE), ("MODEBAR", ID_MODEBAR), ("COLPICK", ID_COLPICK), ("MARK_CLEAR", ID_MARK_CLEAR), ("DIFF", ID_DIFF), ("SPLIT_VIEW", ID_SPLIT_VIEW), ("HEX_VIEW", ID_HEX_VIEW), ("MACRO_REC", ID_MACRO_REC), ("MACRO_PLAY", ID_MACRO_PLAY), ("MACRO_REPEAT", ID_MACRO_REPEAT), ("TIME_FILTER", ID_TIME_FILTER), ("TIME_EXTRACT", ID_TIME_EXTRACT), ("TIME_GOTO", ID_TIME_GOTO), ("FILTER_LINES", ID_FILTER_LINES), ("CSV_MODE", ID_CSV_MODE), ("TSV", ID_TSV), ("DELIM_FIELD", ID_DELIM_FIELD), ("PALETTE", ID_PALETTE)];
         for (n, id) in single {
             for r in &ranges {
                 assert!(!(r.1..r.1 + r.2).contains(&id), "{n} ({id}) が {} の範囲に入っています", r.0);

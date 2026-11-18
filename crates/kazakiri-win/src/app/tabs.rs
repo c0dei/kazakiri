@@ -136,6 +136,7 @@ impl App {
         self.goal_x = t.goal_x;
         self.csv = t.csv;
         self.follow = t.follow;
+        self.ext_warned = false;
         self.stick_bottom = t.stick_bottom;
         self.pending_goto = t.pending_goto;
         self.bookmarks = t.bookmarks;
@@ -148,6 +149,7 @@ impl App {
     /// タブを離れる前の後始末：そのファイルに結び付いた処理や表示をやめる
     fn leave_tab(&mut self) {
         self.diffview = None;
+        self.hexview = None;
         self.cancel_search();
         self.search = None;
         // GREP はファイルに結び付かないので続ける

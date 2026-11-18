@@ -41,9 +41,18 @@ impl App {
             self.invalidate();
             return None;
         }
+        // マクロの再生中は、Esc で中止する
+        if vk == VK_ESCAPE && self.macro_cancel() {
+            return None;
+        }
         let ctrl = unsafe { GetKeyState(VK_CONTROL.0 as i32) } < 0;
         let shift = unsafe { GetKeyState(VK_SHIFT.0 as i32) } < 0;
-        if self.md_key(vk, ctrl) || self.diff_key(vk, ctrl, shift) {
+        unsafe { self.on_key_mods(vk, ctrl, shift) }
+    }
+
+    /// キーの処理の本体（Ctrl・Shift の状態を渡す。マクロの再生もここを通る）
+    pub(super) unsafe fn on_key_mods(&mut self, vk: VIRTUAL_KEY, ctrl: bool, shift: bool) -> Option<Deferred> {
+        if self.md_key(vk, ctrl) || self.hex_key(vk, ctrl) || self.diff_key(vk, ctrl, shift) {
             return None;
         }
         // キー割り当て（keys.ini）。入力欄が開いているときはタブの切り替えだけ効く
@@ -76,6 +85,10 @@ impl App {
                 _ => {}
             }
             return None;
+        }
+        // マクロの記録：編集のキー
+        if matches!(vk, VK_UP | VK_DOWN | VK_LEFT | VK_RIGHT | VK_PRIOR | VK_NEXT | VK_HOME | VK_END | VK_RETURN | VK_BACK | VK_DELETE | VK_TAB) {
+            self.macro_push(macros::Step::Key { vk: vk.0, ctrl, shift });
         }
         match vk {
             VK_ESCAPE => {
@@ -144,7 +157,7 @@ impl App {
             self.invalidate();
             return;
         }
-        if self.diffview.is_some() || self.md_mode() == Some(mdview::MdMode::Design) {
+        if self.diffview.is_some() || self.hexview.is_some() || self.md_mode() == Some(mdview::MdMode::Design) {
             return;
         }
         // 制御文字（Enter, BS, Tab, Esc, Ctrl+?）は WM_KEYDOWN 側で処理済み
@@ -168,6 +181,7 @@ impl App {
             self.prompt_buf().push(c);
             self.find_bar_changed();
         } else {
+            self.macro_push(macros::Step::Text(c.to_string()));
             self.type_text(c.encode_utf8(&mut [0; 4]), EditKind::Typing);
         }
     }

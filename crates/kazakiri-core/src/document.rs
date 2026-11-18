@@ -59,6 +59,19 @@ pub struct Document {
     forced: Option<&'static Encoding>,
     /// 編集後のテキスト。`None` なら元ファイルのまま
     text: Option<Arc<Pieces>>,
+    /// 開いた（読み込んだ）ときのディスク上の更新時刻。外部での変更の検知に使う
+    mtime: Option<std::time::SystemTime>,
+}
+
+/// ディスク上のファイルが、開いたときから変わったか
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiskState {
+    /// 変わっていない（パスのない文書も）
+    Same,
+    /// 大きさか更新時刻が変わった
+    Changed,
+    /// ファイルがなくなった（削除・改名）
+    Missing,
 }
 
 #[derive(Debug, Clone)]
@@ -84,6 +97,7 @@ impl Document {
         let source = Source::open(path)?;
         let mut doc = Self::from_source(source, forced);
         doc.path = Some(path.to_path_buf());
+        doc.mtime = std::fs::metadata(path).and_then(|m| m.modified()).ok();
         Ok(doc)
     }
 
@@ -101,7 +115,8 @@ impl Document {
         };
         let kind = newline_kind(&detected, source.bytes());
         let index = Arc::new(LineIndex::none(source.clone(), kind, detected.bom_len as u64));
-        Ok(Document { path: Some(path.to_path_buf()), source, detected, index, forced, text: None })
+        let mtime = std::fs::metadata(path).and_then(|m| m.modified()).ok();
+        Ok(Document { path: Some(path.to_path_buf()), source, detected, index, forced, text: None, mtime })
     }
 
     pub fn from_bytes(bytes: Vec<u8>) -> Document {
@@ -120,7 +135,7 @@ impl Document {
         };
         let kind = newline_kind(&detected, source.bytes());
         let index = Arc::new(LineIndex::build(source.clone(), kind, detected.bom_len as u64));
-        Document { path: None, source, detected, index, forced, text: None }
+        Document { path: None, source, detected, index, forced, text: None, mtime: None }
     }
 
     /// ディスク上のファイルを確認し、追記だけなら索引を引き継いで読み直す
@@ -130,9 +145,14 @@ impl Document {
         if self.text.is_some() {
             return Ok(Refresh::Unchanged);
         }
-        let new_len = std::fs::metadata(path)?.len();
+        let meta = std::fs::metadata(path)?;
+        let new_len = meta.len();
         let old_len = self.source.len();
         if new_len == old_len {
+            // 大きさが同じでも、更新時刻が変わっていれば中身を書き換えられている（マップには新しい内容が見えるが、索引は古い）
+            if self.mtime.is_some() && meta.modified().ok() != self.mtime {
+                return Ok(Refresh::Replaced);
+            }
             return Ok(Refresh::Unchanged);
         }
         if new_len < old_len || old_len == 0 {
@@ -156,7 +176,24 @@ impl Document {
             index: Arc::new(index),
             forced: self.forced,
             text: None,
+            mtime: meta.modified().ok(),
         }))
+    }
+
+    /// ディスク上のファイルが、開いたときから変わったか（メタデータを読むだけなので軽い。編集中でも使える）。
+    /// 追記で読み込み直した文書は、読み込んだ時点が基準になる
+    pub fn disk_state(&self) -> DiskState {
+        let Some(path) = &self.path else { return DiskState::Same };
+        match std::fs::metadata(path) {
+            Err(_) => DiskState::Missing,
+            Ok(m) => {
+                if m.len() != self.source.len() || (self.mtime.is_some() && m.modified().ok() != self.mtime) {
+                    DiskState::Changed
+                } else {
+                    DiskState::Same
+                }
+            }
+        }
     }
 
     /// 文字コードを指定して開いたか（`None` なら自動判定）
@@ -787,6 +824,18 @@ mod tests {
         assert!(matches!(doc3.refresh().unwrap(), Refresh::Replaced));
         drop(doc3);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn snapping_a_byte_position_to_a_character_boundary() {
+        // 長い行の中の x 座標 → バイト位置は、文字の途中になりうる。prev_char(next_char(位置)) で、その文字の頭に合わせる
+        let doc = Document::from_bytes("aあ😀b".as_bytes().to_vec());
+        ready(&doc);
+        let snap = |off: u64| doc.prev_char(doc.next_char(off));
+        // a=0, あ=1..4, 😀=4..8, b=8
+        for (off, want) in [(0, 0), (1, 1), (2, 1), (3, 1), (4, 4), (5, 4), (7, 4), (8, 8)] {
+            assert_eq!(snap(off), want, "off={off}");
+        }
     }
 
     #[test]

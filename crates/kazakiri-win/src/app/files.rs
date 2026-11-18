@@ -1,5 +1,7 @@
 //! ファイルを開く・開き直す・再読み込み・末尾の追従。
 
+use kazakiri_core::DiskState;
+
 use super::*;
 
 impl App {
@@ -26,6 +28,7 @@ impl App {
                     self.sel = Some((start, start));
                 }
                 self.hit = None;
+                self.ext_warned = false;
                 self.opened_at = Some(Instant::now());
                 self.message.clear();
                 self.check_autosave(&path);
@@ -95,6 +98,34 @@ impl App {
                     self.invalidate();
                 }
             }
+        }
+    }
+
+    /// 外部での変更の定期確認（表示中のタブ）。
+    /// 編集していなければ、変わった内容を自動で読み込む（追記は増えた分だけ）。
+    /// 編集中は内容を守るため読み込まず、一度だけ知らせる
+    pub(super) fn watch_tick(&mut self) {
+        // 追従中は追従のタイマーが読み込む。保存・検索・置換の最中は触らない
+        if self.follow || self.saving.is_some() || self.search.is_some() || self.rjob.is_some() {
+            return;
+        }
+        let Some(doc) = self.doc.clone() else { return };
+        match doc.disk_state() {
+            DiskState::Same => self.ext_warned = false,
+            DiskState::Changed if !self.is_modified() => {
+                self.refresh(true);
+            }
+            DiskState::Changed if !self.ext_warned => {
+                self.ext_warned = true;
+                self.message = "ファイルが外部で変更されました（編集中のため読み込んでいません。保存すると上書きされます）".into();
+                self.invalidate();
+            }
+            DiskState::Missing if !self.ext_warned => {
+                self.ext_warned = true;
+                self.message = "ファイルが削除または移動されました（内容は開いたままです。「名前を付けて保存」で残せます）".into();
+                self.invalidate();
+            }
+            _ => {}
         }
     }
 

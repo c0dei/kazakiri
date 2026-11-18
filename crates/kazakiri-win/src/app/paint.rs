@@ -49,9 +49,9 @@ impl App {
     pub(super) unsafe fn paint(&mut self) -> Result<()> {
         unsafe {
             // CSV 表示のあいだ、等幅でないフォントは、列がそろうよう等幅フォントに替える（CSV でなくなれば戻す）
-            if (self.font_prop && self.csv.is_some()) != self.font_overridden {
+            if (self.font_prop && (self.csv.is_some() || self.hexview.is_some())) != self.font_overridden {
                 self.apply_font();
-                if self.font_overridden {
+                if self.font_overridden && self.hexview.is_none() {
                     self.message = "CSV 表示のあいだは、列をそろえるため等幅フォントにしています".into();
                 }
             }
@@ -121,6 +121,14 @@ impl App {
                 self.draw_status(&rt, brush, fw, h)?;
                 rt.SetTransform(&Matrix3x2::identity());
                 self.draw_tip(&rt, brush, w)?;
+                return rt.EndDraw(None, None);
+            }
+            // 16 進表示：本文の代わりにバイト列を描く
+            if self.hexview.is_some() {
+                rt.SetTransform(&Matrix3x2::translation(0.0, self.chrome_h()));
+                self.draw_hexview(&rt, brush, w, h - self.status_h())?;
+                self.draw_status(&rt, brush, fw, h)?;
+                rt.SetTransform(&Matrix3x2::identity());
                 return rt.EndDraw(None, None);
             }
             // 差分表示：本文の代わりに左右の比較を描く
@@ -236,6 +244,7 @@ impl App {
                     }
                 }
             }
+            self.draw_scroll_marks(&rt, brush, w, text_h);
             if lines.is_empty() && self.doc.is_some() {
                 brush.SetColor(&self.theme.dim);
                 self.draw_str(&rt, brush, "索引作成中…", gutter + 8.0, 0.0, w)?;
@@ -554,6 +563,10 @@ impl App {
             Prompt::Find | Prompt::Replace | Prompt::Palette => (String::new(), String::new()),
             Prompt::GotoLine => ("行へ移動".to_string(), "行番号を入力して Enter".to_string()),
             Prompt::LineFilter => ("行フィルター".to_string(), format!("検索語を入力して Enter。一致した行だけを新しいタブに出します（{}{}）", if self.opts.case_sensitive { "大文字小文字を区別" } else { "大文字小文字を区別しない" }, if self.opts.regex { "・正規表現" } else { "" })),
+            Prompt::TimeFilter => ("時刻の範囲で絞り込み".to_string(), "開始 ～ 終了（例: 2026-11-18 12:00 ～ 13:30、日付だけならその日全体）を入力して Enter。範囲に入る行を一覧に出します".to_string()),
+            Prompt::TimeExtract => ("時刻の範囲を抽出".to_string(), "開始 ～ 終了（例: 2026-11-18 12:00 ～ 13:30）を入力して Enter。範囲に入る行を新しいタブに出します".to_string()),
+            Prompt::MacroRepeat => ("マクロを繰り返し再生".to_string(), "回数を入力して Enter（0 は、検索で見つからなくなるまで。Esc キーで再生を中止できます）".to_string()),
+            Prompt::TimeGoto => ("時刻へ移動".to_string(), "時刻（例: 2026-11-18 12:30:00）を入力して Enter。時刻順のログとして、その時刻以降の最初の行へ移ります".to_string()),
             Prompt::Sequence => ("連番を挿入".to_string(), "開始値,増分,桁数（例: 1,1,3 → 001, 002…）を入力して Enter".to_string()),
             Prompt::Split => ("ファイルを分割".to_string(), "1 ファイルの行数、またはサイズ（例: 1000000 / 512MB / 2GB）を入力して Enter".to_string()),
             Prompt::ColumnFilter => {
@@ -604,7 +617,7 @@ impl App {
             Some((a, b)) => format!("選択 {}   ", human_size(b - a)),
             None => String::new(),
         };
-        let follow = if self.follow { "追従中   " } else { "" };
+        let follow = if self.macro_recording() { "● 記録中   " } else if self.follow { "追従中   " } else { "" };
         let modified = if self.is_modified() { "変更あり   " } else { "" };
         let enc = if doc.forced_encoding().is_some() { format!("{}（指定）", doc.encoding().name()) } else { doc.encoding().name() };
         // カーソルの行と列（列は文字数）

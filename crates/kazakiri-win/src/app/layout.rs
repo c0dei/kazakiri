@@ -244,6 +244,15 @@ impl App {
             self.set_hbar(false);
             return;
         }
+        // 16 進表示：行数（16 バイトずつ）に合わせる
+        if let Some((max, page, pos, _)) = self.hex_scroll_info() {
+            let v = SCROLLINFO { cbSize: size_of::<SCROLLINFO>() as u32, fMask: SIF_RANGE | SIF_PAGE | SIF_POS, nMin: 0, nMax: max, nPage: page, nPos: pos, nTrackPos: 0 };
+            unsafe {
+                SetScrollInfo(self.vbar, SB_CTL, &v, true);
+            }
+            self.set_hbar(false);
+            return;
+        }
         let scale = self.scroll_scale();
         let page = self.visible_lines() as u64;
         let total = self.total_lines();

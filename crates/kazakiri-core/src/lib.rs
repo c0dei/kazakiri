@@ -9,6 +9,7 @@ pub mod encoding;
 pub mod grep;
 pub mod editor;
 pub mod line_index;
+pub mod logtime;
 pub mod markdown;
 mod pieces;
 pub mod search;
@@ -18,7 +19,7 @@ pub mod syntax;
 pub mod textops;
 
 pub use convert::Convert;
-pub use document::{commit_save, Document, EditError, Line, Refresh};
+pub use document::{commit_save, DiskState, Document, EditError, Line, Refresh};
 pub use editor::{EditKind, Editor};
 pub use search::{Direction, FindAll, Query, SearchControl, SearchOptions, SearchOutcome};
 pub use line_index::{Newline, Progress};

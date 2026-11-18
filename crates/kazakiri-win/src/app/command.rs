@@ -4,6 +4,7 @@ use super::*;
 
 impl App {
     pub(super) unsafe fn command(&mut self, id: u32) -> Option<Deferred> {
+        self.macro_note_command(id);
         match id {
             menu::ID_PALETTE => {
                 if self.prompt == Some(Prompt::Palette) {
@@ -42,6 +43,13 @@ impl App {
             menu::ID_BM_LIST => self.list_bookmarks(),
             menu::ID_DIFF => return self.diff_command(),
             menu::ID_SPLIT_VIEW => self.toggle_split_view(),
+            menu::ID_HEX_VIEW => self.hex_toggle(),
+            menu::ID_MACRO_REC => self.macro_toggle_record(),
+            menu::ID_MACRO_PLAY => self.macro_start(Some(1)),
+            menu::ID_MACRO_REPEAT => self.start_prompt(Prompt::MacroRepeat),
+            menu::ID_TIME_FILTER => self.start_prompt(Prompt::TimeFilter),
+            menu::ID_TIME_EXTRACT => self.start_prompt(Prompt::TimeExtract),
+            menu::ID_TIME_GOTO => self.start_prompt(Prompt::TimeGoto),
             menu::ID_MD_SPLIT => self.md_toggle(mdview::MdMode::Split),
             menu::ID_MD_DESIGN => self.md_toggle(mdview::MdMode::Design),
             menu::ID_MD_EXPORT => return Some(Deferred::ExportHtml),

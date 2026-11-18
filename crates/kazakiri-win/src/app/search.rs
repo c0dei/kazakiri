@@ -17,6 +17,7 @@ impl App {
                 return;
             }
         };
+        self.macro_note_find(dir);
         // 起点：直前の一致の次 → 選択の端 → カーソル位置 → 画面先頭
         let from = match (self.hit, self.selection(), self.sel) {
             // 空の一致（正規表現の ^ など）は 1 つ進めないと同じ所で止まり続ける
@@ -81,6 +82,7 @@ impl App {
             }
             o => o,
         };
+        let found = matches!(outcome, SearchOutcome::Found(..));
         match outcome {
             SearchOutcome::Found(s, e) => {
                 self.hit = Some((s, e));
@@ -123,6 +125,8 @@ impl App {
             SearchOutcome::Cancelled => self.message = "検索を中止しました".into(),
         }
         self.invalidate();
+        // マクロの再生中なら、続きへ（見つからなかったときは終える）
+        self.macro_after_search(found);
     }
 
     /// 一致が横にはみ出していたら横スクロールする
@@ -240,6 +244,9 @@ impl App {
             Prompt::Split => "1000000".into(),
             Prompt::Sequence => "1,1,0".into(),
             Prompt::LineFilter => self.last_find.clone(),
+            Prompt::TimeFilter | Prompt::TimeExtract => self.time_prompt_default(),
+            Prompt::TimeGoto => self.last_time_goto.clone(),
+            Prompt::MacroRepeat => "10".into(),
             Prompt::Find | Prompt::Replace => self.last_find.clone(),
             Prompt::Palette => String::new(),
         };
@@ -271,6 +278,22 @@ impl App {
             Some(Prompt::Split) => {
                 let spec = std::mem::take(&mut self.input);
                 self.start_split(&spec);
+            }
+            Some(p @ (Prompt::TimeFilter | Prompt::TimeExtract)) => {
+                let spec = std::mem::take(&mut self.input);
+                self.start_time_filter(&spec, p == Prompt::TimeExtract);
+            }
+            Some(Prompt::MacroRepeat) => {
+                let text = std::mem::take(&mut self.input);
+                match text.trim().replace(',', "").parse::<u32>() {
+                    Ok(0) => self.macro_start(None),
+                    Ok(n) => self.macro_start(Some(n)),
+                    Err(_) => self.message = "回数を数字で入力してください（0 は、見つからなくなるまで）".into(),
+                }
+            }
+            Some(Prompt::TimeGoto) => {
+                let spec = std::mem::take(&mut self.input);
+                self.goto_time(&spec);
             }
             Some(Prompt::LineFilter) => {
                 let text = std::mem::take(&mut self.input);

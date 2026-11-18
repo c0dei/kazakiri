@@ -38,6 +38,11 @@ jobs:
       - name: テスト（コアと画面）
         run: cargo test --release --workspace
 
+      - name: 性能の回帰テスト（128MB の合成ログで、時間の予算を確かめる）
+        env:
+          KAZAKIRI_PERF_SLACK: "3"
+        run: cargo test --release -p kazakiri-core --test perf_guard -- --ignored --nocapture
+
       - name: clippy（警告はエラー扱い）
         run: cargo clippy --release --workspace --all-targets -- -D warnings
 
@@ -77,6 +82,10 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --release -p kazakiri-core
+      - name: 性能の回帰テスト
+        env:
+          KAZAKIRI_PERF_SLACK: "3"
+        run: cargo test --release -p kazakiri-core --test perf_guard -- --ignored --nocapture
       - run: cargo clippy --release -p kazakiri-core -p kazakiri-cli --all-targets -- -D warnings
 
   release:
