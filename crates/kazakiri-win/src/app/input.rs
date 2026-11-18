@@ -12,7 +12,7 @@ impl App {
             return Some(self.command(id));
         }
         // ツールバー・モードバーの、ボタンのないところ
-        if y >= -(self.tb_h() + self.find_h()) && y < 0.0 {
+        if y >= -self.chrome_h() && y < 0.0 && !self.tab_range().contains(&y) {
             return Some(None);
         }
         // ステータスバーの文字コード・改行コード・行桁・タブ幅・挿入／上書き

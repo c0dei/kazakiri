@@ -96,13 +96,15 @@ impl App {
             rt.BeginDraw();
             rt.Clear(Some(&self.theme.bg));
 
-            // いちばん上にタブバー、その下にツールバー（とモードバー）を描き、それより下は丸ごと下へずらして描く
+            // いちばん上にツールバー（1 行目）、その下にタブバー、その下にモードバーを描き、それより下は丸ごと下へずらして描く
             rt.SetTransform(&Matrix3x2::identity());
-            self.draw_tabs(&rt, brush, fw)?;
+            let row1 = if self.tb_h() > 0.0 { super::toolbar::ROW1_H } else { 0.0 };
             if self.tb_h() > 0.0 {
-                rt.SetTransform(&Matrix3x2::translation(0.0, self.tab_h()));
                 self.draw_toolbar(&rt, brush, fw)?;
             }
+            rt.SetTransform(&Matrix3x2::translation(0.0, row1));
+            self.draw_tabs(&rt, brush, fw)?;
+            rt.SetTransform(&Matrix3x2::identity());
             if self.find_h() > 0.0 {
                 rt.SetTransform(&Matrix3x2::translation(0.0, self.tab_h() + self.tb_h()));
                 self.draw_findrow_bg(&rt, brush, fw);
@@ -479,6 +481,8 @@ impl App {
         );
         match self.prompt {
             // 入力欄は、ステータスバーの上の枠（draw_prompt_bar）に出す
+            // 検索・置換の行を開いたままでも、結果のメッセージ（置換した件数など）は見えるように
+            Some(Prompt::Find | Prompt::Replace) if !self.message.is_empty() => self.message.clone(),
             Some(_) => "入力中… Enter で実行、Esc で取消".to_string(),
             None if self.rjob.is_some() => self.job_status(self.rjob.as_ref().unwrap()),
             None if self.saving.is_some() => {

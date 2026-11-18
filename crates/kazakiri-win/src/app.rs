@@ -883,7 +883,7 @@ impl App {
                 WM_MBUTTONDOWN => {
                     let (x, y) = self.mouse_pos(lparam);
                     // タブを中ボタンでクリックしたら閉じる
-                    (DONE, if (-self.chrome_h()..-(self.tb_h() + self.find_h())).contains(&y) { self.tab_click(x, true) } else { None })
+                    (DONE, if self.tab_range().contains(&y) { self.tab_click(x, true) } else { None })
                 }
                 WM_LBUTTONDBLCLK => {
                     let (x, y) = self.mouse_pos(lparam);
@@ -891,7 +891,7 @@ impl App {
                     if let Some(r) = self.chrome_press(x, y) {
                         return (DONE, r);
                     }
-                    if y >= -(self.tb_h() + self.find_h()) && y < 0.0 {
+                    if y >= -self.chrome_h() && y < 0.0 && !self.tab_range().contains(&y) {
                         return (DONE, None);
                     }
                     if y < 0.0 {

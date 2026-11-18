@@ -141,6 +141,12 @@ impl App {
 
     /// ステータスバー（と、あれば機能ボタンの列）の高さ
     /// 本文より上の部分（タブバー＋ツールバー＋モードバー）の高さ。いちばん上がタブバー（タイトルバーを兼ねる）
+    /// タブバーの範囲（本文の座標。上が負）。上から、ツールバーの 1 行目・タブバー・モードバー・検索の行の順
+    pub(super) fn tab_range(&self) -> std::ops::Range<f32> {
+        let bottom = -(self.find_h() + self.mode_h());
+        (bottom - self.tab_h())..bottom
+    }
+
     pub(super) fn chrome_h(&self) -> f32 {
         self.tb_h() + self.tab_h() + self.find_h()
     }

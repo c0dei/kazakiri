@@ -161,7 +161,7 @@ impl App {
         ROW1_H + self.mode_h()
     }
 
-    fn mode_h(&self) -> f32 {
+    pub(super) fn mode_h(&self) -> f32 {
         if self.settings.toolbar && self.settings.modebar && self.modebar_relevant() { MODE_H } else { 0.0 }
     }
 
@@ -317,24 +317,24 @@ impl App {
 
     /// マウスの位置（本文の座標。タブバーの上が負）にあるボタン
     pub(super) fn hover_at(&self, x: f32, y: f32) -> Option<Hover> {
-        let tb = self.tb_h();
-        // 検索・置換の行（モードバーの下）の分だけ、ツールバーの下端が上にずれる
-        let fh = self.find_h();
-        // いちばん上がタブバー、その下がツールバー（1 行目）とモードバー（2 行目）
-        if (-(self.tab_h() + tb + fh)..-(tb + fh)).contains(&y) {
+        let (tb, fh, mh) = (self.tb_h(), self.find_h(), self.mode_h());
+        // 上から、ツールバー（1 行目）・タブバー・モードバー・検索の行
+        if self.tab_range().contains(&y) {
             return self.tab_hover(x);
         }
-        if tb > 0.0 && (-(tb + fh)..-fh).contains(&y) {
-            // 上の行はツールバー、下の行はモードバー
-            if y < -(fh + self.mode_h()) {
+        if tb > 0.0 {
+            let tabs_top = self.tab_range().start;
+            if (tabs_top - ROW1_H..tabs_top).contains(&y) {
                 return self.tool_boxes().into_iter().find(|&(x0, x1, _)| x >= x0 && x < x1).map(|(_, _, i)| Hover::Tool(i));
             }
-            if let Some((x0, x1)) = self.colpick_box() {
-                if x >= x0 && x < x1 {
-                    return Some(Hover::ColPick);
+            if mh > 0.0 && (-(fh + mh)..-fh).contains(&y) {
+                if let Some((x0, x1)) = self.colpick_box() {
+                    if x >= x0 && x < x1 {
+                        return Some(Hover::ColPick);
+                    }
                 }
+                return self.mode_boxes().into_iter().find(|&(x0, x1, _)| x >= x0 && x < x1).map(|(_, _, i)| Hover::Mode(i));
             }
-            return self.mode_boxes().into_iter().find(|&(x0, x1, _)| x >= x0 && x < x1).map(|(_, _, i)| Hover::Mode(i));
         }
         let (_, h) = self.client_size();
         let w = self.full_w();
@@ -435,7 +435,7 @@ impl App {
             let tw = self.ui_text_width(&units)?;
             let (bw, bh) = (tw + 16.0, self.ui_line_h + 8.0);
             let x = x0.min((w - bw - 4.0).max(0.0));
-            let y = self.tab_h() + self.tb_h() + 4.0 - if *second_row { 0.0 } else { self.mode_h() };
+            let y = if *second_row { self.tab_h() + self.tb_h() + 4.0 } else { ROW1_H + 4.0 };
             brush.SetColor(&t.dim);
             rt.FillRoundedRectangle(&rrect(x, y, x + bw, y + bh, 4.0), brush);
             brush.SetColor(&t.panel_bg);

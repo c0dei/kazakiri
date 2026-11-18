@@ -474,7 +474,7 @@ unsafe extern "system" fn edit_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam
                 }
                 // ファンクションキーや Ctrl・Alt の組み合わせは、アプリの操作へ渡す（入力欄が自分で使うものは除く）
                 let function = (VK_F1.0..=VK_F12.0).contains(&vk.0);
-                let native = matches!(vk, VK_A | VK_C | VK_V | VK_X | VK_Z | VK_Y | VK_BACK | VK_DELETE | VK_LEFT | VK_RIGHT | VK_HOME | VK_END | VK_INSERT) && !alt;
+                let native = matches!(vk, VK_A | VK_C | VK_V | VK_X | VK_BACK | VK_DELETE | VK_LEFT | VK_RIGHT | VK_HOME | VK_END | VK_INSERT) && !alt;
                 if (function || ((ctrl || alt) && !native)) && !matches!(vk, VK_CONTROL | VK_MENU | VK_SHIFT) {
                     let _ = PostMessageW(Some(main), msg, wparam, lparam);
                     return LRESULT(0);
