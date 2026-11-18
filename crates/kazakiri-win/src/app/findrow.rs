@@ -165,7 +165,7 @@ impl App {
             let push = BS_OWNERDRAW as u32 | WS_TABSTOP.0;
             let mk = |class: PCWSTR, text: &str, style: u32, id: i32| (id, make_child(self.hwnd, class, text, style, 0, id, font));
             let all = vec![
-                mk(w!("STATIC"), "検索", 0, ID_LABEL),
+                mk(w!("STATIC"), "検索", 0x200 /* SS_CENTERIMAGE */, ID_LABEL),
                 mk(w!("EDIT"), "", edit, ID_FIND),
                 mk(w!("BUTTON"), "Aa", toggle, ID_CASE),
                 mk(w!("BUTTON"), ".*", toggle, ID_REGEX),
@@ -173,7 +173,7 @@ impl App {
                 mk(w!("BUTTON"), "↑ 前へ", push, ID_PREV),
                 mk(w!("BUTTON"), "↓ 次へ", push, ID_NEXT),
                 mk(w!("BUTTON"), "✕", push, ID_CLOSE),
-                mk(w!("STATIC"), "置換", 0, ID_RLABEL),
+                mk(w!("STATIC"), "置換", 0x200 /* SS_CENTERIMAGE */, ID_RLABEL),
                 mk(w!("EDIT"), "", edit, ID_REPL),
                 mk(w!("BUTTON"), "置換", push, ID_ONE),
                 mk(w!("BUTTON"), "すべて置換", push, ID_ALL),
@@ -251,7 +251,16 @@ impl App {
                 let ex = 52.0;
                 place(ID_LABEL, 12.0, 36.0, 0);
                 // 入力欄：枠（背景に自前で描く）の内側に、文字の高さで置く
-                let th = self.ui_line_h;
+                // 標準の入力欄は文字を上から描くので、高さは実際の文字の高さ（GDI）にして、枠の中央に置く
+                let th = {
+                    let hdc = GetDC(Some(self.hwnd));
+                    let old = SelectObject(hdc, HGDIOBJ(self.findrow_font.get().0));
+                    let mut tm = TEXTMETRICW::default();
+                    let _ = GetTextMetricsW(hdc, &mut tm);
+                    SelectObject(hdc, old);
+                    ReleaseDC(Some(self.hwnd), hdc);
+                    if tm.tmHeight > 0 { tm.tmHeight as f32 / scale } else { self.ui_line_h }
+                };
                 let place_edit = |id: i32, row: i32| {
                     let ty = 5.0 + (26.0 - th) / 2.0;
                     let _ = SetWindowPos(fr.h(id), None, s(ex + 6.0), y0 + row * row_h + s(ty), s(edit_w - 12.0), s(th), SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
