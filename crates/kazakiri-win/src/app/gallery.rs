@@ -57,6 +57,7 @@ pub fn run() {
         RegisterClassW(&WNDCLASSW { lpfnWndProc: Some(card_proc), hInstance: instance.into(), hCursor: cursor, lpszClassName: card_class, ..Default::default() });
         let title = wide(&format!("標準部品ギャラリー  ({})", option_env!("GITHUB_SHA").map_or("local", |s| s.get(..7).unwrap_or(s))));
         let Ok(hwnd) = CreateWindowExW(WINDOW_EX_STYLE(0), main_class, PCWSTR(title.as_ptr()), WS_OVERLAPPEDWINDOW | WS_VISIBLE | WS_CLIPCHILDREN, 40, 40, 1000, 900, None, None, Some(instance.into()), None) else { return };
+        set_window_icon(hwnd);
         build(hwnd);
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {

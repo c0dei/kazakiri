@@ -320,6 +320,7 @@ unsafe fn create(owner: HWND) {
         ) else {
             return;
         };
+        set_window_icon(dlg);
         let dpi = GetDpiForWindow(dlg).max(96);
         let scale = dpi as f32 / 96.0;
         let p = |v: i32| (v as f32 * scale).round() as i32;

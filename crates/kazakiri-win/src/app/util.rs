@@ -2,6 +2,21 @@
 
 use super::*;
 
+/// タイトルバー・タスクバー・Alt+Tab 用に、アプリのアイコン（リソース ID 1）をウィンドウへ設定する。
+/// トップレベルのウィンドウを作ったら、必ずこれを呼ぶ（アイコンを差し替えるときも、この 1 か所で足りる）。
+pub(super) unsafe fn set_window_icon(hwnd: HWND) {
+    unsafe {
+        let Ok(instance) = GetModuleHandleW(None) else { return };
+        let dpi = GetDpiForWindow(hwnd).max(96);
+        for (kind, metric) in [(ICON_SMALL, SM_CXSMICON), (ICON_BIG, SM_CXICON)] {
+            let size = GetSystemMetricsForDpi(metric, dpi);
+            if let Ok(icon) = LoadImageW(Some(instance.into()), PCWSTR(std::ptr::without_provenance::<u16>(1)), IMAGE_ICON, size, size, LR_DEFAULTCOLOR) {
+                SendMessageW(hwnd, WM_SETICON, Some(WPARAM(kind as usize)), Some(LPARAM(icon.0 as isize)));
+            }
+        }
+    }
+}
+
 /// 描画する UTF-16 列と、そのうち本文の長さ（省略記号を除く）
 pub(super) fn render_units(line: &Line) -> (Vec<u16>, usize) {
     let mut units: Vec<u16> = line.text.encode_utf16().take(MAX_RENDER_UNITS).collect();

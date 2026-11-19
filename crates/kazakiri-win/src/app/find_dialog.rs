@@ -512,6 +512,7 @@ unsafe fn create(owner: HWND) {
         ) else {
             return;
         };
+        set_window_icon(dlg);
         let dpi = GetDpiForWindow(dlg).max(96);
         let scale = dpi as f32 / 96.0;
         // 画面の標準のメッセージ用フォント
