@@ -307,6 +307,8 @@ impl App {
         match id {
             menu::ID_WRAP => self.settings.wrap,
             menu::ID_WHITESPACE => self.settings.whitespace,
+            menu::ID_FIND => self.prompt == Some(Prompt::Find),
+            menu::ID_REPLACE => self.prompt == Some(Prompt::Replace),
             menu::ID_CSV => self.csv.is_some(),
             menu::ID_DARK => self.settings.dark,
             menu::ID_MD_SPLIT => self.md_mode() == Some(mdview::MdMode::Split),
