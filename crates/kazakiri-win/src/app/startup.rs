@@ -33,6 +33,7 @@ pub(super) unsafe fn run_inner() -> std::result::Result<(), (&'static str, windo
             None,
         )
         .map_err(|e| ("CreateWindow", e))?;
+        set_window_icon(hwnd);
         // スクロールバーは子ウィンドウ（標準のスクロールバーは、タブバーやツールバーの高さまで伸びてしまうため）
         let make_bar = |style: i32| CreateWindowExW(WINDOW_EX_STYLE(0), w!("SCROLLBAR"), PCWSTR::null(), WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WINDOW_STYLE(style as u32), 0, 0, 16, 16, Some(hwnd), None, Some(instance.into()), None);
         let vbar = make_bar(SBS_VERT).map_err(|e| ("CreateScrollBar", e))?;

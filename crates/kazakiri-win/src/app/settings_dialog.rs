@@ -1085,13 +1085,7 @@ unsafe fn create(owner: HWND) {
         };
         let dpi = GetDpiForWindow(dlg).max(96);
         let scale = dpi as f32 / 96.0;
-        // タイトルバーに、アプリのアイコン
-        for (kind, metric) in [(ICON_SMALL, SM_CXSMICON), (ICON_BIG, SM_CXICON)] {
-            let size = GetSystemMetricsForDpi(metric, dpi);
-            if let Ok(icon) = LoadImageW(Some(instance.into()), PCWSTR(std::ptr::without_provenance::<u16>(1)), IMAGE_ICON, size, size, LR_DEFAULTCOLOR) {
-                SendMessageW(dlg, WM_SETICON, Some(WPARAM(kind as usize)), Some(LPARAM(icon.0 as isize)));
-            }
-        }
+        set_window_icon(dlg);
         let mut ncm = NONCLIENTMETRICSW { cbSize: std::mem::size_of::<NONCLIENTMETRICSW>() as u32, ..Default::default() };
         let font = if SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS.0, ncm.cbSize, Some(&mut ncm as *mut _ as *mut _), 0, dpi).is_ok() {
             CreateFontIndirectW(&ncm.lfMessageFont)
