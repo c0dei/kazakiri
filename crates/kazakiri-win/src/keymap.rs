@@ -34,6 +34,8 @@ const COMMANDS: &[(&str, u32)] = &[
     ("time_filter", ID_TIME_FILTER),
     ("time_extract", ID_TIME_EXTRACT),
     ("time_goto", ID_TIME_GOTO),
+    ("level_filter", ID_LEVEL_FILTER),
+    ("level_extract", ID_LEVEL_EXTRACT),
     ("md_preview", ID_MD_SPLIT),
     ("md_design", ID_MD_DESIGN),
     ("mark_1", ID_MARK_BASE),

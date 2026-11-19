@@ -566,6 +566,8 @@ impl App {
             Prompt::TimeFilter => ("時刻の範囲で絞り込み".to_string(), "開始 ～ 終了（例: 2026-11-18 12:00 ～ 13:30、日付だけならその日全体）を入力して Enter。範囲に入る行を一覧に出します".to_string()),
             Prompt::TimeExtract => ("時刻の範囲を抽出".to_string(), "開始 ～ 終了（例: 2026-11-18 12:00 ～ 13:30）を入力して Enter。範囲に入る行を新しいタブに出します".to_string()),
             Prompt::MacroRepeat => ("マクロを繰り返し再生".to_string(), "回数を入力して Enter（0 は、検索で見つからなくなるまで。Esc キーで再生を中止できます）".to_string()),
+            Prompt::LevelFilter => ("ログレベルで絞り込み".to_string(), "レベル（例: ERROR,WARN / >=WARN）を入力して Enter。該当する行（レベルのない続きの行も）を一覧に出します".to_string()),
+            Prompt::LevelExtract => ("ログレベルで抽出".to_string(), "レベル（例: ERROR,WARN / >=WARN）を入力して Enter。該当する行を新しいタブに出します".to_string()),
             Prompt::TimeGoto => ("時刻へ移動".to_string(), "時刻（例: 2026-11-18 12:30:00）を入力して Enter。時刻順のログとして、その時刻以降の最初の行へ移ります".to_string()),
             Prompt::Sequence => ("連番を挿入".to_string(), "開始値,増分,桁数（例: 1,1,3 → 001, 002…）を入力して Enter".to_string()),
             Prompt::Split => ("ファイルを分割".to_string(), "1 ファイルの行数、またはサイズ（例: 1000000 / 512MB / 2GB）を入力して Enter".to_string()),

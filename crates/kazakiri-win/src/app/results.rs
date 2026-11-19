@@ -140,7 +140,8 @@ impl App {
     }
 
     pub(super) fn in_panel(&self, y: f32) -> bool {
-        let top = self.client_size().1 - self.status_h() - self.panel_h();
+        // y は、見出し行の固定分を引いた位置。描画（draw_panel）は本文の高さ（横スクロールバー分を除く）の下から始まる
+        let top = self.text_height();
         self.panel_h() > 0.0 && y >= top && y < top + self.panel_h()
     }
 
@@ -593,7 +594,7 @@ impl App {
     // ---- パネルのマウス操作 ----
 
     pub(super) fn panel_click(&mut self, y: f32) -> Option<Deferred> {
-        let top = self.client_size().1 - self.status_h() - self.panel_h();
+        let top = self.text_height();
         let row = ((y - top - 2.0) / self.line_h).floor() as i64 - 1;
         if row < 0 {
             return None; // 見出しの行
@@ -603,11 +604,43 @@ impl App {
         if i < r.len() { self.jump_result(i) } else { None }
     }
 
+    /// 結果一覧のスクロールバーの範囲と位置を合わせる。一覧が表示行数に収まるときは隠す
+    pub(super) fn update_panel_bar(&self) {
+        let (len, top) = self.results.as_ref().map_or((0, 0), |r| (r.len(), r.top));
+        let page = self.panel_rows();
+        let show = len > page && self.panel_h() > 0.0;
+        let v = SCROLLINFO { cbSize: size_of::<SCROLLINFO>() as u32, fMask: SIF_RANGE | SIF_PAGE | SIF_POS, nMin: 0, nMax: len.saturating_sub(1).min(i32::MAX as usize) as i32, nPage: page as u32, nPos: top.min(i32::MAX as usize) as i32, nTrackPos: 0 };
+        unsafe {
+            if show {
+                SetScrollInfo(self.pbar, SB_CTL, &v, true);
+            }
+            let _ = ShowWindow(self.pbar, if show { SW_SHOWNOACTIVATE } else { SW_HIDE });
+        }
+    }
+
+    pub(super) fn panel_vscroll(&mut self, code: SCROLLBAR_COMMAND, track: i32) {
+        let page = self.panel_rows() as i64;
+        match code {
+            SB_LINEUP => self.panel_scroll(-1),
+            SB_LINEDOWN => self.panel_scroll(1),
+            SB_PAGEUP => self.panel_scroll(-page),
+            SB_PAGEDOWN => self.panel_scroll(page),
+            SB_TOP => self.panel_scroll(i64::MIN / 2),
+            SB_BOTTOM => self.panel_scroll(i64::MAX / 2),
+            SB_THUMBTRACK | SB_THUMBPOSITION => {
+                let cur = self.results.as_ref().map_or(0, |r| r.top as i64);
+                self.panel_scroll(track as i64 - cur);
+            }
+            _ => {}
+        }
+    }
+
     pub(super) fn panel_scroll(&mut self, rows: i64) {
         let visible = self.panel_rows();
         if let Some(r) = self.results.as_mut() {
             let max = r.len().saturating_sub(visible) as i64;
             r.top = (r.top as i64 + rows).clamp(0, max) as usize;
+            self.update_panel_bar();
             self.invalidate();
         }
     }

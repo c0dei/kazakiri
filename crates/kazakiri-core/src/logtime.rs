@@ -182,9 +182,15 @@ fn push_block(out: &mut Vec<Block>, b: Block) {
 /// 範囲に入る行（と、その続きの行）を、連続した行のまとまりごとの範囲 [先頭行の頭, 最後の行の末尾) で返す。
 /// 戻り値の 2 つ目は、範囲に入った行の数。`limit` はまとまりの数の上限。行索引ができあがっていないときは Err
 pub fn filter_time(doc: &Document, range: TimeRange, limit: usize, ctl: &SearchControl) -> Result<(FindAll, u64), String> {
+    filter_records(doc, limit, ctl, |text| parse_timestamp(text).map(|t| range.contains(t)))
+}
+
+/// 行を「記録の先頭」と「続きの行」に分けて絞り込む共通の走査。`classify` は、記録の先頭なら Some(残すか)、
+/// 続きの行（時刻やレベルのない行）なら None を返す。続きの行は、直前の記録の先頭と同じ扱いにする
+pub(crate) fn filter_records(doc: &Document, limit: usize, ctl: &SearchControl, classify: impl Fn(&str) -> Option<bool> + Sync) -> Result<(FindAll, u64), String> {
     let (count, exact) = doc.line_count();
     if !exact {
-        return Err("索引の作成中は時刻での絞り込みを使えません".into());
+        return Err("索引の作成中は絞り込みを使えません".into());
     }
     const CHUNK: u64 = 20_000;
     let chunks: Vec<(usize, usize)> = (0..count.div_ceil(CHUNK)).map(|i| ((i * CHUNK) as usize, ((i + 1) * CHUNK).min(count) as usize)).collect();
@@ -203,8 +209,8 @@ pub fn filter_time(doc: &Document, range: TimeRange, limit: usize, ctl: &SearchC
             let mut c = Chunk::default();
             let mut cur: Option<bool> = None;
             for line in doc.lines(a as u64, b - a) {
-                if let Some(t) = parse_timestamp(&line.text) {
-                    cur = Some(range.contains(t));
+                if let Some(keep) = classify(&line.text) {
+                    cur = Some(keep);
                 }
                 let blk = Block { l0: line.number, l1: line.number, s: line.start, e: line.end };
                 match cur {

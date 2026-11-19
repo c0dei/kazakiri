@@ -38,6 +38,8 @@ pub(super) unsafe fn run_inner() -> std::result::Result<(), (&'static str, windo
         let make_bar = |style: i32| CreateWindowExW(WINDOW_EX_STYLE(0), w!("SCROLLBAR"), PCWSTR::null(), WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WINDOW_STYLE(style as u32), 0, 0, 16, 16, Some(hwnd), None, Some(instance.into()), None);
         let vbar = make_bar(SBS_VERT).map_err(|e| ("CreateScrollBar", e))?;
         let hbar = make_bar(SBS_HORZ).map_err(|e| ("CreateScrollBar", e))?;
+        let pbar = make_bar(SBS_VERT).map_err(|e| ("CreateScrollBar", e))?;
+        let _ = ShowWindow(pbar, SW_HIDE);
         crumb("window created");
         let status = App::create_status(hwnd, instance.into());
         crumb("status created");
@@ -69,6 +71,7 @@ pub(super) unsafe fn run_inner() -> std::result::Result<(), (&'static str, windo
             hwnd,
             vbar,
             hbar,
+            pbar,
             status,
             status_placed: Cell::new([0; 3]),
             status_sig: RefCell::new(String::new()),
@@ -83,7 +86,7 @@ pub(super) unsafe fn run_inner() -> std::result::Result<(), (&'static str, windo
             findrow_focus_id: Cell::new(0),
             findrow_frames: Cell::new([(0.0, 0.0, 0.0, 0.0); 2]),
             hbar_on: Cell::new(true),
-            sb_placed: Cell::new([0; 6]),
+            sb_placed: Cell::new([0; 8]),
             d2d,
             dw,
             ui_format,
@@ -160,6 +163,7 @@ pub(super) unsafe fn run_inner() -> std::result::Result<(), (&'static str, windo
             last_filter: String::new(),
             last_time: String::new(),
             last_time_goto: String::new(),
+            last_level: String::new(),
             time_extract: false,
             history: crate::history::History::load(),
             replace_scope: None,

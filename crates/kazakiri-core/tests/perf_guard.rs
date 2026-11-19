@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use kazakiri_core::loglevel::{filter_level, LevelSpec};
 use kazakiri_core::logtime::{filter_time, TimeRange};
 use kazakiri_core::{Document, EditKind, Editor, Query, SearchControl, SearchOptions};
 
@@ -130,6 +131,12 @@ fn large_file_operations_stay_within_budget() {
     let t = Instant::now();
     let (found, n) = filter_time(&doc, range, 1_000_000, &ctl).unwrap();
     g.check("時刻の範囲で絞り込み", t.elapsed(), 1.0);
+    assert!(n > 0 && !found.ranges.is_empty());
+
+    // ログレベルでの絞り込み
+    let t = Instant::now();
+    let (found, n) = filter_level(&doc, LevelSpec::parse(">=WARN").unwrap(), 1_000_000, &ctl).unwrap();
+    g.check("ログレベルで絞り込み", t.elapsed(), 1.0);
     assert!(n > 0 && !found.ranges.is_empty());
 
     // すべて置換 → 取り消し → 保存

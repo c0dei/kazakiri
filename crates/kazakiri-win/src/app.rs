@@ -173,6 +173,9 @@ enum Prompt {
     TimeFilter,
     TimeExtract,
     TimeGoto,
+    /// ログレベルで絞り込む（一覧に出す／新しいタブに出す）
+    LevelFilter,
+    LevelExtract,
     /// マクロを繰り返す回数（0 または空は、検索で見つからなくなるまで）
     MacroRepeat,
     /// 検索バー（本文の右上に浮かせる。Enter で次を検索）
@@ -283,6 +286,8 @@ struct App {
     /// 縦・横のスクロールバー（子ウィンドウ。標準のスクロールバーはタイトルバーまで伸びるので、本文の部分だけに置く）
     vbar: HWND,
     hbar: HWND,
+    /// 結果一覧の縦スクロールバー（一覧が表示行数より長いときだけ出す）
+    pbar: HWND,
     /// ステータスバー（標準の部品。chrome.rs）と、その中身の控え
     status: HWND,
     status_placed: Cell<[i32; 3]>,
@@ -303,7 +308,7 @@ struct App {
     /// 横のスクロールバーを出しているか
     hbar_on: Cell<bool>,
     /// 直前に置いたスクロールバーの位置（変わっていなければ、置き直さない）
-    sb_placed: Cell<[i32; 6]>,
+    sb_placed: Cell<[i32; 8]>,
     d2d: ID2D1Factory,
     dw: IDWriteFactory,
     format: IDWriteTextFormat,
@@ -421,6 +426,7 @@ struct App {
     /// 時刻での絞り込み・移動の、前回の入力。絞り込みの結果を新しいタブに出すか
     last_time: String,
     last_time_goto: String,
+    last_level: String,
     time_extract: bool,
     /// 検索語・置換語の履歴
     history: crate::history::History,
@@ -799,6 +805,13 @@ impl App {
                     (DONE, None)
                 }
                 WM_COMMAND => (DONE, self.command(loword(wparam.0))),
+                WM_VSCROLL if lparam.0 == self.pbar.0 as isize => {
+                    let code = SCROLLBAR_COMMAND(loword(wparam.0) as i32);
+                    let mut si = SCROLLINFO { cbSize: size_of::<SCROLLINFO>() as u32, fMask: SIF_TRACKPOS, ..Default::default() };
+                    let _ = GetScrollInfo(self.pbar, SB_CTL, &mut si);
+                    self.panel_vscroll(code, si.nTrackPos);
+                    (DONE, None)
+                }
                 WM_VSCROLL if self.md_mode() == Some(mdview::MdMode::Design) => {
                     let code = SCROLLBAR_COMMAND(loword(wparam.0) as i32);
                     let mut si = SCROLLINFO { cbSize: size_of::<SCROLLINFO>() as u32, fMask: SIF_TRACKPOS, ..Default::default() };

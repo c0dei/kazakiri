@@ -3,6 +3,8 @@
 //! 直前の時刻のある行の続きとして、一緒に出す。一覧の 1 件は「範囲に入る連続した行のまとまり」。
 //! 時刻へ移動は、時刻順に並んだログとして二分探索するので、数GB でも一瞬。
 
+use kazakiri_core::loglevel::{self, LevelSpec};
+use kazakiri_core::FindAll;
 use kazakiri_core::logtime::{self, TimeRange};
 
 use super::results::{JobKind, ResultKind};
@@ -19,7 +21,9 @@ impl App {
 
     /// 時刻の範囲で絞り込む。`extract` なら、結果を新しいタブに出す
     pub(super) fn start_time_filter(&mut self, spec: &str, extract: bool) {
-        let Some(doc) = self.doc.clone() else { return };
+        if self.doc.is_none() {
+            return;
+        }
         let range = match TimeRange::parse(spec) {
             Ok(r) => r,
             Err(e) => {
@@ -28,6 +32,30 @@ impl App {
             }
         };
         self.last_time = spec.trim().to_string();
+        let label = format!("時刻 {}", self.last_time);
+        self.start_record_filter(label, extract, move |doc, ctl| logtime::filter_time(doc, range, 1_000_000, ctl));
+    }
+
+    /// ログレベルで絞り込む。`extract` なら、結果を新しいタブに出す
+    pub(super) fn start_level_filter(&mut self, spec: &str, extract: bool) {
+        if self.doc.is_none() {
+            return;
+        }
+        let level = match LevelSpec::parse(spec) {
+            Ok(l) => l,
+            Err(e) => {
+                self.message = e;
+                return self.invalidate();
+            }
+        };
+        self.last_level = spec.trim().to_string();
+        let label = format!("レベル {}", self.last_level);
+        self.start_record_filter(label, extract, move |doc, ctl| loglevel::filter_level(doc, level, 1_000_000, ctl));
+    }
+
+    /// 時刻・レベルの絞り込みを、別のスレッドで走らせて、結果を一覧に出す
+    fn start_record_filter(&mut self, label: String, extract: bool, job: impl FnOnce(&Document, &SearchControl) -> std::result::Result<(FindAll, u64), String> + Send + 'static) {
+        let Some(doc) = self.doc.clone() else { return };
         self.cancel_jobs();
         let id = self.next_job;
         self.next_job += 1;
@@ -35,12 +63,11 @@ impl App {
         self.rjob = Some(ResultsJob { id, started: Instant::now(), what: JobKind::FindAll { ctl: ctl.clone(), total: doc.line_count().0, replace: false } });
         self.time_extract = extract;
         let hwnd = self.hwnd.0 as isize;
-        let text = self.last_time.clone();
         std::thread::spawn(move || {
             let t = Instant::now();
-            match logtime::filter_time(&doc, range, 1_000_000, &ctl) {
+            match job(&doc, &ctl) {
                 Ok((found, lines)) => {
-                    let query = format!("時刻 {text}（{} 行）", group(lines));
+                    let query = format!("{label}（{} 行）", group(lines));
                     results::post(hwnd, results::WM_RESULTS_DONE, JobDone::FindAll { id, query, found, elapsed: t.elapsed() })
                 }
                 Err(e) => results::post(hwnd, results::WM_RESULTS_DONE, JobDone::FilterFailed { id, message: e }),

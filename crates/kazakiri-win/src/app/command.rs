@@ -50,6 +50,8 @@ impl App {
             menu::ID_TIME_FILTER => self.start_prompt(Prompt::TimeFilter),
             menu::ID_TIME_EXTRACT => self.start_prompt(Prompt::TimeExtract),
             menu::ID_TIME_GOTO => self.start_prompt(Prompt::TimeGoto),
+            menu::ID_LEVEL_FILTER => self.start_prompt(Prompt::LevelFilter),
+            menu::ID_LEVEL_EXTRACT => self.start_prompt(Prompt::LevelExtract),
             menu::ID_MD_SPLIT => self.md_toggle(mdview::MdMode::Split),
             menu::ID_MD_DESIGN => self.md_toggle(mdview::MdMode::Design),
             menu::ID_MD_EXPORT => return Some(Deferred::ExportHtml),

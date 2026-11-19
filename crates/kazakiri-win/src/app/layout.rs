@@ -235,6 +235,7 @@ impl App {
     pub(super) fn update_scrollbars(&self) {
         // タブの切り替えなどで、モードバーが出入りして本文の上端が動くことがあるので、スクロールバーを置き直す
         self.layout_scrollbars();
+        self.update_panel_bar();
         // Markdown のデザインビュー：プレビューの高さに合わせる（横スクロールバーは出さない）
         if let Some((total, page, pos)) = self.md_scroll_info() {
             let v = SCROLLINFO { cbSize: size_of::<SCROLLINFO>() as u32, fMask: SIF_RANGE | SIF_PAGE | SIF_POS, nMin: 0, nMax: total, nPage: page, nPos: pos, nTrackPos: 0 };
@@ -322,7 +323,10 @@ impl App {
         // 本文の領域の下端（固定した見出し行も含む。横スクロールバーはこの下）
         let body_bottom = (((self.chrome_h() + self.pin_h() + self.text_height()) * scale).round() as i32).clamp(top, rc.bottom.max(top)); // 最小化中は rc.bottom が 0 で、top より小さい（clamp は min > max でパニックする）
         // 位置が前回と同じなら何もしない（スクロールのたびに呼ばれるので）
-        let placed = [rc.right, rc.bottom, top, vw, hh, body_bottom];
+        // 結果一覧のスクロールバー：見出し行の下から、一覧の下端まで
+        let panel_top = (body_bottom + ((self.line_h + 2.0) * scale).round() as i32).min(rc.bottom.max(top));
+        let panel_bottom = (body_bottom + (self.panel_h() * scale).round() as i32).clamp(panel_top, rc.bottom.max(top));
+        let placed = [rc.right, rc.bottom, top, vw, hh, body_bottom, panel_top, panel_bottom];
         if self.sb_placed.get() == placed {
             return;
         }
@@ -331,6 +335,7 @@ impl App {
             let _ = SetWindowPos(self.vbar, None, rc.right - vw, top, vw, (body_bottom - top).max(0), SWP_NOZORDER | SWP_NOACTIVATE);
             let _ = SetWindowPos(self.hbar, None, 0, body_bottom, (rc.right - vw).max(0), hh.max(1), SWP_NOZORDER | SWP_NOACTIVATE);
             let _ = ShowWindow(self.hbar, if hh > 0 { SW_SHOWNOACTIVATE } else { SW_HIDE });
+            let _ = SetWindowPos(self.pbar, None, rc.right - vw, panel_top, vw, (panel_bottom - panel_top).max(0), SWP_NOZORDER | SWP_NOACTIVATE);
         }
     }
 

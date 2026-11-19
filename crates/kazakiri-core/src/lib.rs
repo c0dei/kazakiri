@@ -9,6 +9,7 @@ pub mod encoding;
 pub mod grep;
 pub mod editor;
 pub mod line_index;
+pub mod loglevel;
 pub mod logtime;
 pub mod markdown;
 mod pieces;

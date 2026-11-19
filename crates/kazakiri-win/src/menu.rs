@@ -83,6 +83,8 @@ pub const ID_HEX_VIEW: u32 = 966;
 pub const ID_TIME_FILTER: u32 = 967;
 pub const ID_TIME_EXTRACT: u32 = 968;
 pub const ID_TIME_GOTO: u32 = 969;
+pub const ID_LEVEL_FILTER: u32 = 930;
+pub const ID_LEVEL_EXTRACT: u32 = 931;
 pub const ID_MD_DESIGN: u32 = 964;
 pub const ID_MD_EXPORT: u32 = 965;
 pub const ID_FILTER_LINES: u32 = 872;
@@ -430,6 +432,8 @@ pub unsafe fn build(km: &Keymap) -> Result<Menus> {
         item(km, search, ID_TIME_FILTER, "ログの時刻の範囲で絞り込み（一覧に出す）(&T)...")?;
         item(km, search, ID_TIME_EXTRACT, "ログの時刻の範囲を新しいタブに抽出...")?;
         item(km, search, ID_TIME_GOTO, "ログの時刻へ移動...")?;
+        item(km, search, ID_LEVEL_FILTER, "ログレベルで絞り込み（一覧に出す）(&V)...")?;
+        item(km, search, ID_LEVEL_EXTRACT, "ログレベルで新しいタブに抽出...")?;
         item(km, search, ID_FILTER_LINES, "行フィルター（一致した行だけを新しいタブに）(&I)\tCtrl+Shift+L")?;
         sep(search)?;
         // フォルダ内を検索（GREP）
@@ -754,7 +758,7 @@ mod id_tests {
             }
         }
         // 単独のコマンドの ID が、範囲の中に入っていないこと
-        let single = [("TOOLBAR", ID_TOOLBAR), ("FKEYS", ID_FKEYS), ("OVERWRITE", ID_OVERWRITE), ("COMPLETE", ID_COMPLETE), ("MODEBAR", ID_MODEBAR), ("COLPICK", ID_COLPICK), ("MARK_CLEAR", ID_MARK_CLEAR), ("DIFF", ID_DIFF), ("SPLIT_VIEW", ID_SPLIT_VIEW), ("HEX_VIEW", ID_HEX_VIEW), ("MACRO_REC", ID_MACRO_REC), ("MACRO_PLAY", ID_MACRO_PLAY), ("MACRO_REPEAT", ID_MACRO_REPEAT), ("TIME_FILTER", ID_TIME_FILTER), ("TIME_EXTRACT", ID_TIME_EXTRACT), ("TIME_GOTO", ID_TIME_GOTO), ("FILTER_LINES", ID_FILTER_LINES), ("CSV_MODE", ID_CSV_MODE), ("TSV", ID_TSV), ("DELIM_FIELD", ID_DELIM_FIELD), ("PALETTE", ID_PALETTE)];
+        let single = [("TOOLBAR", ID_TOOLBAR), ("FKEYS", ID_FKEYS), ("OVERWRITE", ID_OVERWRITE), ("COMPLETE", ID_COMPLETE), ("MODEBAR", ID_MODEBAR), ("COLPICK", ID_COLPICK), ("MARK_CLEAR", ID_MARK_CLEAR), ("DIFF", ID_DIFF), ("SPLIT_VIEW", ID_SPLIT_VIEW), ("HEX_VIEW", ID_HEX_VIEW), ("MACRO_REC", ID_MACRO_REC), ("MACRO_PLAY", ID_MACRO_PLAY), ("MACRO_REPEAT", ID_MACRO_REPEAT), ("TIME_FILTER", ID_TIME_FILTER), ("TIME_EXTRACT", ID_TIME_EXTRACT), ("TIME_GOTO", ID_TIME_GOTO), ("LEVEL_FILTER", ID_LEVEL_FILTER), ("LEVEL_EXTRACT", ID_LEVEL_EXTRACT), ("FILTER_LINES", ID_FILTER_LINES), ("CSV_MODE", ID_CSV_MODE), ("TSV", ID_TSV), ("DELIM_FIELD", ID_DELIM_FIELD), ("PALETTE", ID_PALETTE)];
         for (n, id) in single {
             for r in &ranges {
                 assert!(!(r.1..r.1 + r.2).contains(&id), "{n} ({id}) が {} の範囲に入っています", r.0);

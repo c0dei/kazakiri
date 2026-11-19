@@ -246,6 +246,7 @@ impl App {
             Prompt::LineFilter => self.last_find.clone(),
             Prompt::TimeFilter | Prompt::TimeExtract => self.time_prompt_default(),
             Prompt::TimeGoto => self.last_time_goto.clone(),
+            Prompt::LevelFilter | Prompt::LevelExtract => if self.last_level.is_empty() { ">=WARN".into() } else { self.last_level.clone() },
             Prompt::MacroRepeat => "10".into(),
             Prompt::Find | Prompt::Replace => self.last_find.clone(),
             Prompt::Palette => String::new(),
@@ -282,6 +283,10 @@ impl App {
             Some(p @ (Prompt::TimeFilter | Prompt::TimeExtract)) => {
                 let spec = std::mem::take(&mut self.input);
                 self.start_time_filter(&spec, p == Prompt::TimeExtract);
+            }
+            Some(p @ (Prompt::LevelFilter | Prompt::LevelExtract)) => {
+                let spec = std::mem::take(&mut self.input);
+                self.start_level_filter(&spec, p == Prompt::LevelExtract);
             }
             Some(Prompt::MacroRepeat) => {
                 let text = std::mem::take(&mut self.input);

@@ -109,39 +109,20 @@ pub(super) enum Effect {
     Target,
 }
 
-/// ログレベルの語（単語として現れたもの）を探す。戻り値は UTF-16 の位置
+/// ログレベルの語（単語として現れたもの）を探す。戻り値は UTF-16 の位置。INFO などは色を付けない
 fn log_levels(text: &str) -> Vec<(u32, u32, Effect)> {
-    const WORDS: [(&str, Effect); 9] = [
-        ("FATAL", Effect::LogError),
-        ("CRITICAL", Effect::LogError),
-        ("ERROR", Effect::LogError),
-        ("SEVERE", Effect::LogError),
-        ("WARNING", Effect::LogWarn),
-        ("WARN", Effect::LogWarn),
-        ("DEBUG", Effect::LogDebug),
-        ("TRACE", Effect::LogDebug),
-        ("VERBOSE", Effect::LogDebug),
-    ];
-    let head: &str = match text.char_indices().nth(512) {
-        Some((i, _)) => &text[..i],
-        None => text,
-    };
-    let mut out = Vec::new();
-    for (w, eff) in WORDS {
-        let mut from = 0;
-        while let Some(i) = head[from..].find(w) {
-            let a = from + i;
-            let b = a + w.len();
-            let before = head[..a].chars().next_back().is_none_or(|c| !c.is_alphanumeric());
-            let after = head[b..].chars().next().is_none_or(|c| !c.is_alphanumeric());
-            if before && after && !out.iter().any(|&(s, e, _): &(usize, usize, Effect)| a < e && s < b) {
-                out.push((a, b, eff));
-            }
-            from = b;
-        }
-    }
-    out.into_iter()
-        .map(|(a, b, e)| (head[..a].encode_utf16().count() as u32, head[..b].encode_utf16().count() as u32, e))
+    use kazakiri_core::loglevel::{find_levels, Level};
+    find_levels(text)
+        .into_iter()
+        .filter_map(|(a, b, l)| {
+            let eff = match l {
+                Level::Error | Level::Fatal => Effect::LogError,
+                Level::Warn => Effect::LogWarn,
+                Level::Debug | Level::Trace => Effect::LogDebug,
+                Level::Info => return None,
+            };
+            Some((text[..a].encode_utf16().count() as u32, text[..b].encode_utf16().count() as u32, eff))
+        })
         .collect()
 }
 
