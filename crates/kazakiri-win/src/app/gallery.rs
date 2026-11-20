@@ -4,7 +4,7 @@
 //! ライト／ダークで画面を撮って、部品ごとに、実機で成立する方式を決めるためのもの（`docs/STANDARD_CONTROLS.md`）。
 //! 通常の起動では使わない。
 
-use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicIsize, Ordering};
 
 use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE};
 use windows::Win32::UI::Controls::*;
@@ -17,6 +17,9 @@ static GDARK: AtomicBool = AtomicBool::new(false);
 static BR_BG: [AtomicIsize; 2] = [AtomicIsize::new(0), AtomicIsize::new(0)];
 static BR_CARD: [AtomicIsize; 2] = [AtomicIsize::new(0), AtomicIsize::new(0)];
 static UI_FONT: AtomicIsize = AtomicIsize::new(0);
+/// 縦スクロール：いまの位置と、中身の高さ（物理ピクセル）
+static SCROLL_Y: AtomicI32 = AtomicI32::new(0);
+static CONTENT_H: AtomicI32 = AtomicI32::new(0);
 
 const ID_TOGGLE: i32 = 1;
 /// NM_CUSTOMDRAW で文字色を渡す部品の ID
@@ -56,7 +59,7 @@ pub fn run() {
         RegisterClassW(&WNDCLASSW { lpfnWndProc: Some(main_proc), hInstance: instance.into(), hCursor: cursor, lpszClassName: main_class, ..Default::default() });
         RegisterClassW(&WNDCLASSW { lpfnWndProc: Some(card_proc), hInstance: instance.into(), hCursor: cursor, lpszClassName: card_class, ..Default::default() });
         let title = wide(&format!("標準部品ギャラリー  ({})", option_env!("GITHUB_SHA").map_or("local", |s| s.get(..7).unwrap_or(s))));
-        let Ok(hwnd) = CreateWindowExW(WINDOW_EX_STYLE(0), main_class, PCWSTR(title.as_ptr()), WS_OVERLAPPEDWINDOW | WS_VISIBLE | WS_CLIPCHILDREN, 40, 40, 1000, 900, None, None, Some(instance.into()), None) else { return };
+        let Ok(hwnd) = CreateWindowExW(WINDOW_EX_STYLE(0), main_class, PCWSTR(title.as_ptr()), WS_OVERLAPPEDWINDOW | WS_VISIBLE | WS_CLIPCHILDREN | WS_VSCROLL, 40, 40, 1000, 900, None, None, Some(instance.into()), None) else { return };
         set_window_icon(hwnd);
         build(hwnd);
         let mut msg = MSG::default();
@@ -98,6 +101,7 @@ unsafe fn build(main: HWND) {
         }
         let dpi = GetDpiForWindow(main).max(96) as i32;
         let s = |v: i32| v * dpi / 96;
+        SCROLL_Y.store(0, Ordering::Relaxed);
         let font = ui_font(dpi);
         let d = dark();
         let v = BOOL::from(d);
@@ -217,6 +221,56 @@ unsafe fn build(main: HWND) {
                 let _ = SetWindowTheme(b, PCWSTR(n.as_ptr()), PCWSTR::null());
             }
         }
+        // ---- 入力カード（行へ移動・絞り込みなどの入力欄の見た目の案。標準の部品だけで組む） ----
+        // 本体の入力欄は Direct2D の自前描画で、設定画面や検索の行（標準の入力欄）と見た目が揃わない。標準の入力欄＋ボタンで組む案を並べる
+        new_group();
+        let wide_card = |h: i32, label: &str| -> HWND {
+            let c = card_win((16, y.get(), 952), h, label);
+            y.set(y.get() + h + 8);
+            c
+        };
+        let edit_in = |c: HWND, id: i32, x: i32, yy: i32, w: i32, text: &str| {
+            let e = make_child(c, w!("EDIT"), text, ES_AUTOHSCROLL as u32 | WS_TABSTOP.0, WS_EX_CLIENTEDGE.0, id, font);
+            put(e, x, yy, w, 28);
+            if d {
+                let _ = SetWindowTheme(e, w!("DarkMode_CFD"), PCWSTR::null());
+            }
+        };
+        let button_in = |c: HWND, id: i32, x: i32, yy: i32, w: i32, text: &str| {
+            let b = make_child(c, w!("BUTTON"), text, BS_PUSHBUTTON as u32 | WS_TABSTOP.0, 0, id, font);
+            put(b, x, yy, w, 28);
+            theme_of(b, w!("DarkMode_Explorer"));
+        };
+        let label_in = |c: HWND, x: i32, yy: i32, w: i32, hh: i32, text: &str| {
+            let l = make_child(c, w!("STATIC"), text, 0, 0, 4, font);
+            put(l, x, yy, w, hh);
+        };
+        // 案 A：検索の行と同じ「一行型」（題・入力欄・実行・閉じる）
+        let c = wide_card(44, "入力カード A：一行型（検索の行と同じ並び）");
+        label_in(c, 270, 14, 130, 22, "行へ移動");
+        edit_in(c, 161, 400, 8, 360, "81");
+        button_in(c, 162, 770, 8, 80, "移動");
+        button_in(c, 163, 858, 8, 80, "閉じる");
+        // 案 B：一行型の下に説明を出す
+        let c = wide_card(78, "入力カード B：一行型＋下に説明");
+        label_in(c, 270, 14, 130, 22, "ログレベル");
+        edit_in(c, 164, 400, 8, 360, ">=WARN @ 2026-11-09 19:00 ～ 20:00");
+        button_in(c, 165, 770, 8, 80, "絞り込み");
+        button_in(c, 166, 858, 8, 80, "閉じる");
+        label_in(c, 400, 46, 540, 24, "ERROR,WARN / >=WARN。「@」で時刻の範囲と組み合わせられます");
+        // 案 C：カード型（題・右上の × ・入力欄・説明。いまの形に近い）
+        let c = wide_card(104, "入力カード C：カード型（右上に ×）");
+        label_in(c, 270, 10, 400, 22, "ログレベルで絞り込み");
+        button_in(c, 167, 906, 6, 32, "✕");
+        edit_in(c, 168, 270, 38, 668, ">=WARN");
+        label_in(c, 270, 72, 668, 24, "レベル（例: ERROR,WARN / >=WARN）を入力して Enter。該当する行を一覧に出します");
+        // 案 D：ダイアログ型（実行・キャンセルのボタンを下に）
+        let c = wide_card(112, "入力カード D：ダイアログ型（実行・キャンセル）");
+        label_in(c, 270, 10, 400, 22, "ログレベルで絞り込み");
+        edit_in(c, 169, 270, 36, 668, ">=WARN");
+        label_in(c, 270, 70, 400, 24, "Enter で実行、Esc で取消");
+        button_in(c, 170, 766, 72, 84, "実行");
+        button_in(c, 171, 856, 72, 84, "キャンセル");
         // ---- リストビュー ----
         new_group();
         for (label, id, th) in [("リスト 1：標準", 151, ""), ("リスト 2：Explorer＋色を指定", 152, "DarkMode_Explorer")] {
@@ -275,8 +329,39 @@ unsafe fn build(main: HWND) {
                 let _ = SetWindowTheme(tb, PCWSTR(n.as_ptr()), PCWSTR::null());
             }
         }
+        CONTENT_H.store(s(y.get() + last_h.get() + 16), Ordering::Relaxed);
+        update_scroll(main);
         let _ = InvalidateRect(Some(main), None, true);
         let _ = (rgb_ref, bg());
+    }
+}
+
+/// スクロールバーの範囲・ページ・位置を、中身の高さと窓の大きさに合わせる（窓が大きくなって余ったら、位置を戻す）
+unsafe fn update_scroll(hwnd: HWND) {
+    unsafe {
+        let mut rc = RECT::default();
+        let _ = GetClientRect(hwnd, &mut rc);
+        let page = (rc.bottom - rc.top).max(1);
+        let total = CONTENT_H.load(Ordering::Relaxed).max(page);
+        scroll_to(hwnd, SCROLL_Y.load(Ordering::Relaxed));
+        let si = SCROLLINFO { cbSize: std::mem::size_of::<SCROLLINFO>() as u32, fMask: SIF_RANGE | SIF_PAGE | SIF_POS, nMin: 0, nMax: total - 1, nPage: page as u32, nPos: SCROLL_Y.load(Ordering::Relaxed), nTrackPos: 0 };
+        SetScrollInfo(hwnd, SB_VERT, &si, true);
+    }
+}
+
+/// 縦の位置を `y` に（部品ごと動かす）
+unsafe fn scroll_to(hwnd: HWND, y: i32) {
+    unsafe {
+        let mut rc = RECT::default();
+        let _ = GetClientRect(hwnd, &mut rc);
+        let max = (CONTENT_H.load(Ordering::Relaxed) - (rc.bottom - rc.top)).max(0);
+        let y = y.clamp(0, max);
+        let old = SCROLL_Y.swap(y, Ordering::Relaxed);
+        if y != old {
+            let _ = ScrollWindowEx(hwnd, 0, old - y, None, None, None, None, SW_SCROLLCHILDREN | SW_INVALIDATE | SW_ERASE);
+        }
+        let si = SCROLLINFO { cbSize: std::mem::size_of::<SCROLLINFO>() as u32, fMask: SIF_POS, nPos: y, ..Default::default() };
+        SetScrollInfo(hwnd, SB_VERT, &si, true);
     }
 }
 
@@ -300,6 +385,33 @@ unsafe extern "system" fn main_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam
                     GDARK.store(!dark(), Ordering::Relaxed);
                     build(hwnd);
                 }
+                LRESULT(0)
+            }
+            WM_SIZE => {
+                update_scroll(hwnd);
+                DefWindowProcW(hwnd, msg, wparam, lparam)
+            }
+            WM_VSCROLL => {
+                let mut si = SCROLLINFO { cbSize: std::mem::size_of::<SCROLLINFO>() as u32, fMask: SIF_ALL, ..Default::default() };
+                let _ = GetScrollInfo(hwnd, SB_VERT, &mut si);
+                let cur = SCROLL_Y.load(Ordering::Relaxed);
+                let line = 40;
+                let to = match SCROLLBAR_COMMAND((wparam.0 & 0xFFFF) as i32) {
+                    SB_LINEUP => cur - line,
+                    SB_LINEDOWN => cur + line,
+                    SB_PAGEUP => cur - si.nPage as i32,
+                    SB_PAGEDOWN => cur + si.nPage as i32,
+                    SB_TOP => 0,
+                    SB_BOTTOM => i32::MAX,
+                    SB_THUMBTRACK | SB_THUMBPOSITION => si.nTrackPos,
+                    _ => cur,
+                };
+                scroll_to(hwnd, to);
+                LRESULT(0)
+            }
+            WM_MOUSEWHEEL => {
+                let delta = ((wparam.0 >> 16) & 0xFFFF) as i16 as i32;
+                scroll_to(hwnd, SCROLL_Y.load(Ordering::Relaxed) - delta * 80 / 120);
                 LRESULT(0)
             }
             WM_DESTROY => {
