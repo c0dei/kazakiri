@@ -659,6 +659,8 @@ impl App {
                     }
                     self.layout_scrollbars();
                     self.update_scrollbars();
+                    // 幅が変わったら、表示中のタブがタブバーの外に出たままにならないように
+                    self.reveal_active_tab();
                     self.invalidate();
                     (DONE, None)
                 }

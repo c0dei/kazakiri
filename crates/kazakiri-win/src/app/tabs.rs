@@ -358,7 +358,7 @@ impl App {
     }
 
     /// 表示中のタブがバーの中に見えるように横へずらす
-    fn reveal_active_tab(&mut self) {
+    pub(super) fn reveal_active_tab(&mut self) {
         let boxes = self.tab_boxes();
         let Some(b) = boxes.get(self.active) else { return };
         // タブを並べられる幅：左のマークの右から、ウィンドウのボタンの左まで
