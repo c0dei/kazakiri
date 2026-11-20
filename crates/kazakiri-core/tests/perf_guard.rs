@@ -169,6 +169,20 @@ fn large_file_operations_stay_within_budget() {
     std::hint::black_box(ed.doc().lines(lines / 2, 60));
     g.check("編集後の 60 行の取り出し", t.elapsed(), 0.05);
 
+    // 行の差分：行ごとのハッシュ（並列）と、違いが散らばっているときの差分（目印で区間に分ける）
+    let t = Instant::now();
+    let hashes = kazakiri_core::diff::line_hashes(&doc);
+    g.check("差分：行のハッシュ", t.elapsed(), 1.5);
+    assert!(hashes.len() as u64 >= lines_written);
+    let mut changed = hashes.clone();
+    for i in (0..changed.len()).step_by(50) {
+        changed[i] ^= 0x5555_5555;
+    }
+    let t = Instant::now();
+    let rows = kazakiri_core::diff::diff(&hashes, &changed);
+    g.check("差分：2% の行が違う", t.elapsed(), 3.0);
+    assert!(rows.is_some(), "差分：違いが散らばっていても比較できる");
+
     // 巨大な 1 行（minify した JSON 相当）の窓の取り出しと編集
     let mut one = String::from("[");
     for i in 0..120_000 {
