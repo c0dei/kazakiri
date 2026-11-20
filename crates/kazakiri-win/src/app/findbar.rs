@@ -24,10 +24,10 @@ impl App {
         if self.prompt != Some(Prompt::ColumnFilter) {
             return Vec::new();
         }
-        let (cx0, _, cx1, _) = self.prompt_card();
-        let (_, _, _, iy1) = self.prompt_input_rect();
-        let (y0, h) = (iy1 + 8.0, self.ui_line_h + 8.0);
-        let mut x = cx0 + 14.0;
+        // 検索の行の座標（行の左上が原点）。入力の行（findrow::ROW_H）の下に並べる
+        let (cx0, cx1) = (12.0, self.client_size().0);
+        let (y0, h) = (super::findrow::ROW_H + 4.0, self.ui_line_h + 8.0);
+        let mut x = cx0;
         let mut out = Vec::new();
         for (op, label) in FILTER_OPS {
             let units: Vec<u16> = label.encode_utf16().collect();
@@ -56,17 +56,19 @@ impl App {
         let rest = t[split..].trim_start();
         let value = ["!empty", "empty", ">=", "<=", "!=", "=", ":", "~", ">", "<"].into_iter().find_map(|o| rest.strip_prefix(o)).unwrap_or(rest).trim();
         self.input = if matches!(op, "empty" | "!empty") { format!("{col} {op}") } else { format!("{col} {op} {value}").trim_end().to_string() + if value.is_empty() { " " } else { "" } };
+        // 標準の入力欄に写して、末尾にカーソルを置く
+        self.focus_findrow_end();
         self.invalidate();
     }
 
-    /// 列フィルタのカードのクリック。カードの上なら true
+    /// 列フィルタの演算子のチップのクリック。チップの上なら true（y は本文の座標。行の座標にして比べる）
     pub(super) fn prompt_chip_click(&mut self, x: f32, y: f32) -> bool {
-        if self.prompt != Some(Prompt::ColumnFilter) || !inside(self.prompt_card(), x, y) {
+        if self.prompt != Some(Prompt::ColumnFilter) {
             return false;
         }
-        if let Some(&(_, op, _)) = self.filter_chips().iter().find(|(r, _, _)| inside(*r, x, y)) {
-            self.set_filter_op(op);
-        }
+        let ly = y + self.find_h();
+        let Some(&(_, op, _)) = self.filter_chips().iter().find(|(r, _, _)| inside(*r, x, ly)) else { return false };
+        self.set_filter_op(op);
         true
     }
 
@@ -96,12 +98,13 @@ impl App {
     /// 入力欄のカード（検索・置換バーなど）の上にあるときのカーソルの形。カードの外なら None
     pub(super) fn prompt_cursor(&self, x: f32, y: f32) -> Option<PCWSTR> {
         self.prompt?;
-        // 検索・置換は、標準の入力欄の行（findrow.rs）。カーソルの形は部品が決める
-        if self.is_find_bar() || !inside(self.prompt_card(), x, y) {
-            return None;
+        // パレット以外は、標準の入力欄の行（findrow.rs）。カーソルの形は部品が決める（チップの上だけ、ここで手の形）
+        if self.prompt != Some(Prompt::Palette) {
+            let ly = y + self.find_h();
+            return self.filter_chips().iter().any(|(r, _, _)| inside(*r, x, ly)).then_some(IDC_HAND);
         }
-        if self.filter_chips().iter().any(|(r, _, _)| inside(*r, x, y)) {
-            return Some(IDC_HAND);
+        if !inside(self.prompt_card(), x, y) {
+            return None;
         }
         if inside(self.prompt_input_rect(), x, y) {
             return Some(IDC_IBEAM);
@@ -130,6 +133,11 @@ impl App {
             rt.PushAxisAlignedClip(&rect(ix0 + 2.0, iy0, ix1 - 2.0, iy1), D2D1_ANTIALIAS_MODE_ALIASED);
             // 長いときは、末尾（入力中の位置）が見えるように左へずらす
             let shift = (x + 4.0 - (ix1 - 8.0)).max(0.0);
+            if focused && self.prompt_all && !text.is_empty() && self.comp.is_none() {
+                brush.SetColor(&t.panel_sel);
+                rt.FillRectangle(&rect(ix0 + 6.0 - shift, iy0 + 3.0, x - shift + 2.0, iy1 - 3.0), brush);
+                brush.SetColor(&t.text);
+            }
             self.draw_ui_str(rt, brush, text, ix0 + 8.0 - shift, ty, ix0 + 8.0 - shift + self.ui_text_width(&units)? + 4.0)?;
             if focused {
                 let x = x - shift;

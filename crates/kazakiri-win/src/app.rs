@@ -157,6 +157,9 @@ enum FindAct {
     Word,
 }
 
+/// 入力の行の説明の高さのキャッシュ（入力の種類・説明の長さ・幅×10 → 高さ）
+type HintKey = ((Prompt, usize, i32), f32);
+
 /// 入力欄（ステータスバー上の簡易プロンプト）
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Prompt {
@@ -300,7 +303,11 @@ struct App {
     findrow_theme: Cell<Option<bool>>,
     findrow_shown: Cell<bool>,
     findrow_placed: Cell<[i32; 5]>,
-    findrow_focus: Cell<bool>,
+    findrow_focus: Cell<u8>,
+    /// 結果一覧をクリックして、キー（↑↓ など）を一覧が受けているか（本文や入力欄に入ると外れる）
+    panel_focus: Cell<bool>,
+    /// 入力の行の説明の高さの、測った結果（条件・値）
+    hint_h_cache: Cell<Option<HintKey>>,
     /// 検索・置換の行で、いま入力している欄の ID（0 は、どちらにも入っていない）
     findrow_focus_id: Cell<i32>,
     /// 検索・置換の入力欄の枠（行の上端からの DIP。(x0, y0, x1, y1)）
@@ -413,6 +420,8 @@ struct App {
     /// 検索・置換バーの置換欄と、いま入力している欄（0 = 検索、1 = 置換）
     input2: String,
     prompt_focus: u8,
+    /// 入力欄の文字を、Ctrl+A ですべて選んでいるか（入力欄にはカーソルがないので、選べるのは全体だけ）
+    prompt_all: bool,
     /// 「対象の列」のドロップダウン（開いているとき）
     /// モードバーの区切り文字の欄を入力待ちにしているか（次に打った 1 文字が区切りになる）
     delim_edit: bool,
@@ -801,8 +810,7 @@ impl App {
                 }
                 // 検索・置換の行の部品（入力欄・ボタン）からの通知
                 WM_COMMAND if lparam.0 != 0 && findrow::is_findrow_id(loword(wparam.0) as i32) => {
-                    self.findrow_command(loword(wparam.0) as i32, hiword(wparam.0));
-                    (DONE, None)
+                    (DONE, self.findrow_command(loword(wparam.0) as i32, hiword(wparam.0)))
                 }
                 WM_COMMAND => (DONE, self.command(loword(wparam.0))),
                 WM_VSCROLL if lparam.0 == self.pbar.0 as isize => {
@@ -901,6 +909,10 @@ impl App {
                         self.delim_edit = false;
                         self.invalidate();
                     }
+                    // 列フィルタの演算子のチップ（本文より上の、入力の行にある。ツールバーの空き地として扱われる前に見る）
+                    if self.prompt_chip_click(x, y) {
+                        return (DONE, None);
+                    }
                     // ツールバー・機能ボタン・メニューバー・ステータスバー
                     if let Some(r) = self.chrome_press(x, y) {
                         return (DONE, r);
@@ -909,9 +921,6 @@ impl App {
                         let d = self.tab_click(x, false);
                         self.tab_drag_start(x);
                         return (DONE, d);
-                    }
-                    if self.prompt_chip_click(x, y) {
-                        return (DONE, None);
                     }
                     if let Some(r) = self.palette_click(x, y) {
                         return (DONE, r);
@@ -933,8 +942,12 @@ impl App {
                     }
                     let y = y - self.pin_h();
                     if self.in_panel(y) {
+                        // 一覧がキーを受ける（検索の入力欄にフォーカスがあれば、本文に戻す）
+                        self.panel_focus.set(true);
+                        let _ = SetFocus(Some(self.hwnd));
                         return (DONE, self.panel_click(y));
                     }
+                    self.panel_focus.set(false);
                     if (GetKeyState(VK_MENU.0 as i32) < 0 || (self.cell_mode && self.csv.is_some() && GetKeyState(VK_SHIFT.0 as i32) >= 0)) && x >= self.gutter_width() && y < self.text_height() {
                         self.rect_start(x, y);
                     } else if GetKeyState(VK_CONTROL.0 as i32) < 0 && x >= self.gutter_width() && y < self.text_height() {
@@ -952,6 +965,9 @@ impl App {
                 WM_LBUTTONDBLCLK => {
                     let (x, y) = self.mouse_pos(lparam);
                     // 素早く続けて押したときも、1 回目と同じボタンの操作として扱う（ダブルクリックとして無視しない）
+                    if self.prompt_chip_click(x, y) {
+                        return (DONE, None);
+                    }
                     if let Some(r) = self.chrome_press(x, y) {
                         return (DONE, r);
                     }
@@ -960,10 +976,6 @@ impl App {
                     }
                     if y < 0.0 {
                         self.tab_double_click(x);
-                        return (DONE, None);
-                    }
-                    // 入力欄のチップの上は、素早い 2 回目のクリックも 1 回目と同じ操作（本文の単語選択にしない）
-                    if self.prompt_chip_click(x, y) {
                         return (DONE, None);
                     }
                     if let Some(r) = self.palette_click(x, y) {
@@ -975,8 +987,12 @@ impl App {
                     }
                     let y = y - self.pin_h();
                     if self.in_panel(y) {
+                        // 一覧がキーを受ける（検索の入力欄にフォーカスがあれば、本文に戻す）
+                        self.panel_focus.set(true);
+                        let _ = SetFocus(Some(self.hwnd));
                         return (DONE, self.panel_click(y));
                     }
+                    self.panel_focus.set(false);
                     self.select_word_at(x, y);
                     (DONE, None)
                 }

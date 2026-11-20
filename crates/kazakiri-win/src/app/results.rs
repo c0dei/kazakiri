@@ -551,6 +551,26 @@ impl App {
         }
     }
 
+    /// 一覧をクリックしたあとの、↑↓・PageUp/Down・Home/End で前後の結果へ移る。一覧がキーを受けていなければ None（本文の操作に回す）
+    pub(super) fn panel_key(&mut self, vk: VIRTUAL_KEY) -> Option<Option<Deferred>> {
+        if !self.panel_focus.get() || !matches!(vk, VK_UP | VK_DOWN | VK_PRIOR | VK_NEXT | VK_HOME | VK_END) {
+            return None;
+        }
+        let (n, sel) = self.results.as_ref().map(|r| (r.len(), r.sel))?;
+        if n == 0 {
+            return None;
+        }
+        let page = self.panel_rows();
+        Some(match vk {
+            VK_UP => self.next_result(false),
+            VK_DOWN => self.next_result(true),
+            VK_PRIOR => self.jump_result(sel.saturating_sub(page)),
+            VK_NEXT => self.jump_result(sel + page),
+            VK_HOME => self.jump_result(0),
+            _ => self.jump_result(n - 1),
+        })
+    }
+
     pub(super) fn next_result(&mut self, forward: bool) -> Option<Deferred> {
         let r = self.results.as_ref()?;
         let n = r.len();

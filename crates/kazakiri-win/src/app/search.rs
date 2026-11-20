@@ -166,9 +166,9 @@ impl App {
         matches!(self.prompt, Some(Prompt::Find | Prompt::Replace))
     }
 
-    /// 本文のキー入力を横取りする入力欄（行へ移動・列フィルタ・パレットなど）が開いているか。検索・置換は標準の入力欄が受けるので含めない
+    /// 本文のキー入力を横取りする入力欄（コマンドパレットだけ）が開いているか。そのほかの入力は、標準の入力欄が受ける（findrow.rs）
     pub(super) fn text_prompt(&self) -> bool {
-        self.prompt.is_some() && !self.is_find_bar()
+        self.prompt == Some(Prompt::Palette)
     }
 
     /// 入力中の欄（検索・置換バーでは、いま入力している欄。それ以外は入力欄）
@@ -234,6 +234,7 @@ impl App {
 
     pub(super) fn start_prompt(&mut self, p: Prompt) {
         self.prompt = Some(p);
+        self.prompt_all = false;
         self.input = match p {
             Prompt::GotoLine => String::new(),
             // 対象の列（カーソルのある列）を入れておく。「: 」は「含む」
@@ -251,6 +252,11 @@ impl App {
             Prompt::Find | Prompt::Replace => self.last_find.clone(),
             Prompt::Palette => String::new(),
         };
+        // 標準の入力欄の行に入る（パレットは自前）
+        if p != Prompt::Palette {
+            self.comp = None;
+            self.focus_findrow();
+        }
         self.invalidate();
     }
 
@@ -264,7 +270,12 @@ impl App {
     }
 
     pub(super) fn submit_prompt(&mut self) -> Option<Deferred> {
-        match self.prompt.take() {
+        // 絞り込み・移動は、実行したあとも入力の行を開いたままにする（Ctrl+Z で戻したり、条件を直して続けて実行できるように）。Esc か ✕ で閉じる
+        let p = self.prompt;
+        if !matches!(p, Some(Prompt::GotoLine | Prompt::LineFilter | Prompt::TimeFilter | Prompt::TimeExtract | Prompt::LevelFilter | Prompt::LevelExtract | Prompt::TimeGoto | Prompt::ColumnFilter)) {
+            self.prompt = None;
+        }
+        match p {
             Some(Prompt::Find | Prompt::Replace) => {}
             Some(Prompt::Palette) => {
                 let id = self.palette_results().get(self.palette_sel).map(|e| e.2);
@@ -273,23 +284,23 @@ impl App {
                 return id.and_then(|id| unsafe { self.command(id) });
             }
             Some(Prompt::ColumnFilter) => {
-                self.last_filter = std::mem::take(&mut self.input);
+                self.last_filter = self.input.clone();
                 self.start_filter();
             }
             Some(Prompt::Split) => {
-                let spec = std::mem::take(&mut self.input);
+                let spec = self.input.clone();
                 self.start_split(&spec);
             }
             Some(p @ (Prompt::TimeFilter | Prompt::TimeExtract)) => {
-                let spec = std::mem::take(&mut self.input);
+                let spec = self.input.clone();
                 self.start_time_filter(&spec, p == Prompt::TimeExtract);
             }
             Some(p @ (Prompt::LevelFilter | Prompt::LevelExtract)) => {
-                let spec = std::mem::take(&mut self.input);
+                let spec = self.input.clone();
                 self.start_level_filter(&spec, p == Prompt::LevelExtract);
             }
             Some(Prompt::MacroRepeat) => {
-                let text = std::mem::take(&mut self.input);
+                let text = self.input.clone();
                 match text.trim().replace(',', "").parse::<u32>() {
                     Ok(0) => self.macro_start(None),
                     Ok(n) => self.macro_start(Some(n)),
@@ -297,11 +308,11 @@ impl App {
                 }
             }
             Some(Prompt::TimeGoto) => {
-                let spec = std::mem::take(&mut self.input);
+                let spec = self.input.clone();
                 self.goto_time(&spec);
             }
             Some(Prompt::LineFilter) => {
-                let text = std::mem::take(&mut self.input);
+                let text = self.input.clone();
                 if text.is_empty() {
                     self.message = "フィルターする文字列を入力してください".into();
                 } else {
@@ -312,11 +323,11 @@ impl App {
                 }
             }
             Some(Prompt::Sequence) => {
-                let spec = std::mem::take(&mut self.input);
+                let spec = self.input.clone();
                 self.insert_sequence(&spec);
             }
             Some(Prompt::GotoLine) => {
-                let input = std::mem::take(&mut self.input);
+                let input = self.input.clone();
                 match input.trim().replace(',', "").parse::<u64>() {
                     Ok(n) if n >= 1 => {
                         let target = n - 1;

@@ -71,13 +71,48 @@ impl App {
                 }
                 VK_UP | VK_DOWN | VK_PRIOR | VK_NEXT | VK_HOME | VK_END if self.prompt == Some(Prompt::Palette) => self.palette_move(vk),
                 VK_RETURN => return self.submit_prompt(),
+                // 入力欄の編集：Ctrl+A（全体を選ぶ）、Ctrl+C / X、Delete（全部消す）、Ctrl+Backspace（1 語消す）
+                _ if ctrl && vk == VK_A => {
+                    self.prompt_all = !self.prompt_buf().is_empty();
+                    self.invalidate();
+                }
+                _ if ctrl && (vk == VK_C || vk == VK_X) => {
+                    let text = self.prompt_buf().clone();
+                    if !text.is_empty() {
+                        let _ = crate::clipboard::set_text(self.hwnd, &text);
+                    }
+                    if vk == VK_X {
+                        self.prompt_buf().clear();
+                        self.prompt_all = false;
+                        self.find_bar_changed();
+                    }
+                }
+                VK_DELETE => {
+                    self.prompt_buf().clear();
+                    self.prompt_all = false;
+                    self.find_bar_changed();
+                }
                 VK_BACK => {
-                    self.prompt_buf().pop();
+                    let all = std::mem::take(&mut self.prompt_all);
+                    let buf = self.prompt_buf();
+                    if all {
+                        buf.clear();
+                    } else if ctrl {
+                        // 末尾の空白と、その前の 1 語（空白でない文字の並び）を消す
+                        let t = buf.trim_end().len();
+                        let start = buf[..t].rfind(char::is_whitespace).map_or(0, |i| i + buf[i..].chars().next().map_or(1, char::len_utf8));
+                        buf.truncate(start);
+                    } else {
+                        buf.pop();
+                    }
                     self.find_bar_changed();
                 }
                 _ if ctrl && vk == VK_V => {
                     if let Some(s) = clipboard_text() {
                         let line = s.lines().next().unwrap_or("").to_string();
+                        if std::mem::take(&mut self.prompt_all) {
+                            self.prompt_buf().clear();
+                        }
                         self.prompt_buf().push_str(&line);
                         self.find_bar_changed();
                     }
@@ -86,14 +121,20 @@ impl App {
             }
             return None;
         }
+        // 結果一覧をクリックしたあと：↑↓ などは前後の結果へ（Ctrl・Shift つきは本文の操作のまま）
+        if !ctrl && !shift {
+            if let Some(d) = self.panel_key(vk) {
+                return d;
+            }
+        }
         // マクロの記録：編集のキー
         if matches!(vk, VK_UP | VK_DOWN | VK_LEFT | VK_RIGHT | VK_PRIOR | VK_NEXT | VK_HOME | VK_END | VK_RETURN | VK_BACK | VK_DELETE | VK_TAB) {
             self.macro_push(macros::Step::Key { vk: vk.0, ctrl, shift });
         }
         match vk {
             VK_ESCAPE => {
-                if self.is_find_bar() && self.search.is_none() {
-                    // 検索・置換の行を開いたまま本文にいるとき：Esc で閉じる
+                if self.prompt.is_some() && self.search.is_none() {
+                    // 入力の行（検索・置換・行へ移動など）を開いたまま本文にいるとき：Esc で閉じる
                     self.close_find_bar();
                 } else if self.search.is_some() {
                     self.cancel_search();
@@ -147,6 +188,7 @@ impl App {
     }
 
     pub(super) fn on_char(&mut self, ch: u32) {
+        self.panel_focus.set(false);
         if self.delim_edit {
             if ch >= 0x20 && ch != 0x7F {
                 if let Some(c) = char::from_u32(ch).filter(|c| !matches!(*c as u32, 0xD800..=0xDFFF)) {
@@ -178,6 +220,12 @@ impl App {
         };
         let Some(c) = c else { return };
         if self.text_prompt() {
+            if c.is_control() {
+                return;
+            }
+            if std::mem::take(&mut self.prompt_all) {
+                self.prompt_buf().clear();
+            }
             self.prompt_buf().push(c);
             self.find_bar_changed();
         } else {

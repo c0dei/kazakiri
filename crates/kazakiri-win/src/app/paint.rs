@@ -491,7 +491,7 @@ impl App {
         match self.prompt {
             // 入力欄は、ステータスバーの上の枠（draw_prompt_bar）に出す
             // 検索・置換の行を開いたままでも、結果のメッセージ（置換した件数など）は見えるように
-            Some(Prompt::Find | Prompt::Replace) if !self.message.is_empty() => self.message.clone(),
+            Some(p) if p != Prompt::Palette && !self.message.is_empty() => self.message.clone(),
             Some(_) => "入力中… Enter で実行、Esc で取消".to_string(),
             None if self.rjob.is_some() => self.job_status(self.rjob.as_ref().unwrap()),
             None if self.saving.is_some() => {
@@ -549,56 +549,10 @@ impl App {
         self.prompt_input_rect().1 + 4.0
     }
 
-    /// 入力欄（行へ移動・列フィルタ・分割・連番）を、本文の右上に浮かせたカードで出す。1 行目は題と操作、2 行目は入力、3 行目は説明
+    /// コマンドパレットのカードを描く。そのほかの入力欄（行へ移動・列フィルタ・分割・連番など）は、標準の入力欄の行（findrow.rs）
     pub(super) unsafe fn draw_prompt_bar(&self, rt: &ID2D1RenderTarget, brush: &ID2D1SolidColorBrush, _w: f32, _h: f32) -> Result<()> {
-        let Some(prompt) = self.prompt else { return Ok(()) };
-        if self.is_find_bar() {
-            return Ok(());
-        }
-        if prompt == Prompt::Palette {
+        if self.prompt == Some(Prompt::Palette) {
             return unsafe { self.draw_palette(rt, brush) };
-        }
-        let t = self.theme;
-        let (title, hint) = match prompt {
-            Prompt::Find | Prompt::Replace | Prompt::Palette => (String::new(), String::new()),
-            Prompt::GotoLine => ("行へ移動".to_string(), "行番号を入力して Enter".to_string()),
-            Prompt::LineFilter => ("行フィルター".to_string(), format!("検索語を入力して Enter。一致した行だけを新しいタブに出します（{}{}）", if self.opts.case_sensitive { "大文字小文字を区別" } else { "大文字小文字を区別しない" }, if self.opts.regex { "・正規表現" } else { "" })),
-            Prompt::TimeFilter => ("時刻の範囲で絞り込み".to_string(), "開始 ～ 終了（例: 2026-11-18 12:00 ～ 13:30、日付だけならその日全体）を入力して Enter。範囲に入る行を一覧に出します".to_string()),
-            Prompt::TimeExtract => ("時刻の範囲を抽出".to_string(), "開始 ～ 終了（例: 2026-11-18 12:00 ～ 13:30）を入力して Enter。範囲に入る行を新しいタブに出します".to_string()),
-            Prompt::MacroRepeat => ("マクロを繰り返し再生".to_string(), "回数を入力して Enter（0 は、検索で見つからなくなるまで。Esc キーで再生を中止できます）".to_string()),
-            Prompt::LevelFilter => ("ログレベルで絞り込み".to_string(), "レベル（例: ERROR,WARN / >=WARN）を入力して Enter。該当する行（レベルのない続きの行も）を一覧に出します".to_string()),
-            Prompt::LevelExtract => ("ログレベルで抽出".to_string(), "レベル（例: ERROR,WARN / >=WARN）を入力して Enter。該当する行を新しいタブに出します".to_string()),
-            Prompt::TimeGoto => ("時刻へ移動".to_string(), "時刻（例: 2026-11-18 12:30:00）を入力して Enter。時刻順のログとして、その時刻以降の最初の行へ移ります".to_string()),
-            Prompt::Sequence => ("連番を挿入".to_string(), "開始値,増分,桁数（例: 1,1,3 → 001, 002…）を入力して Enter".to_string()),
-            Prompt::Split => ("ファイルを分割".to_string(), "1 ファイルの行数、またはサイズ（例: 1000000 / 512MB / 2GB）を入力して Enter".to_string()),
-            Prompt::ColumnFilter => {
-                let names: Vec<String> = self.csv_column_names(12).iter().enumerate().map(|(i, n)| format!("{}:{n}", i + 1)).collect();
-                let cols = if names.is_empty() { String::new() } else { format!("　列 {}", names.join("  ")) };
-                ("列フィルタ".to_string(), format!("「列番号 演算子 値」の形で、演算子は上のチップでも選べます（例: 3 = ERROR / 4 >= 100）。Enter で絞り込み{cols}"))
-            }
-        };
-        let (cx0, cy0, cx1, cy1) = self.prompt_card();
-        let (ix0, iy0, ix1, iy1) = self.prompt_input_rect();
-        unsafe {
-            // 枠・面
-            brush.SetColor(&t.dim);
-            rt.FillRoundedRectangle(&rrect(cx0 - 1.0, cy0 - 1.0, cx1 + 1.0, cy1 + 1.0, 9.0), brush);
-            brush.SetColor(&t.panel_head);
-            rt.FillRoundedRectangle(&rrect(cx0, cy0, cx1, cy1, 8.0), brush);
-            // 題と、閉じ方
-            brush.SetColor(&t.text);
-            self.draw_ui_str(rt, brush, &title, cx0 + 14.0, cy0 + 8.0, cx1 - 120.0)?;
-            brush.SetColor(&t.gutter_text);
-            let esc: Vec<u16> = "Esc で閉じる".encode_utf16().collect();
-            let ew = self.ui_text_width(&esc)?;
-            self.draw_ui_str(rt, brush, "Esc で閉じる", cx1 - 14.0 - ew, cy0 + 8.0, cx1 - 8.0)?;
-            // 説明（2 行まで折り返す）
-            let hint_units: Vec<u16> = hint.encode_utf16().collect();
-            brush.SetColor(&t.gutter_text);
-            rt.DrawText(&hint_units, &self.ui_format, &rect(cx0 + 14.0, iy1 + 8.0 + self.filter_chip_row_h(), cx1 - 14.0, cy1 - 4.0), brush, D2D1_DRAW_TEXT_OPTIONS_CLIP, DWRITE_MEASURING_MODE_NATURAL);
-            // 入力欄
-            self.draw_field(rt, brush, (ix0, iy0, ix1, iy1), &self.input, true)?;
-            self.draw_filter_chips(rt, brush)?;
         }
         Ok(())
     }

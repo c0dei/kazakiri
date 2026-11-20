@@ -1,4 +1,5 @@
 //! 検索・置換の行（本文の上に固定。標準の入力欄とボタン）。
+//! 行へ移動・列フィルタ・時刻やログレベルの絞り込みなどの入力も、同じ行に出す（題・入力欄・実行・閉じる、その下に説明）。カーソル移動・範囲選択・元に戻す（Ctrl+Z）・日本語入力は標準の入力欄が受ける。
 //!
 //! モードバーの下に出して、本文を隠さない。1 行目は検索（入力欄・Aa・.*・単語・前へ・次へ・閉じる）、置換のときは 2 行目（入力欄・置換・すべて置換）。
 //! 入力の中身（検索語・置換語）は、これまでどおり `App` の `input` / `input2` が持ち、標準の入力欄とは、変わったときに写し合う。
@@ -26,12 +27,13 @@ const ID_REPL: i32 = 9111;
 const ID_ONE: i32 = 9112;
 const ID_ALL: i32 = 9113;
 const ID_SEL: i32 = 9114;
+const ID_GO: i32 = 9115;
 
 /// 1 行の高さ（DIP）
-const ROW_H: f32 = 36.0;
+pub(super) const ROW_H: f32 = 36.0;
 
 pub(super) fn is_findrow_id(id: i32) -> bool {
-    (ID_LABEL..=ID_SEL).contains(&id)
+    (ID_LABEL..=ID_GO).contains(&id)
 }
 
 /// 作った部品
@@ -138,8 +140,52 @@ impl App {
         match self.prompt {
             Some(Prompt::Find) => ROW_H,
             Some(Prompt::Replace) => ROW_H * 2.0,
-            _ => 0.0,
+            None | Some(Prompt::Palette) => 0.0,
+            // 入力の行 + （列フィルタは）チップの行 + 説明
+            Some(_) => ROW_H + self.filter_chip_row_h() + self.prompt_hint_h(),
         }
+    }
+
+    /// 入力の行（検索・置換以外）の題・説明・実行ボタンの題。`cols` が false のときは、列名を入れない（高さの見積もり用。呼ばれる回数が多いので）
+    pub(super) fn prompt_texts(&self, cols: bool) -> (String, String, &'static str) {
+        let (t, h, go): (&str, String, &'static str) = match self.prompt {
+            Some(Prompt::GotoLine) => ("行へ移動", "行番号を入力して Enter".into(), "移動"),
+            Some(Prompt::LineFilter) => ("行フィルター", format!("検索語を入力して Enter。一致した行だけを新しいタブに出します（{}{}）", if self.opts.case_sensitive { "大文字小文字を区別" } else { "大文字小文字を区別しない" }, if self.opts.regex { "・正規表現" } else { "" }), "抽出"),
+            Some(Prompt::TimeFilter) => ("時刻の範囲で絞り込み", "開始 ～ 終了（例: 2026-11-18 12:00 ～ 13:30、日付だけならその日全体）を入力して Enter。範囲に入る行を一覧に出します。「ERROR @ 2026-11-18 12:00 ～ 13:00」のようにレベルと組み合わせられます".into(), "絞り込み"),
+            Some(Prompt::TimeExtract) => ("時刻の範囲を抽出", "開始 ～ 終了（例: 2026-11-18 12:00 ～ 13:30）を入力して Enter。範囲に入る行を新しいタブに出します".into(), "抽出"),
+            Some(Prompt::MacroRepeat) => ("マクロを繰り返し再生", "回数を入力して Enter（0 は、検索で見つからなくなるまで。Esc キーで再生を中止できます）".into(), "再生"),
+            Some(Prompt::LevelFilter) => ("ログレベルで絞り込み", "レベル（例: ERROR,WARN / >=WARN）を入力して Enter。該当する行（レベルのない続きの行も）を一覧に出します。「ERROR @ 2026-11-18 12:00 ～ 13:00」のように時刻の範囲と組み合わせられます".into(), "絞り込み"),
+            Some(Prompt::LevelExtract) => ("ログレベルで抽出", "レベル（例: ERROR,WARN / >=WARN）を入力して Enter。該当する行を新しいタブに出します".into(), "抽出"),
+            Some(Prompt::TimeGoto) => ("時刻へ移動", "時刻（例: 2026-11-18 12:30:00）を入力して Enter。時刻順のログとして、その時刻以降の最初の行へ移ります".into(), "移動"),
+            Some(Prompt::Sequence) => ("連番を挿入", "開始値,増分,桁数（例: 1,1,3 → 001, 002…）を入力して Enter".into(), "挿入"),
+            Some(Prompt::Split) => ("ファイルを分割", "1 ファイルの行数、またはサイズ（例: 1000000 / 512MB / 2GB）を入力して Enter".into(), "分割"),
+            Some(Prompt::ColumnFilter) => {
+                let names: Vec<String> = if cols { self.csv_column_names(12).iter().enumerate().map(|(i, n)| format!("{}:{n}", i + 1)).collect() } else { Vec::new() };
+                let cols = if names.is_empty() { String::new() } else { format!("　列 {}", names.join("  ")) };
+                ("列フィルタ", format!("「列番号 演算子 値」の形で、演算子は下のチップでも選べます（例: 3 = ERROR / 4 >= 100）。Enter で絞り込み{cols}"), "絞り込み")
+            }
+            _ => ("", String::new(), ""),
+        };
+        (t.to_string(), h, go)
+    }
+
+    /// 説明の高さ（DIP）。1 行に収まれば 1 行分、そうでなければ 2 行分。`find_h` から何度も呼ばれる（`client_size` の中からも）ので、条件が変わったときだけ測る
+    fn prompt_hint_h(&self) -> f32 {
+        let Some(prompt) = self.prompt else { return 0.0 };
+        let hint = self.prompt_texts(false).1;
+        let width = self.client_w_dip();
+        let key = (prompt, hint.len(), (width * 10.0) as i32);
+        if let Some((k, h)) = self.hint_h_cache.get() {
+            if k == key {
+                return h;
+            }
+        }
+        // 列フィルタは、列名が付くので常に 2 行分
+        let units: Vec<u16> = hint.encode_utf16().collect();
+        let one_line = prompt != Prompt::ColumnFilter && unsafe { self.ui_text_width(&units) }.is_ok_and(|w| w <= width - 24.0);
+        let h = if one_line { 1.0 } else { 2.0 } * self.ui_line_h + 10.0;
+        self.hint_h_cache.set(Some((key, h)));
+        h
     }
 
     /// 入力欄の中身の取得
@@ -177,6 +223,7 @@ impl App {
                 mk(w!("BUTTON"), "置換", push, ID_ONE),
                 mk(w!("BUTTON"), "すべて置換", push, ID_ALL),
                 mk(w!("BUTTON"), "選択範囲を置換", push, ID_SEL),
+                mk(w!("BUTTON"), "実行", push, ID_GO),
             ];
             for (id, h) in &all {
                 if *id == ID_FIND {
@@ -235,8 +282,12 @@ impl App {
             let mut rc = RECT::default();
             let _ = GetClientRect(self.hwnd, &mut rc);
             let replace = self.prompt == Some(Prompt::Replace);
+            // 検索・置換以外の入力（行へ移動など）：題の幅の分だけ入力欄を右へ
+            let generic = !self.is_find_bar();
+            let (title, _, go) = self.prompt_texts(false);
+            let label_w = if generic { self.ui_text_width(&title.encode_utf16().collect::<Vec<u16>>()).unwrap_or(80.0) + 4.0 } else { 36.0 };
             let y0 = ((self.tab_h() + self.tb_h()) * scale).round() as i32;
-            let placed = [rc.right, y0, i32::from(replace), (scale * 100.0) as i32, 1];
+            let placed = [rc.right, y0, i32::from(replace) | (i32::from(generic) << 1) | (((label_w * 10.0) as i32) << 2), (scale * 100.0) as i32, (self.find_h() * 10.0) as i32];
             let first = !self.findrow_shown.get();
             if first || self.findrow_placed.get() != placed {
                 self.findrow_placed.set(placed);
@@ -246,9 +297,9 @@ impl App {
                     let _ = SetWindowPos(fr.h(id), None, s(x), y0 + row * row_h + pad, s(w), ih, SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
                 };
                 let w = rc.right as f32 / scale;
-                let edit_w = (w * 0.28).clamp(160.0, 340.0);
-                let ex = 52.0;
-                place(ID_LABEL, 12.0, 36.0, 0);
+                let edit_w = if generic { (w * 0.4).clamp(200.0, 480.0) } else { (w * 0.28).clamp(160.0, 340.0) };
+                let ex = if generic { 12.0 + label_w + 8.0 } else { 52.0 };
+                place(ID_LABEL, 12.0, label_w, 0);
                 // 入力欄：枠（背景に自前で描く）の内側に、文字の高さで置く
                 // 標準の入力欄は文字を上から描くので、高さは実際の文字の高さ（GDI）にして、枠の中央に置く
                 let th = {
@@ -266,14 +317,23 @@ impl App {
                 };
                 place_edit(ID_FIND, 0);
                 let mut x = ex + edit_w + 8.0;
-                for (id, bw) in [(ID_CASE, 34.0), (ID_REGEX, 34.0), (ID_WORD, 50.0)] {
-                    place(id, x, bw, 0);
-                    x += bw + 4.0;
-                }
-                x += 6.0;
-                for (id, bw) in [(ID_PREV, 70.0), (ID_NEXT, 70.0)] {
-                    place(id, x, bw, 0);
-                    x += bw + 4.0;
+                if generic {
+                    for id in [ID_CASE, ID_REGEX, ID_WORD, ID_PREV, ID_NEXT] {
+                        let _ = ShowWindow(fr.h(id), SW_HIDE);
+                    }
+                    place(ID_GO, x, 84.0, 0);
+                    x += 84.0 + 4.0;
+                } else {
+                    let _ = ShowWindow(fr.h(ID_GO), SW_HIDE);
+                    for (id, bw) in [(ID_CASE, 34.0), (ID_REGEX, 34.0), (ID_WORD, 50.0)] {
+                        place(id, x, bw, 0);
+                        x += bw + 4.0;
+                    }
+                    x += 6.0;
+                    for (id, bw) in [(ID_PREV, 70.0), (ID_NEXT, 70.0)] {
+                        place(id, x, bw, 0);
+                        x += bw + 4.0;
+                    }
                 }
                 place(ID_CLOSE, (w - 8.0 - 30.0).max(x), 30.0, 0);
                 if replace {
@@ -289,6 +349,15 @@ impl App {
                 }
                 self.findrow_frames.set([(ex, 5.0, ex + edit_w, 31.0), (ex, 5.0 + ROW_H, ex + edit_w, 31.0 + ROW_H)]);
                 self.findrow_shown.set(true);
+            }
+            // 題と実行ボタンの文字（入力の種類で変わる）
+            for (id, text) in [(ID_LABEL, if generic { title.as_str() } else { "検索" }), (ID_GO, go)] {
+                let h = fr.h(id);
+                if Self::edit_text(h) != text {
+                    let t = wide(text);
+                    let _ = SetWindowTextW(h, PCWSTR(t.as_ptr()));
+                    let _ = InvalidateRect(Some(h), None, true);
+                }
             }
             // 中身を写す（入力欄は、違うときだけ。入力中の文字をこちらで書き換えて、カーソルが動かないように）
             for (id, text) in [(ID_FIND, &self.input), (ID_REPL, &self.input2)] {
@@ -306,17 +375,30 @@ impl App {
                 }
             }
             // 開いた直後（Ctrl+F など）：入力欄に入って、全選択
-            if self.findrow_focus.take() {
+            let focus = self.findrow_focus.take();
+            if focus != 0 {
                 let target = if replace && self.prompt_focus == 1 { fr.h(ID_REPL) } else { fr.h(ID_FIND) };
                 let _ = SetFocus(Some(target));
-                SendMessageW(target, EM_SETSEL, Some(WPARAM(0)), Some(LPARAM(-1)));
+                // 1 = 全選択、2 = 末尾にカーソル（列フィルタの「3 : 」の続きを打つときなど）
+                if focus == 2 || self.prompt == Some(Prompt::ColumnFilter) {
+                    SendMessageW(target, EM_SETSEL, Some(WPARAM(i32::MAX as usize)), Some(LPARAM(i32::MAX as isize)));
+                } else {
+                    SendMessageW(target, EM_SETSEL, Some(WPARAM(0)), Some(LPARAM(-1)));
+                }
             }
         }
     }
 
     /// 開く・入力欄へ戻るときに、入力欄に入って全選択するよう頼む
     pub(super) fn focus_findrow(&self) {
-        self.findrow_focus.set(true);
+        self.panel_focus.set(false);
+        self.findrow_focus.set(1);
+        self.layout_findrow();
+    }
+
+    /// 入力欄に入って、末尾にカーソルを置く（演算子のチップを押したあと）
+    pub(super) fn focus_findrow_end(&self) {
+        self.findrow_focus.set(2);
         self.layout_findrow();
     }
 
@@ -329,7 +411,7 @@ impl App {
     }
 
     /// 検索・置換の行の部品からの通知（WM_COMMAND）
-    pub(super) fn findrow_command(&mut self, id: i32, code: u32) {
+    pub(super) fn findrow_command(&mut self, id: i32, code: u32) -> Option<Deferred> {
         match (id, code) {
             // 入力欄の文字が変わった：検索語・置換語に写す
             (ID_FIND | ID_REPL, 0x0300) => {
@@ -342,18 +424,28 @@ impl App {
                 }
                 self.find_bar_changed();
             }
+            // 実行ボタン（行へ移動・絞り込みなど）
+            (ID_GO, 0) => {
+                let d = self.submit_prompt();
+                // 閉じたら本文へ、開いたままなら入力欄へ戻る
+                let back = if self.prompt.is_none() { self.hwnd } else { self.findrow.borrow().as_ref().map(|f| f.h(ID_FIND)).unwrap_or(self.hwnd) };
+                unsafe {
+                    let _ = SetFocus(Some(back));
+                }
+                return d;
+            }
             // 入力欄の枠の色（入力中はアクセントカラー）のために、フォーカスの出入りで描き直す
             (ID_FIND | ID_REPL, 0x0100) => {
                 self.findrow_focus_id.set(id);
                 self.invalidate();
-                return;
+                return None;
             }
             (ID_FIND | ID_REPL, 0x0200) => {
                 if self.findrow_focus_id.get() == id {
                     self.findrow_focus_id.set(0);
                 }
                 self.invalidate();
-                return;
+                return None;
             }
             (ID_CASE, 0) => self.find_bar_do(FindAct::Case),
             (ID_REGEX, 0) => self.find_bar_do(FindAct::Regex),
@@ -368,9 +460,9 @@ impl App {
                 unsafe {
                     let _ = SetFocus(Some(self.hwnd));
                 }
-                return;
+                return None;
             }
-            _ => return,
+            _ => return None,
         }
         // ボタンを押したあとは、入力欄に戻る（続けて Enter で次を探せるように）
         if code == 0 && id != ID_FIND && id != ID_REPL {
@@ -381,6 +473,7 @@ impl App {
                 }
             }
         }
+        None
     }
 
     /// 検索・置換の行の背景（ツールバーと同じ色。下に細い線）。部品はこの上に重なる
@@ -396,6 +489,15 @@ impl App {
             rt.FillRectangle(&rect(0.0, h - 1.0, w, h), brush);
             // 入力欄の枠（四角／角丸は設定）。入力中の欄は、アクセントカラーの枠
             let rows = if self.prompt == Some(Prompt::Replace) { 2 } else { 1 };
+            // 検索・置換以外：チップ（列フィルタ）と、その下に説明
+            if !self.is_find_bar() {
+                if let Ok(b) = rt.CreateSolidColorBrush(&self.theme.gutter_text, None) {
+                    let _ = self.draw_filter_chips(rt, &b);
+                    let hint: Vec<u16> = self.prompt_texts(true).1.encode_utf16().collect();
+                    let top = ROW_H + self.filter_chip_row_h();
+                    rt.DrawText(&hint, &self.ui_format, &rect(12.0, top + 1.0, w - 12.0, h - 2.0), &b, D2D1_DRAW_TEXT_OPTIONS_CLIP, DWRITE_MEASURING_MODE_NATURAL);
+                }
+            }
             for (i, (x0, y0, x1, y1)) in self.findrow_frames.get().into_iter().enumerate().take(rows) {
                 let id = if i == 0 { ID_FIND } else { ID_REPL };
                 // 入力中の欄：フォーカスの通知（EN_SETFOCUS / EN_KILLFOCUS）で覚えた値を使う（描画の瞬間の GetFocus には頼らない）
@@ -420,6 +522,25 @@ unsafe extern "system" fn edit_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam
         match msg {
             // Enter・Tab・Esc の文字（ビープ音を鳴らさない）
             WM_CHAR if matches!(wparam.0, 0x0D | 0x09 | 0x1B) => return LRESULT(0),
+            // Ctrl+Backspace（標準の入力欄では、四角い記号が入ってしまう）：前の 1 語を消す。元に戻せる
+            WM_CHAR if wparam.0 == 0x7F => {
+                let mut sel = (0u32, 0u32);
+                SendMessageW(hwnd, EM_GETSEL, Some(WPARAM(&mut sel.0 as *mut u32 as usize)), Some(LPARAM(&mut sel.1 as *mut u32 as isize)));
+                if sel.0 == sel.1 {
+                    let units: Vec<u16> = App::edit_text(hwnd).encode_utf16().collect();
+                    let end = (sel.1 as usize).min(units.len());
+                    let mut start = end;
+                    while start > 0 && units[start - 1] == 0x20 {
+                        start -= 1;
+                    }
+                    while start > 0 && units[start - 1] != 0x20 {
+                        start -= 1;
+                    }
+                    SendMessageW(hwnd, EM_SETSEL, Some(WPARAM(start)), Some(LPARAM(end as isize)));
+                }
+                SendMessageW(hwnd, EM_REPLACESEL, Some(WPARAM(1)), Some(LPARAM(w!("").as_ptr() as isize)));
+                return LRESULT(0);
+            }
             WM_KEYDOWN | WM_SYSKEYDOWN => {
                 let vk = VIRTUAL_KEY(wparam.0 as u16);
                 let ctrl = GetKeyState(VK_CONTROL.0 as i32) < 0;
@@ -428,6 +549,18 @@ unsafe extern "system" fn edit_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam
                 if msg == WM_KEYDOWN && !ctrl && !alt {
                     match vk {
                         VK_RETURN => {
+                            // 検索・置換以外の入力は、実行（行へ移動・絞り込みなど）
+                            if with_app(|a| !a.is_find_bar()) == Some(true) {
+                                let d = with_app(|a| a.submit_prompt()).flatten();
+                                // 閉じたときだけ本文へ（開いたままなら入力欄に残る）
+                                if with_app(|a| a.prompt.is_none()) == Some(true) {
+                                    let _ = SetFocus(Some(main));
+                                }
+                                if let Some(d) = d {
+                                    run_deferred(main, d);
+                                }
+                                return LRESULT(0);
+                            }
                             let act = if data == 1 {
                                 FindAct::ReplOne
                             } else if shift {
@@ -460,7 +593,7 @@ unsafe extern "system" fn edit_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam
                 }
                 // ファンクションキーや Ctrl・Alt の組み合わせは、アプリの操作へ渡す（入力欄が自分で使うものは除く）
                 let function = (VK_F1.0..=VK_F12.0).contains(&vk.0);
-                let native = matches!(vk, VK_A | VK_C | VK_V | VK_X | VK_BACK | VK_DELETE | VK_LEFT | VK_RIGHT | VK_HOME | VK_END | VK_INSERT) && !alt;
+                let native = matches!(vk, VK_A | VK_C | VK_V | VK_X | VK_Z | VK_BACK | VK_DELETE | VK_LEFT | VK_RIGHT | VK_HOME | VK_END | VK_INSERT) && !alt;
                 if (function || ((ctrl || alt) && !native)) && !matches!(vk, VK_CONTROL | VK_MENU | VK_SHIFT) {
                     let _ = PostMessageW(Some(main), msg, wparam, lparam);
                     return LRESULT(0);
