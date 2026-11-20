@@ -304,6 +304,8 @@ struct App {
     findrow_shown: Cell<bool>,
     findrow_placed: Cell<[i32; 5]>,
     findrow_focus: Cell<u8>,
+    /// 検索の実行中に押された「次へ／前へ」（実行中の検索が終わったら、順に実行する）
+    find_queue: RefCell<Vec<Direction>>,
     /// 結果一覧をクリックして、キー（↑↓ など）を一覧が受けているか（本文や入力欄に入ると外れる）
     panel_focus: Cell<bool>,
     /// 入力の行の説明の高さの、測った結果（条件・値）

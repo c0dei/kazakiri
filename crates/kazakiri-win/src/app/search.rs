@@ -9,6 +9,14 @@ impl App {
             self.start_find_bar(false);
             return;
         }
+        // 検索の実行中に押されたら、取りこぼさず順に実行する（連打しても、押した回数だけ進む。起点が同じままやり直しにならない）
+        if self.search.as_ref().is_some_and(|j| !j.ctl.cancel.load(Ordering::Relaxed)) {
+            let mut q = self.find_queue.borrow_mut();
+            if q.len() < 20 {
+                q.push(dir);
+            }
+            return;
+        }
         let query = match Query::new(&doc, &self.last_find, self.opts) {
             Ok(q) => q,
             Err(e) => {
@@ -40,7 +48,10 @@ impl App {
             (Direction::Backward, true) => doc.len().saturating_sub(origin),
         };
 
-        self.cancel_search();
+        // 新しい検索に置き換える（待っている「次へ／前へ」は残す。折り返しの続きもここを通る）
+        if let Some(job) = &self.search {
+            job.ctl.cancel.store(true, Ordering::Relaxed);
+        }
         let id = self.next_job;
         self.next_job += 1;
         let ctl = Arc::new(SearchControl::default());
@@ -62,7 +73,9 @@ impl App {
         self.invalidate();
     }
 
+    /// 検索を中止する。待っている「次へ／前へ」も取り消す（タブやファイルが変わったときに、古い続きが走らないように）
     pub(super) fn cancel_search(&self) {
+        self.find_queue.borrow_mut().clear();
         if let Some(job) = &self.search {
             job.ctl.cancel.store(true, Ordering::Relaxed);
         }
@@ -125,8 +138,25 @@ impl App {
             SearchOutcome::Cancelled => self.message = "検索を中止しました".into(),
         }
         self.invalidate();
+        // 待っていた「次へ／前へ」があれば続けて実行する（見つからなかったときは取り消す）
+        let next = if found {
+            let mut q = self.find_queue.borrow_mut();
+            if q.is_empty() { None } else { Some(q.remove(0)) }
+        } else {
+            self.find_queue.borrow_mut().clear();
+            None
+        };
+        // 検索の進み具合の更新用のタイマーは、終わったらすぐ止める（終わったあとに無駄な再描画をしない）
+        if next.is_none() && self.search.is_none() && self.saving.is_none() && self.rjob.is_none() {
+            unsafe {
+                let _ = KillTimer(Some(self.hwnd), TIMER_SEARCH);
+            }
+        }
         // マクロの再生中なら、続きへ（見つからなかったときは終える）
         self.macro_after_search(found);
+        if let Some(dir) = next {
+            self.find(dir);
+        }
     }
 
     /// 一致が横にはみ出していたら横スクロールする

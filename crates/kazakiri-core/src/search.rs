@@ -297,12 +297,15 @@ impl Query {
 
         let threads = threads();
         let mut pos = near_end;
+        // 窓は小さく始めて倍々に広げる（近めの一致を、広い窓の走査が終わるのを待たずに返すため）
+        let mut chunk = NEAR.min(self.sub_chunk());
         while pos < len {
             if ctl.cancel.load(Ordering::Relaxed) {
                 return SearchOutcome::Cancelled;
             }
-            let win_end = doc.line_start_at_or_after((pos + self.sub_chunk() * threads) as u64) as usize;
-            let ranges = split(doc, pos, win_end, self.sub_chunk());
+            let win_end = doc.line_start_at_or_after((pos + chunk * threads) as u64) as usize;
+            let ranges = split(doc, pos, win_end, chunk);
+            chunk = (chunk * 2).min(self.sub_chunk());
             let results = run_parallel(&ranges, |&(a, b)| {
                 if ctl.cancel.load(Ordering::Relaxed) {
                     return None;
@@ -335,12 +338,14 @@ impl Query {
 
         let threads = threads();
         let mut pos = near_start;
+        let mut chunk = NEAR.min(self.sub_chunk());
         while pos > floor {
             if ctl.cancel.load(Ordering::Relaxed) {
                 return SearchOutcome::Cancelled;
             }
-            let win_start = doc.line_start_at_or_before(pos.saturating_sub(self.sub_chunk() * threads) as u64) as usize;
-            let ranges = split(doc, win_start, pos, self.sub_chunk());
+            let win_start = doc.line_start_at_or_before(pos.saturating_sub(chunk * threads) as u64) as usize;
+            let ranges = split(doc, win_start, pos, chunk);
+            chunk = (chunk * 2).min(self.sub_chunk());
             let results = run_parallel(&ranges, |&(a, b)| {
                 if ctl.cancel.load(Ordering::Relaxed) {
                     return None;

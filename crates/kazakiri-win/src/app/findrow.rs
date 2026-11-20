@@ -230,6 +230,8 @@ impl App {
                     let _ = SetWindowSubclass(*h, Some(edit_proc), 1, 0);
                 } else if *id == ID_REPL {
                     let _ = SetWindowSubclass(*h, Some(edit_proc), 1, 1);
+                } else if (ID_CASE..=ID_CLOSE).contains(id) || (ID_ONE..=ID_GO).contains(id) {
+                    let _ = SetWindowSubclass(*h, Some(button_proc), 2, 0);
                 }
             }
             *self.findrow.borrow_mut() = Some(FindRow { all });
@@ -412,6 +414,9 @@ impl App {
 
     /// 検索・置換の行の部品からの通知（WM_COMMAND）
     pub(super) fn findrow_command(&mut self, id: i32, code: u32) -> Option<Deferred> {
+        // 自前描画のボタンは、素早い 2 回目のクリックが「ダブルクリック」（BN_DOUBLECLICKED = 5）として届く。
+        // これを無視すると、連打したときに 2 回に 1 回が落ちる。ふつうのクリックと同じに扱う
+        let code = if code == 5 && !matches!(id, ID_FIND | ID_REPL) { 0 } else { code };
         match (id, code) {
             // 入力欄の文字が変わった：検索語・置換語に写す
             (ID_FIND | ID_REPL, 0x0300) => {
@@ -513,6 +518,12 @@ impl App {
             }
         }
     }
+}
+
+/// ボタンのサブクラス：素早い 2 回目のクリック（WM_LBUTTONDBLCLK）を、ふつうの押下（WM_LBUTTONDOWN）として扱う。
+/// 自前描画のボタンはダブルクリックを押下として描かないので、連打すると 2 回目のハイライトが出なかった
+unsafe extern "system" fn button_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM, _id: usize, _data: usize) -> LRESULT {
+    unsafe { DefSubclassProc(hwnd, if msg == WM_LBUTTONDBLCLK { WM_LBUTTONDOWN } else { msg }, wparam, lparam) }
 }
 
 /// 入力欄のサブクラス：Enter・Esc・Tab・F3・Ctrl+… を、アプリの操作につなぐ。`data` は 0 = 検索欄、1 = 置換欄

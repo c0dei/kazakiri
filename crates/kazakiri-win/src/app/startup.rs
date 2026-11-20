@@ -83,6 +83,7 @@ pub(super) unsafe fn run_inner() -> std::result::Result<(), (&'static str, windo
             findrow_shown: Cell::new(false),
             findrow_placed: Cell::new([0; 5]),
             findrow_focus: Cell::new(0),
+            find_queue: RefCell::new(Vec::new()),
             panel_focus: Cell::new(false),
             hint_h_cache: Cell::new(None),
             findrow_focus_id: Cell::new(0),
