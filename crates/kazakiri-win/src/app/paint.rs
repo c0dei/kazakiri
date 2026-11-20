@@ -523,25 +523,14 @@ impl App {
         s
     }
 
-    /// 入力欄のカード（本文の右上に浮かせる）の位置。(x0, y0, x1, y1)。ツールバーとタブバーを除いた座標
+    /// コマンドパレットのカードの位置。(x0, y0, x1, y1)。ツールバーとタブバーを除いた座標（そのほかの入力は、標準の入力欄の行。findrow.rs）
     pub(super) fn prompt_card(&self) -> (f32, f32, f32, f32) {
-        if self.prompt == Some(Prompt::Palette) {
-            return self.palette_layout().card;
-        }
-        let w = self.client_size().0;
-        let cw = (w - 40.0).clamp(280.0, 560.0).min(w);
-        let (x0, y0) = ((w - cw - 20.0).max(0.0), self.pin_h() + 10.0);
-        (x0, y0, x0 + cw, y0 + 14.0 + self.ui_line_h * 3.0 + 14.0 + 10.0 + 6.0 + self.filter_chip_row_h())
+        self.palette_layout().card
     }
 
-    /// 入力欄（カードの中の入力の枠）の位置。(x0, y0, x1, y1)
+    /// コマンドパレットの入力の枠の位置。(x0, y0, x1, y1)
     pub(super) fn prompt_input_rect(&self) -> (f32, f32, f32, f32) {
-        if self.prompt == Some(Prompt::Palette) {
-            return self.palette_layout().input;
-        }
-        let (x0, y0, x1, _) = self.prompt_card();
-        let top = y0 + 10.0 + self.ui_line_h + 6.0;
-        (x0 + 12.0, top, x1 - 12.0, top + self.ui_line_h + 8.0)
+        self.palette_layout().input
     }
 
     /// 入力欄の文字の上端（ツールバーとタブバーを除いた座標）

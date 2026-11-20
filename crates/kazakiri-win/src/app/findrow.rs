@@ -169,7 +169,7 @@ impl App {
         (t.to_string(), h, go)
     }
 
-    /// 説明の高さ（DIP）。1 行に収まれば 1 行分、そうでなければ 2 行分。`find_h` から何度も呼ばれる（`client_size` の中からも）ので、条件が変わったときだけ測る
+    /// 説明の高さ（DIP）。文字の幅と窓の幅から行数（1〜4）を決める。`find_h` から何度も呼ばれる（`client_size` の中からも）ので、条件が変わったときだけ測る
     fn prompt_hint_h(&self) -> f32 {
         let Some(prompt) = self.prompt else { return 0.0 };
         let hint = self.prompt_texts(false).1;
@@ -180,10 +180,12 @@ impl App {
                 return h;
             }
         }
-        // 列フィルタは、列名が付くので常に 2 行分
         let units: Vec<u16> = hint.encode_utf16().collect();
-        let one_line = prompt != Prompt::ColumnFilter && unsafe { self.ui_text_width(&units) }.is_ok_and(|w| w <= width - 24.0);
-        let h = if one_line { 1.0 } else { 2.0 } * self.ui_line_h + 10.0;
+        let avail = (width - 24.0).max(1.0);
+        // 折り返しの分、少し余裕を見る。列フィルタは、列名が付くので少なくとも 2 行分
+        let lines = unsafe { self.ui_text_width(&units) }.map_or(2, |w| ((w * 1.04 / avail).ceil() as usize).clamp(1, 4));
+        let lines = if prompt == Prompt::ColumnFilter { lines.max(2) } else { lines };
+        let h = lines as f32 * self.ui_line_h + 10.0;
         self.hint_h_cache.set(Some((key, h)));
         h
     }
@@ -301,6 +303,9 @@ impl App {
                 let w = rc.right as f32 / scale;
                 let edit_w = if generic { (w * 0.4).clamp(200.0, 480.0) } else { (w * 0.28).clamp(160.0, 340.0) };
                 let ex = if generic { 12.0 + label_w + 8.0 } else { 52.0 };
+                // 窓が狭いときは、右のボタン（実行・✕、検索行ならさらに切り替えと前へ・次へ）が画面の外に出ないよう、入力欄を縮める
+                let reserve = if generic { 84.0 + 4.0 + 8.0 + 30.0 + 8.0 } else { 322.0 + 8.0 };
+                let edit_w = edit_w.min((w - ex - 8.0 - reserve).max(80.0));
                 place(ID_LABEL, 12.0, label_w, 0);
                 // 入力欄：枠（背景に自前で描く）の内側に、文字の高さで置く
                 // 標準の入力欄は文字を上から描くので、高さは実際の文字の高さ（GDI）にして、枠の中央に置く
@@ -500,7 +505,11 @@ impl App {
                     let _ = self.draw_filter_chips(rt, &b);
                     let hint: Vec<u16> = self.prompt_texts(true).1.encode_utf16().collect();
                     let top = ROW_H + self.filter_chip_row_h();
-                    rt.DrawText(&hint, &self.ui_format, &rect(12.0, top + 1.0, w - 12.0, h - 2.0), &b, D2D1_DRAW_TEXT_OPTIONS_CLIP, DWRITE_MEASURING_MODE_NATURAL);
+                    // 説明は折り返して描く（共有の書式は折り返さない設定なので、レイアウトごとに切り替える）
+                    if let Ok(layout) = self.dw.CreateTextLayout(&hint, &self.ui_format, (w - 24.0).max(1.0), (h - top - 2.0).max(1.0)) {
+                        let _ = layout.SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP);
+                        rt.DrawTextLayout(Vector2 { X: 12.0, Y: top + 1.0 }, &layout, &b, D2D1_DRAW_TEXT_OPTIONS_CLIP);
+                    }
                 }
             }
             for (i, (x0, y0, x1, y1)) in self.findrow_frames.get().into_iter().enumerate().take(rows) {

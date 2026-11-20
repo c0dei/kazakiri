@@ -727,6 +727,13 @@ impl App {
                     }
                     (DONE, None)
                 }
+                // 小さくしすぎない（検索・入力の行のボタンが、画面の外に出ない幅）
+                WM_GETMINMAXINFO => {
+                    let scale = GetDpiForWindow(self.hwnd) as f32 / 96.0;
+                    let mmi = &mut *(lparam.0 as *mut MINMAXINFO);
+                    mmi.ptMinTrackSize = POINT { x: (480.0 * scale) as i32, y: (300.0 * scale) as i32 };
+                    (DONE, None)
+                }
                 WM_TIMER if wparam.0 == TIMER_SEARCH => {
                     if self.search.is_none() && self.saving.is_none() && self.rjob.is_none() {
                         let _ = KillTimer(Some(self.hwnd), TIMER_SEARCH);
