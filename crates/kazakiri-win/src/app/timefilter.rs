@@ -19,38 +19,48 @@ impl App {
         self.last_time.clone()
     }
 
-    /// 時刻の範囲で絞り込む。`extract` なら、結果を新しいタブに出す
+    /// 時刻の範囲で絞り込む（`ERROR @ 時刻の範囲` のようにレベルと組み合わせてもよい）。`extract` なら、結果を新しいタブに出す
     pub(super) fn start_time_filter(&mut self, spec: &str, extract: bool) {
-        if self.doc.is_none() {
-            return;
-        }
-        let range = match TimeRange::parse(spec) {
-            Ok(r) => r,
-            Err(e) => {
-                self.message = e;
-                return self.invalidate();
-            }
-        };
         self.last_time = spec.trim().to_string();
-        let label = format!("時刻 {}", self.last_time);
-        self.start_record_filter(label, extract, move |doc, ctl| logtime::filter_time(doc, range, 1_000_000, ctl));
+        self.start_log_filter(spec, extract);
     }
 
-    /// ログレベルで絞り込む。`extract` なら、結果を新しいタブに出す
+    /// ログレベルで絞り込む（`ERROR @ 時刻の範囲` のように時刻と組み合わせてもよい）。`extract` なら、結果を新しいタブに出す
     pub(super) fn start_level_filter(&mut self, spec: &str, extract: bool) {
+        self.last_level = spec.trim().to_string();
+        self.start_log_filter(spec, extract);
+    }
+
+    /// 入力を「レベル」「時刻の範囲」「レベル @ 時刻の範囲」のどれかとして読み、絞り込む
+    fn start_log_filter(&mut self, spec: &str, extract: bool) {
         if self.doc.is_none() {
             return;
         }
-        let level = match LevelSpec::parse(spec) {
-            Ok(l) => l,
-            Err(e) => {
-                self.message = e;
-                return self.invalidate();
+        let mut level: Option<LevelSpec> = None;
+        let mut range: Option<TimeRange> = None;
+        for part in spec.split('@').map(str::trim).filter(|p| !p.is_empty()) {
+            if let Ok(l) = LevelSpec::parse(part) {
+                level = Some(l);
+            } else {
+                match TimeRange::parse(part) {
+                    Ok(r) => range = Some(r),
+                    Err(e) => {
+                        self.message = format!("{part}：{e}（レベルは ERROR,WARN / >=WARN、時刻は 2026-11-18 12:00 ～ 13:30。両方は @ でつなぎます）");
+                        return self.invalidate();
+                    }
+                }
             }
-        };
-        self.last_level = spec.trim().to_string();
-        let label = format!("レベル {}", self.last_level);
-        self.start_record_filter(label, extract, move |doc, ctl| loglevel::filter_level(doc, level, 1_000_000, ctl));
+        }
+        let text = spec.trim().to_string();
+        match (level, range) {
+            (Some(l), Some(r)) => self.start_record_filter(text.clone(), extract, move |doc, ctl| loglevel::filter_level_time(doc, l, r, 1_000_000, ctl)),
+            (Some(l), None) => self.start_record_filter(format!("レベル {text}"), extract, move |doc, ctl| loglevel::filter_level(doc, l, 1_000_000, ctl)),
+            (None, Some(r)) => self.start_record_filter(format!("時刻 {text}"), extract, move |doc, ctl| logtime::filter_time(doc, r, 1_000_000, ctl)),
+            (None, None) => {
+                self.message = "レベルか時刻の範囲を入力してください".into();
+                self.invalidate();
+            }
+        }
     }
 
     /// 時刻・レベルの絞り込みを、別のスレッドで走らせて、結果を一覧に出す

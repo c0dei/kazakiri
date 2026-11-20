@@ -4,7 +4,7 @@
 //! レベルのない行（スタックトレースなど）は、直前のレベルのある行の続きとして、同じ扱いにする。
 
 use crate::document::Document;
-use crate::logtime::filter_records;
+use crate::logtime::{filter_records, parse_timestamp, TimeRange};
 use crate::search::{FindAll, SearchControl};
 
 /// 重大度の順（小さいほど軽い）
@@ -122,6 +122,11 @@ pub fn filter_level(doc: &Document, spec: LevelSpec, limit: usize, ctl: &SearchC
     filter_records(doc, limit, ctl, |text| line_level(text).map(|l| spec.contains(l)))
 }
 
+/// レベルと時刻の範囲の両方に合う記録を返す。記録の先頭は「時刻のある行」で、その行にレベルがなければ合わないとする
+pub fn filter_level_time(doc: &Document, spec: LevelSpec, range: TimeRange, limit: usize, ctl: &SearchControl) -> Result<(FindAll, u64), String> {
+    filter_records(doc, limit, ctl, |text| parse_timestamp(text).map(|t| range.contains(t) && line_level(text).is_some_and(|l| spec.contains(l))))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,5 +189,22 @@ mod tests {
         let (_, n) = filter_level(&d, LevelSpec::parse("INFO").unwrap(), 1000, &SearchControl::default()).unwrap();
         // INFO の行 59,940 + 境目の続きの行 1 + 末尾の改行のあとの空行 1
         assert_eq!(n, 60_000 - 60 + 2);
+    }
+
+    #[test]
+    fn filter_level_and_time() {
+        let d = doc("2026-11-18 11:59:00 ERROR early
+2026-11-18 12:10:00 INFO ok
+2026-11-18 12:20:00 ERROR boom
+  at a.b(c)
+2026-11-18 12:30:00 no level here
+2026-11-18 13:10:00 ERROR late
+");
+        let r = TimeRange::parse("2026-11-18 12:00 ~ 13:00").unwrap();
+        let (f, n) = filter_level_time(&d, LevelSpec::parse("ERROR").unwrap(), r, 100, &SearchControl::default()).unwrap();
+        assert_eq!((f.ranges.len(), n), (1, 2));
+        let (s, e) = f.ranges[0];
+        assert_eq!(d.decode(&d.read(s, e)).into_owned(), "2026-11-18 12:20:00 ERROR boom
+  at a.b(c)");
     }
 }
