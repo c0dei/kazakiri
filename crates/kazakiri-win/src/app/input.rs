@@ -5,6 +5,18 @@ use super::*;
 impl App {
     /// ツールバー・機能ボタン・自前のメニューバー・ステータスバーを押した。該当すれば Some（中身は実行後の続き）
     pub(super) unsafe fn chrome_press(&mut self, x: f32, y: f32) -> Option<Option<Deferred>> {
+        // ツールバーの「≫」：幅に収まらなかったボタンのメニュー
+        if self.hover_at(x, y) == Some(super::toolbar::Hover::ToolMore) {
+            self.hover = None;
+            self.hide_tip();
+            return Some(Some(Deferred::ToolMore));
+        }
+        // モードバーの「≫」
+        if self.hover_at(x, y) == Some(super::toolbar::Hover::ModeMore) {
+            self.hover = None;
+            self.hide_tip();
+            return Some(Some(Deferred::ModeMore));
+        }
         // ツールバー・機能ボタン
         if let Some(id) = self.hover_at(x, y).and_then(|h| self.hover_command(h)).map(|(id, _)| id) {
             self.hover = None;

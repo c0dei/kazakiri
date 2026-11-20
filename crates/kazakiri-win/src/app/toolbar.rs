@@ -141,6 +141,10 @@ const MODE_PAD: f32 = 10.0;
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Hover {
     Tool(usize),
+    /// ツールバーの「≫」（幅に収まらなかったボタンをまとめたメニュー）
+    ToolMore,
+    /// モードバーの「≫」
+    ModeMore,
     Fkey(usize),
     /// モードバーのボタン
     Mode(usize),
@@ -198,7 +202,7 @@ impl App {
 
     /// モードバーのボタンの位置 (x0, x1, 番号) と、「対象の列」ドロップダウンの位置 (x0, x1)。
     /// ドロップダウンは、並べ替え・列フィルタのボタンの直前に置く
-    fn mode_layout(&self) -> ModeLayout {
+    fn mode_layout_raw(&self) -> ModeLayout {
         let pick_w = self.colpick_label().map(|label| {
             let units: Vec<u16> = label.encode_utf16().collect();
             unsafe { self.ui_text_width(&units) }.unwrap_or(units.len() as f32 * self.ui_char_w) + 34.0
@@ -232,8 +236,84 @@ impl App {
         (out, pick)
     }
 
+    /// 幅に収まるボタンと「対象の列」の欄、収まらないものがあるときの「≫」の位置 (x0, x1)
+    fn mode_layout_all(&self) -> (Vec<(f32, f32, usize)>, Option<(f32, f32)>, Option<(f32, f32)>) {
+        let (all, pick) = self.mode_layout_raw();
+        let w = self.full_w();
+        let right = all.last().map_or(0.0, |b| b.1).max(pick.map_or(0.0, |p| p.1));
+        if right + BTN_PAD <= w {
+            return (all, pick, None);
+        }
+        let limit = w - BTN_PAD - BTN_W - 4.0;
+        let visible: Vec<(f32, f32, usize)> = all.into_iter().filter(|b| b.1 <= limit).collect();
+        let pick = pick.filter(|p| p.1 <= limit);
+        let end = visible.last().map_or(BTN_PAD, |b| b.1).max(pick.map_or(0.0, |p| p.1));
+        (visible, pick, Some((end + 4.0, end + 4.0 + BTN_W)))
+    }
+
+    fn mode_layout(&self) -> ModeLayout {
+        let (boxes, pick, _) = self.mode_layout_all();
+        (boxes, pick)
+    }
+
     fn mode_boxes(&self) -> Vec<(f32, f32, usize)> {
         self.mode_layout().0
+    }
+
+    /// モードバーの「≫」の位置（収まらないものがあるときだけ）
+    fn mode_more_box(&self) -> Option<(f32, f32)> {
+        self.mode_layout_all().2
+    }
+
+    /// モードバーの「≫」を押したときのメニュー：収まらなかったボタンを、並びの順に出す
+    pub(super) unsafe fn build_mode_more_menu(&self) -> Option<HMENU> {
+        unsafe {
+            let m = CreatePopupMenu().ok()?;
+            let (boxes, pick, _) = self.mode_layout_all();
+            let shown: Vec<usize> = boxes.iter().map(|b| b.2).collect();
+            let (mut sep, mut any) = (false, false);
+            for (i, b) in MODES.iter().enumerate() {
+                if !self.mode_shown(i) {
+                    continue;
+                }
+                match b {
+                    None => sep = any,
+                    Some((label, id, _)) => {
+                        // 「対象の列」の欄が収まらなかったときは、並べ替えの前に、同じ操作の項目を出す
+                        if *id == menu::ID_SORT_ASC && pick.is_none() && self.colpick_label().is_some() {
+                            if std::mem::take(&mut sep) {
+                                let _ = AppendMenuW(m, MF_SEPARATOR, 0, PCWSTR::null());
+                            }
+                            let w = wide("対象の列を選ぶ…");
+                            let _ = AppendMenuW(m, MF_STRING, menu::ID_COLPICK as usize, PCWSTR(w.as_ptr()));
+                            any = true;
+                        }
+                        if shown.contains(&i) {
+                            continue;
+                        }
+                        if std::mem::take(&mut sep) {
+                            let _ = AppendMenuW(m, MF_SEPARATOR, 0, PCWSTR::null());
+                        }
+                        let flags = MF_STRING | if self.mode_checked(*id) { MF_CHECKED } else { MF_UNCHECKED };
+                        let w = wide(&label.replace('&', "&&"));
+                        let _ = AppendMenuW(m, flags, *id as usize, PCWSTR(w.as_ptr()));
+                        any = true;
+                    }
+                }
+            }
+            Some(m)
+        }
+    }
+
+    /// モードバーの「≫」の真下（画面の座標）
+    pub(super) fn mode_more_anchor(&self) -> Option<POINT> {
+        let (x0, _) = self.mode_more_box()?;
+        let scale = unsafe { GetDpiForWindow(self.hwnd) } as f32 / 96.0;
+        let mut pt = POINT { x: (x0 * scale) as i32, y: ((self.tab_h() + ROW1_H + MODE_H) * scale) as i32 };
+        unsafe {
+            let _ = ClientToScreen(self.hwnd, &mut pt);
+        }
+        Some(pt)
     }
 
     /// 「対象の列」の表示（CSV 表示のとき）。ボタンの文字
@@ -287,19 +367,74 @@ impl App {
         if self.settings.fkeys { self.ui_line_h + 8.0 } else { 0.0 }
     }
 
-    /// ボタンの位置。(x0, x1, ボタンの番号)
-    fn tool_boxes(&self) -> Vec<(f32, f32, usize)> {
+    /// 幅に収まるボタンの位置 (x0, x1, ボタンの番号) と、収まらないボタンがあるときの「≫」の位置 (x0, x1)
+    fn tool_layout(&self) -> (Vec<(f32, f32, usize)>, Option<(f32, f32)>) {
         let mut x = BTN_PAD;
-        let mut out = Vec::new();
+        let mut all = Vec::new();
         for (i, b) in BUTTONS.iter().enumerate() {
             if b.is_some() {
-                out.push((x, x + BTN_W, i));
+                all.push((x, x + BTN_W, i));
                 x += BTN_W;
             } else {
                 x += SEP_W;
             }
         }
-        out
+        let w = self.full_w();
+        if all.last().is_none_or(|b| b.1 + BTN_PAD <= w) {
+            return (all, None);
+        }
+        // 収まらないときは、右端に「≫」の分を残して、入るところまで並べる
+        let limit = w - BTN_PAD - BTN_W - 4.0;
+        let visible: Vec<(f32, f32, usize)> = all.into_iter().filter(|b| b.1 <= limit).collect();
+        let x0 = visible.last().map_or(BTN_PAD, |b| b.1 + 4.0);
+        (visible, Some((x0, x0 + BTN_W)))
+    }
+
+    /// ボタンの位置。(x0, x1, ボタンの番号)。幅に収まらないものは、含めない（「≫」のメニューに入る）
+    fn tool_boxes(&self) -> Vec<(f32, f32, usize)> {
+        self.tool_layout().0
+    }
+
+    /// 「≫」の位置（幅に収まらないボタンがあるときだけ）
+    fn tool_more_box(&self) -> Option<(f32, f32)> {
+        self.tool_layout().1
+    }
+
+    /// 「≫」を押したときのメニュー：幅に収まらなかったボタンを、並びの順に出す（トグルの状態はチェックで）
+    pub(super) unsafe fn build_tool_more_menu(&self) -> Option<HMENU> {
+        unsafe {
+            let m = CreatePopupMenu().ok()?;
+            let shown: Vec<usize> = self.tool_boxes().iter().map(|b| b.2).collect();
+            let (mut sep, mut any) = (false, false);
+            for (i, b) in BUTTONS.iter().enumerate() {
+                match b {
+                    // 区切りは、メニューの項目が続くときだけ入れる
+                    None => sep = any,
+                    Some((_, id, tip)) if !shown.contains(&i) => {
+                        if std::mem::take(&mut sep) {
+                            let _ = AppendMenuW(m, MF_SEPARATOR, 0, PCWSTR::null());
+                        }
+                        let flags = MF_STRING | if self.tool_checked(*id) { MF_CHECKED } else { MF_UNCHECKED };
+                        let w = wide(&tip.replace('&', "&&"));
+                        let _ = AppendMenuW(m, flags, *id as usize, PCWSTR(w.as_ptr()));
+                        any = true;
+                    }
+                    _ => {}
+                }
+            }
+            Some(m)
+        }
+    }
+
+    /// 「≫」の真下（画面の座標）
+    pub(super) fn tool_more_anchor(&self) -> Option<POINT> {
+        let (x0, _) = self.tool_more_box()?;
+        let scale = unsafe { GetDpiForWindow(self.hwnd) } as f32 / 96.0;
+        let mut pt = POINT { x: (x0 * scale) as i32, y: (ROW1_H * scale) as i32 };
+        unsafe {
+            let _ = ClientToScreen(self.hwnd, &mut pt);
+        }
+        Some(pt)
     }
 
     /// 押されているトグルの状態
@@ -325,9 +460,15 @@ impl App {
         if tb > 0.0 {
             let tabs_top = self.tab_range().start;
             if (tabs_top - ROW1_H..tabs_top).contains(&y) {
+                if self.tool_more_box().is_some_and(|(x0, x1)| x >= x0 && x < x1) {
+                    return Some(Hover::ToolMore);
+                }
                 return self.tool_boxes().into_iter().find(|&(x0, x1, _)| x >= x0 && x < x1).map(|(_, _, i)| Hover::Tool(i));
             }
             if mh > 0.0 && (-(fh + mh)..-fh).contains(&y) {
+                if self.mode_more_box().is_some_and(|(x0, x1)| x >= x0 && x < x1) {
+                    return Some(Hover::ModeMore);
+                }
                 if let Some((x0, x1)) = self.colpick_box() {
                     if x >= x0 && x < x1 {
                         return Some(Hover::ColPick);
@@ -355,7 +496,7 @@ impl App {
             Hover::Mode(i) => MODES.get(i).copied().flatten().map(|(_, id, tip)| (id, tip)),
             Hover::ColPick => Some((menu::ID_COLPICK, "並べ替え・列フィルタの対象の列を選ぶ（見出しのクリックでも選べる）")),
             Hover::Fkey(i) => FKEYS.get(i).map(|&(label, id)| (id, label)),
-            Hover::Tab(_) | Hover::Status(_) => None,
+            Hover::Tab(_) | Hover::Status(_) | Hover::ToolMore | Hover::ModeMore => None,
         }
     }
 
@@ -366,7 +507,7 @@ impl App {
             self.hover = hv;
             self.hide_tip();
             // ツールバーのボタンの上なら、少し待ってから説明を出す
-            if matches!(hv, Some(Hover::Tool(_) | Hover::Mode(_) | Hover::ColPick)) {
+            if matches!(hv, Some(Hover::Tool(_) | Hover::ToolMore | Hover::ModeMore | Hover::Mode(_) | Hover::ColPick)) {
                 unsafe {
                     SetTimer(Some(self.hwnd), TIMER_TIP, 450, None);
                 }
@@ -408,6 +549,14 @@ impl App {
                 if let Some((_, _, tip)) = BUTTONS.get(i).copied().flatten() {
                     self.tip = Some((tip.to_string(), x0, false));
                 }
+            }
+            Some(Hover::ToolMore) => {
+                let Some((x0, _)) = self.tool_more_box() else { return };
+                self.tip = Some(("ほかの操作".to_string(), x0, false));
+            }
+            Some(Hover::ModeMore) => {
+                let Some((x0, _)) = self.mode_more_box() else { return };
+                self.tip = Some(("ほかの操作".to_string(), x0, true));
             }
             Some(Hover::Mode(i)) => {
                 let Some((x0, _, _)) = self.mode_boxes().into_iter().find(|b| b.2 == i) else { return };
@@ -462,6 +611,19 @@ impl App {
                 }
                 brush.SetColor(&t.text);
                 self.draw_icon(rt, brush, icon, x0 + (BTN_W - 16.0) / 2.0, (h - 16.0) / 2.0);
+            }
+            // 幅に収まらないボタンがあるときの「≫」
+            if let Some((x0, x1)) = self.tool_more_box() {
+                if self.hover == Some(Hover::ToolMore) {
+                    brush.SetColor(&t.panel_head);
+                    rt.FillRoundedRectangle(&rrect(x0, 3.0, x1, h - 3.0, 5.0), brush);
+                }
+                brush.SetColor(&t.text);
+                let (cx, cy) = ((x0 + x1) / 2.0, h / 2.0);
+                for dx in [-3.5f32, 2.5] {
+                    rt.DrawLine(Vector2 { X: cx + dx - 2.0, Y: cy - 4.0 }, Vector2 { X: cx + dx + 2.0, Y: cy }, brush, 1.4, None);
+                    rt.DrawLine(Vector2 { X: cx + dx + 2.0, Y: cy }, Vector2 { X: cx + dx - 2.0, Y: cy + 4.0 }, brush, 1.4, None);
+                }
             }
             // 区切り線（モードバーがなければ、ツールバーの下の線）
             if self.mode_h() == 0.0 {
@@ -584,6 +746,19 @@ impl App {
                 brush.SetColor(&t.gutter_text);
                 rt.DrawLine(Vector2 { X: cx - 4.0, Y: cy + dy }, Vector2 { X: cx, Y: cy - dy }, brush, 1.4, None);
                 rt.DrawLine(Vector2 { X: cx, Y: cy - dy }, Vector2 { X: cx + 4.0, Y: cy + dy }, brush, 1.4, None);
+            }
+            // 幅に収まらないボタンがあるときの「≫」
+            if let Some((x0, x1)) = self.mode_more_box() {
+                if self.hover == Some(Hover::ModeMore) {
+                    brush.SetColor(&t.panel_head);
+                    rt.FillRoundedRectangle(&rrect(x0, 3.0, x1, h - 3.0, 5.0), brush);
+                }
+                brush.SetColor(&t.text);
+                let (cx, cy) = ((x0 + x1) / 2.0, h / 2.0);
+                for dx in [-3.5f32, 2.5] {
+                    rt.DrawLine(Vector2 { X: cx + dx - 2.0, Y: cy - 4.0 }, Vector2 { X: cx + dx + 2.0, Y: cy }, brush, 1.4, None);
+                    rt.DrawLine(Vector2 { X: cx + dx + 2.0, Y: cy }, Vector2 { X: cx + dx - 2.0, Y: cy + 4.0 }, brush, 1.4, None);
+                }
             }
             brush.SetColor(&t.dim);
             rt.FillRectangle(&rect(0.0, h - 1.0, w, h), brush);

@@ -58,6 +58,33 @@ pub(super) unsafe fn run_deferred(hwnd: HWND, d: Deferred) {
             }
         },
         Deferred::ShowKeys => unsafe { keys_dialog::show(hwnd) },
+        Deferred::ToolMore => unsafe {
+            if let Some(Some(menu)) = with_app(|app| app.build_tool_more_menu()) {
+                // 「≫」の真下から開く
+                let mut pt = POINT::default();
+                match with_app(|app| app.tool_more_anchor()).flatten() {
+                    Some(p) => pt = p,
+                    None => {
+                        let _ = GetCursorPos(&mut pt);
+                    }
+                }
+                let _ = TrackPopupMenu(menu, TPM_LEFTALIGN | TPM_TOPALIGN, pt.x, pt.y, None, hwnd, None);
+                let _ = DestroyMenu(menu);
+            }
+        },
+        Deferred::ModeMore => unsafe {
+            if let Some(Some(menu)) = with_app(|app| app.build_mode_more_menu()) {
+                let mut pt = POINT::default();
+                match with_app(|app| app.mode_more_anchor()).flatten() {
+                    Some(p) => pt = p,
+                    None => {
+                        let _ = GetCursorPos(&mut pt);
+                    }
+                }
+                let _ = TrackPopupMenu(menu, TPM_LEFTALIGN | TPM_TOPALIGN, pt.x, pt.y, None, hwnd, None);
+                let _ = DestroyMenu(menu);
+            }
+        },
         Deferred::DiffMenu => unsafe {
             if let Some(Some(menu)) = with_app(|app| app.build_diff_menu()) {
                 let mut pt = POINT::default();
