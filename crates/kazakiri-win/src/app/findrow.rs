@@ -396,6 +396,52 @@ impl App {
         }
     }
 
+    /// 検索欄・置換欄で ↑（古い方へ）↓（新しい方へ）を押したとき、検索語・置換語の履歴を入れる。いちばん新しいところから ↓ で、たどる前の入力に戻る
+    fn history_step(&mut self, field: u8, older: bool) {
+        let kind = if field == 1 { crate::history::Kind::Replace } else { crate::history::Kind::Find };
+        let list = self.history.list(kind).to_vec();
+        if list.is_empty() {
+            return;
+        }
+        let cur = self.hist_pos.get().filter(|(f, _)| *f == field).map(|(_, i)| i);
+        let text = match (cur, older) {
+            (None, true) => {
+                // たどり始め：いま入力している文字を覚えておく
+                *self.hist_draft.borrow_mut() = if field == 1 { self.input2.clone() } else { self.input.clone() };
+                self.hist_pos.set(Some((field, 0)));
+                list[0].clone()
+            }
+            (None, false) => return,
+            (Some(i), true) => {
+                let n = (i + 1).min(list.len() - 1);
+                self.hist_pos.set(Some((field, n)));
+                list[n].clone()
+            }
+            (Some(0), false) => {
+                self.hist_pos.set(None);
+                self.hist_draft.borrow().clone()
+            }
+            (Some(i), false) => {
+                self.hist_pos.set(Some((field, i - 1)));
+                list[i - 1].clone()
+            }
+        };
+        let id = if field == 1 { ID_REPL } else { ID_FIND };
+        let h = self.findrow.borrow().as_ref().map(|f| f.h(id)).unwrap_or_default();
+        if field == 1 {
+            self.input2 = text.clone();
+        } else {
+            self.input = text.clone();
+        }
+        // 入力欄に入れて、カーソルを末尾に（欄の変更の通知は、いま App を借りているので届かない。ここで自分で更新する）
+        let t = wide(&text);
+        unsafe {
+            let _ = SetWindowTextW(h, PCWSTR(t.as_ptr()));
+            SendMessageW(h, EM_SETSEL, Some(WPARAM(i32::MAX as usize)), Some(LPARAM(i32::MAX as isize)));
+        }
+        self.find_bar_changed();
+    }
+
     /// 開く・入力欄へ戻るときに、入力欄に入って全選択するよう頼む
     pub(super) fn focus_findrow(&self) {
         self.panel_focus.set(false);
@@ -427,6 +473,8 @@ impl App {
             (ID_FIND | ID_REPL, 0x0300) => {
                 let h = self.findrow.borrow().as_ref().map(|f| f.h(id)).unwrap_or_default();
                 let text = unsafe { Self::edit_text(h) };
+                // 自分で打った文字なら、履歴をたどっている状態はやめる
+                self.hist_pos.set(None);
                 if id == ID_FIND {
                     self.input = text;
                 } else {
@@ -596,6 +644,11 @@ unsafe extern "system" fn edit_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam
                             let _ = SetFocus(Some(main));
                             return LRESULT(0);
                         }
+                        // 検索語・置換語の履歴（検索・置換の行だけ）
+                        VK_UP | VK_DOWN if with_app(|a| a.is_find_bar()) == Some(true) => {
+                            with_app(|a| a.history_step(data as u8, vk == VK_UP));
+                            return LRESULT(0);
+                        }
                         VK_TAB => {
                             // 検索欄と置換欄を行き来する
                             let other = with_app(|a| {
@@ -610,6 +663,10 @@ unsafe extern "system" fn edit_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam
                         }
                         _ => {}
                     }
+                }
+                // Ctrl+Y（やり直し）：標準の入力欄にはやり直しがない。本文のやり直しにつなぐと、検索語を打っている最中に本文が変わるので、何もしない
+                if ctrl && !alt && vk == VK_Y {
+                    return LRESULT(0);
                 }
                 // ファンクションキーや Ctrl・Alt の組み合わせは、アプリの操作へ渡す（入力欄が自分で使うものは除く）
                 let function = (VK_F1.0..=VK_F12.0).contains(&vk.0);

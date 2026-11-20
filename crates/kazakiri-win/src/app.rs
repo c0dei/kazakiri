@@ -304,6 +304,9 @@ struct App {
     findrow_shown: Cell<bool>,
     findrow_placed: Cell<[i32; 5]>,
     findrow_focus: Cell<u8>,
+    /// 検索語・置換語の履歴を ↑↓ でたどっている位置（欄 0 = 検索 / 1 = 置換、履歴の番号。たどっていなければ None）と、たどる前に入力していた文字
+    hist_pos: Cell<Option<(u8, usize)>>,
+    hist_draft: RefCell<String>,
     /// 検索の実行中に押された「次へ／前へ」（実行中の検索が終わったら、順に実行する）
     find_queue: RefCell<Vec<Direction>>,
     /// 結果一覧をクリックして、キー（↑↓ など）を一覧が受けているか（本文や入力欄に入ると外れる）

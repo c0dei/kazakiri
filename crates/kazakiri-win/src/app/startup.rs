@@ -83,6 +83,8 @@ pub(super) unsafe fn run_inner() -> std::result::Result<(), (&'static str, windo
             findrow_shown: Cell::new(false),
             findrow_placed: Cell::new([0; 5]),
             findrow_focus: Cell::new(0),
+            hist_pos: Cell::new(None),
+            hist_draft: RefCell::new(String::new()),
             find_queue: RefCell::new(Vec::new()),
             panel_focus: Cell::new(false),
             hint_h_cache: Cell::new(None),
