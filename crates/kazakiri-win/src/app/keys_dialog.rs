@@ -4,13 +4,14 @@
 //! OK で keys.ini に保存して、すぐ反映する（メニューに出るキーの表示は、再起動後に変わる）。
 //! すでに別のコマンドが使っているキーを割り当てると、そちらを外す。
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 
 use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE};
 use windows::core::PWSTR;
 use windows::Win32::UI::Controls::*;
 use windows::Win32::UI::HiDpi::{GetDpiForWindow, SystemParametersInfoForDpi};
+use windows::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
 
 use super::find_dialog::{make_child, rgb_ref, wide};
 use super::*;
@@ -245,6 +246,133 @@ fn save(dlg: HWND) {
     }
 }
 
+thread_local! {
+    /// キー欄にいま入っているキー（仮想キーコード、修飾：1 = Shift、2 = Ctrl、4 = Alt。HKM_GETHOTKEY と同じ並び）
+    static HK: Cell<(u16, u32)> = const { Cell::new((0, 0)) };
+}
+
+/// キー欄に出す文字（「Ctrl+Shift+X」など。修飾キーだけを押している間は「Ctrl+」など。何もなければ「なし」）
+fn hk_text(vk: u16, mods: u32) -> String {
+    let (ctrl, shift, alt) = (mods & 2 != 0, mods & 1 != 0, mods & 4 != 0);
+    if vk == 0 {
+        if mods == 0 {
+            return "なし".into();
+        }
+        return format!("{}{}{}", if ctrl { "Ctrl+" } else { "" }, if shift { "Shift+" } else { "" }, if alt { "Alt+" } else { "" });
+    }
+    let alt_prefix = if alt { "Alt+" } else { "" };
+    match keymap::key_from_input(vk, ctrl, shift) {
+        Ok(k) => format!("{alt_prefix}{}", keymap::display(&k)),
+        // 割り当てられないキー：押したキーの名前を出す（「設定」を押すと、理由が出る）
+        Err(_) => {
+            let mut name = [0u16; 48];
+            let scan = unsafe { MapVirtualKeyW(vk as u32, MAPVK_VK_TO_VSC) };
+            let n = unsafe { GetKeyNameTextW((scan << 16) as i32, &mut name) } as usize;
+            format!("{}{}{alt_prefix}{}", if ctrl { "Ctrl+" } else { "" }, if shift { "Shift+" } else { "" }, String::from_utf16_lossy(&name[..n]))
+        }
+    }
+}
+
+fn hk_set(h: HWND, vk: u16, mods: u32) {
+    HK.with(|c| c.set((vk, mods)));
+    let t = wide(&hk_text(vk, mods));
+    unsafe {
+        let _ = SetWindowTextW(h, PCWSTR(t.as_ptr()));
+    }
+}
+
+/// キー欄のサブクラス：押したキーを受けて、HKM_GETHOTKEY / HKM_SETHOTKEY に答える。
+/// 修飾なしの Tab・Esc・Enter は、ダイアログの操作（移動・閉じる・OK）に任せる。Backspace・Delete（修飾なし）は、欄を空にする
+unsafe extern "system" fn hotkey_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM, _id: usize, _data: usize) -> LRESULT {
+    unsafe {
+        let down = |vk: VIRTUAL_KEY| GetKeyState(vk.0 as i32) < 0;
+        match msg {
+            m if m == HKM_GETHOTKEY => {
+                let (vk, mods) = HK.with(|c| c.get());
+                LRESULT((vk as u32 | (mods << 8)) as isize)
+            }
+            m if m == HKM_SETHOTKEY => {
+                let v = wparam.0 as u32;
+                hk_set(hwnd, (v & 0xFF) as u16, (v >> 8) & 0xFF);
+                LRESULT(0)
+            }
+            // ダイアログの操作のキー（修飾なしの Tab・Esc・Enter）以外は、この欄が受ける
+            WM_GETDLGCODE => {
+                let vk = if lparam.0 != 0 { (*(lparam.0 as *const MSG)).wParam.0 as u16 } else { 0 };
+                let plain = !down(VK_CONTROL) && !down(VK_MENU) && !down(VK_SHIFT);
+                if plain && matches!(VIRTUAL_KEY(vk), VK_TAB | VK_ESCAPE | VK_RETURN) { LRESULT(DLGC_WANTCHARS as isize) } else { LRESULT((DLGC_WANTALLKEYS | DLGC_WANTCHARS) as isize) }
+            }
+            WM_KEYDOWN | WM_SYSKEYDOWN => {
+                let vk = VIRTUAL_KEY(wparam.0 as u16);
+                let mods = u32::from(down(VK_SHIFT)) | (u32::from(down(VK_CONTROL)) << 1) | (u32::from(down(VK_MENU)) << 2);
+                if matches!(vk, VK_CONTROL | VK_SHIFT | VK_MENU | VK_LWIN | VK_RWIN) {
+                    hk_set(hwnd, 0, mods);
+                } else if mods == 0 && matches!(vk, VK_BACK | VK_DELETE) {
+                    hk_set(hwnd, 0, 0);
+                } else {
+                    hk_set(hwnd, vk.0, mods);
+                }
+                LRESULT(0)
+            }
+            // 修飾キーだけの表示のまま離したら、「なし」に戻す
+            WM_KEYUP | WM_SYSKEYUP => {
+                let (vk, _) = HK.with(|c| c.get());
+                if vk == 0 {
+                    let mods = u32::from(down(VK_SHIFT)) | (u32::from(down(VK_CONTROL)) << 1) | (u32::from(down(VK_MENU)) << 2);
+                    hk_set(hwnd, 0, mods);
+                }
+                LRESULT(0)
+            }
+            // 文字・貼り付けなどでは、欄を書き換えさせない
+            WM_CHAR | WM_SYSCHAR | WM_PASTE | WM_CUT | WM_CLEAR | WM_UNDO | WM_IME_CHAR => LRESULT(0),
+            _ => DefSubclassProc(hwnd, msg, wparam, lparam),
+        }
+    }
+}
+
+/// 一覧のサブクラス：ダークのとき、見出し行を自前で描く（Windows の描画では、文字がほとんど見えない）
+unsafe extern "system" fn list_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM, _id: usize, _data: usize) -> LRESULT {
+    unsafe {
+        if msg == WM_NOTIFY && DARK.load(Ordering::Relaxed) {
+            let nm = &*(lparam.0 as *const NMHDR);
+            let header = HWND(SendMessageW(hwnd, LVM_GETHEADER, None, None).0 as *mut _);
+            if nm.code == NM_CUSTOMDRAW && nm.hwndFrom == header {
+                let cd = &*(lparam.0 as *const NMCUSTOMDRAW);
+                if cd.dwDrawStage == CDDS_PREPAINT {
+                    return LRESULT(CDRF_NOTIFYITEMDRAW as isize);
+                }
+                if cd.dwDrawStage == CDDS_ITEMPREPAINT {
+                    let t = &super::theme::DARK;
+                    let mut rc = cd.rc;
+                    let bg = CreateSolidBrush(rgb_ref(&t.gutter_bg));
+                    FillRect(cd.hdc, &rc, bg);
+                    let _ = DeleteObject(bg.into());
+                    // 右端の区切り線
+                    let line = CreateSolidBrush(rgb_ref(&t.dim));
+                    FillRect(cd.hdc, &RECT { left: rc.right - 1, top: rc.top + 3, right: rc.right, bottom: rc.bottom - 3 }, line);
+                    let _ = DeleteObject(line.into());
+                    // 見出しの文字
+                    let mut buf = [0u16; 64];
+                    let mut item = HDITEMW { mask: HDI_TEXT, pszText: PWSTR(buf.as_mut_ptr()), cchTextMax: buf.len() as i32, ..Default::default() };
+                    let ok = SendMessageW(header, HDM_GETITEMW, Some(WPARAM(cd.dwItemSpec)), Some(LPARAM(&mut item as *mut _ as isize))).0 != 0;
+                    if ok {
+                        let n = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+                        let font = SendMessageW(header, WM_GETFONT, None, None).0;
+                        let old = SelectObject(cd.hdc, HGDIOBJ(font as *mut _));
+                        SetBkMode(cd.hdc, TRANSPARENT);
+                        SetTextColor(cd.hdc, rgb_ref(&t.text));
+                        rc.left += 8;
+                        DrawTextW(cd.hdc, &mut buf[..n], &mut rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
+                        SelectObject(cd.hdc, old);
+                    }
+                    return LRESULT(CDRF_SKIPDEFAULT as isize);
+                }
+            }
+        }
+        DefSubclassProc(hwnd, msg, wparam, lparam)
+    }
+}
+
 fn set_theme(dark: bool) {
     let dlg = HWND(KEYS_DLG.load(Ordering::Relaxed) as *mut _);
     if dlg.0.is_null() {
@@ -254,7 +382,19 @@ fn set_theme(dark: bool) {
     unsafe {
         let all: Vec<HWND> = STATE.with(|s| s.borrow().as_ref().map(|st| st.all.iter().map(|(_, h)| *h).collect()).unwrap_or_default());
         for h in all {
-            let _ = SetWindowTheme(h, if dark { w!("DarkMode_Explorer") } else { PCWSTR::null() }, PCWSTR::null());
+            // 部品の種類で、ダーク用のテーマが違う：入力欄は CFD、ほかは Explorer（入力欄に Explorer を当てると白いまま）
+            let mut name = [0u16; 32];
+            let n = GetClassNameW(h, &mut name) as usize;
+            let class = String::from_utf16_lossy(&name[..n]);
+            let theme = if class.eq_ignore_ascii_case("Edit") { w!("DarkMode_CFD") } else { w!("DarkMode_Explorer") };
+            let _ = SetWindowTheme(h, if dark { theme } else { PCWSTR::null() }, PCWSTR::null());
+            // 一覧の見出し行（これも別の部品。白いまま残るので、ダーク用のテーマを当てる）
+            if class == "SysListView32" {
+                let header = HWND(SendMessageW(h, LVM_GETHEADER, None, None).0 as *mut _);
+                if !header.0.is_null() {
+                    let _ = SetWindowTheme(header, if dark { w!("DarkMode_ItemsView") } else { PCWSTR::null() }, PCWSTR::null());
+                }
+            }
         }
         let t = &super::theme::DARK;
         let list = ctl(ID_LIST);
@@ -339,7 +479,8 @@ unsafe fn create(owner: HWND) {
         };
         put(ID_LIST, w!("SysListView32"), "", LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_TABSTOP.0, WS_EX_CLIENTEDGE.0, 12, 12, 536, 300);
         put(ID_PROMPT, w!("STATIC"), "キー（ここを押してから、割り当てたいキーを押す）", 0, 0, 12, 322, 400, 18);
-        put(ID_HOTKEY, w!("msctls_hotkey32"), "", WS_TABSTOP.0, WS_EX_CLIENTEDGE.0, 12, 342, 200, 26);
+        // キーを受ける欄。Windows のホットキー部品はダークにできない（白く描く）ので、読み取り専用の入力欄に、同じメッセージ（HKM_GETHOTKEY）で答えさせる
+        put(ID_HOTKEY, w!("EDIT"), "なし", ES_READONLY as u32 | ES_AUTOHSCROLL as u32 | WS_TABSTOP.0, WS_EX_CLIENTEDGE.0, 12, 342, 200, 26);
         put(ID_SET, w!("BUTTON"), "設定(&S)", push, 0, 222, 342, 76, 26);
         put(ID_ADD, w!("BUTTON"), "追加(&A)", push, 0, 304, 342, 76, 26);
         put(ID_CLEAR, w!("BUTTON"), "外す(&R)", push, 0, 386, 342, 76, 26);
@@ -348,8 +489,11 @@ unsafe fn create(owner: HWND) {
         put(ID_ALL_DEFAULT, w!("BUTTON"), "すべて既定に戻す(&Z)", push, 0, 12, 424, 150, 28);
         put(ID_OK, w!("BUTTON"), "OK", BS_DEFPUSHBUTTON as u32 | WS_TABSTOP.0, 0, 372, 424, 84, 28);
         put(ID_CANCEL, w!("BUTTON"), "キャンセル", push, 0, 464, 424, 84, 28);
+        let hk = all.iter().find(|(i, _)| *i == ID_HOTKEY).map(|(_, h)| *h).unwrap_or_default();
+        let _ = SetWindowSubclass(hk, Some(hotkey_proc), 1, 0);
         // 一覧の列
         let list = all.iter().find(|(i, _)| *i == ID_LIST).map(|(_, h)| *h).unwrap_or_default();
+        let _ = SetWindowSubclass(list, Some(list_proc), 2, 0);
         SendMessageW(list, LVM_SETEXTENDEDLISTVIEWSTYLE, None, Some(LPARAM(LVS_EX_FULLROWSELECT as isize)));
         for (i, (name, w)) in [("コマンド", 250), ("キー", 260)].iter().enumerate() {
             let t = wide(name);
@@ -412,11 +556,18 @@ unsafe extern "system" fn dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
             }
             WM_CTLCOLORDLG | WM_CTLCOLORSTATIC | WM_CTLCOLORBTN | WM_CTLCOLOREDIT | WM_CTLCOLORLISTBOX => {
                 if !DARK.load(Ordering::Relaxed) {
+                    // 読み取り専用のキー欄は、既定では灰色（無効のように見える）。ふつうの入力欄と同じ白にする
+                    if HWND(lparam.0 as *mut _) == ctl(ID_HOTKEY) {
+                        let hdc = HDC(wparam.0 as *mut _);
+                        SetTextColor(hdc, COLORREF(GetSysColor(COLOR_WINDOWTEXT)));
+                        SetBkColor(hdc, COLORREF(GetSysColor(COLOR_WINDOW)));
+                        return LRESULT(GetSysColorBrush(COLOR_WINDOW).0 as isize);
+                    }
                     return DefWindowProcW(hwnd, msg, wparam, lparam);
                 }
                 let hdc = HDC(wparam.0 as *mut _);
                 let t = &super::theme::DARK;
-                let editable = msg == WM_CTLCOLOREDIT || msg == WM_CTLCOLORLISTBOX;
+                let editable = msg == WM_CTLCOLOREDIT || msg == WM_CTLCOLORLISTBOX || HWND(lparam.0 as *mut _) == ctl(ID_HOTKEY);
                 SetTextColor(hdc, rgb_ref(&t.text));
                 SetBkColor(hdc, rgb_ref(if editable { &t.bg } else { &t.gutter_bg }));
                 LRESULT(if editable { EDIT_BRUSH.load(Ordering::Relaxed) } else { BG_BRUSH.load(Ordering::Relaxed) })
