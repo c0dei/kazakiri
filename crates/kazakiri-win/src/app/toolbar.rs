@@ -108,6 +108,12 @@ fn mode_icon(id: u32) -> Option<Icon> {
 /// モードバーの並び：ボタンの位置 (x0, x1, MODES の番号) と、「対象の列」の欄の位置 (x0, x1)
 type ModeLayout = (Vec<(f32, f32, usize)>, Option<(f32, f32)>);
 
+/// 幅に収まるボタンの並び（x0, x1, 番号）と、収まらないものがあるときの「≫」の位置（x0, x1）
+type ToolLayout = (Vec<(f32, f32, usize)>, Option<(f32, f32)>);
+
+/// モードバー：収まるボタン、「対象の列」の欄、「≫」の位置
+type ModeLayoutAll = (Vec<(f32, f32, usize)>, Option<(f32, f32)>, Option<(f32, f32)>);
+
 /// モードバーのボタン。(表示, コマンドの ID, 説明)
 const MODES: &[Option<(&str, u32, &str)>] = &[
     Some(("CSV", menu::ID_CSV_MODE, "CSV（カンマ区切り）の表として表示。TSV や指定した区切りのときは、カンマに切り替える")),
@@ -237,7 +243,7 @@ impl App {
     }
 
     /// 幅に収まるボタンと「対象の列」の欄、収まらないものがあるときの「≫」の位置 (x0, x1)
-    fn mode_layout_all(&self) -> (Vec<(f32, f32, usize)>, Option<(f32, f32)>, Option<(f32, f32)>) {
+    fn mode_layout_all(&self) -> ModeLayoutAll {
         let (all, pick) = self.mode_layout_raw();
         let w = self.full_w();
         let right = all.last().map_or(0.0, |b| b.1).max(pick.map_or(0.0, |p| p.1));
@@ -368,7 +374,7 @@ impl App {
     }
 
     /// 幅に収まるボタンの位置 (x0, x1, ボタンの番号) と、収まらないボタンがあるときの「≫」の位置 (x0, x1)
-    fn tool_layout(&self) -> (Vec<(f32, f32, usize)>, Option<(f32, f32)>) {
+    fn tool_layout(&self) -> ToolLayout {
         let mut x = BTN_PAD;
         let mut all = Vec::new();
         for (i, b) in BUTTONS.iter().enumerate() {
