@@ -1,8 +1,8 @@
 //! 文字コード判定。
 //!
 //! 1. BOM があればそれを信用する
-//! 2. 先頭サンプル（既定 1MB）が UTF-8 として正しければ UTF-8
-//! 3. NUL バイトの偏りから BOM なし UTF-16 を推定
+//! 2. NUL バイトの偏りから BOM なし UTF-16 を推定（ASCII 中心の UTF-16 は UTF-8 としても正しいので、先に調べる）
+//! 3. 先頭サンプル（既定 1MB）が UTF-8 として正しければ UTF-8
 //! 4. Shift_JIS / EUC-JP をデコードしてみて、不正バイト数などのスコアで選ぶ
 
 use encoding_rs::{Encoding, EUC_JP, SHIFT_JIS, UTF_16BE, UTF_16LE, UTF_8};

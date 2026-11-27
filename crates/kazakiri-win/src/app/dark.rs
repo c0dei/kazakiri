@@ -5,7 +5,6 @@
 //! 標準のメニューバーを暗くするには、非公開メッセージ `WM_UAHDRAWMENU` / `WM_UAHDRAWMENUITEM` で自分で塗る。
 //! このメッセージは `DrawMenuBar` などの中で同期的に届き、`App` を借りている最中のこともあるので、
 //! `wndproc` の最初（`App` を借りる前）で、色を入れたグローバル変数だけを使って処理する。
-//! それでも暗くならない環境のために、自前で描くメニューバー（`menubar = custom`）も残してある。
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
