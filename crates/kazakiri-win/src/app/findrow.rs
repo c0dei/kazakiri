@@ -593,6 +593,17 @@ fn alt_action(field: usize, vk: VIRTUAL_KEY) -> Option<FindAct> {
     }
 }
 
+/// 入力欄に届く Alt+キーの文字（`WM_SYSCHAR`）のうち、ここで受け止めるもの。標準の処理に渡すと、メニューの操作に入るか、ビープ音が鳴る。
+/// Alt+C・Alt+R はどの入力でも本体が受ける。Alt+Enter・Alt+A は検索・置換の行だけ
+fn swallows_syschar(field: usize, c: char, find_bar: bool) -> bool {
+    match c.to_ascii_lowercase() {
+        'c' | 'r' => true,
+        '\r' => find_bar && field == 0,
+        'a' => find_bar && field == 1,
+        _ => false,
+    }
+}
+
 /// 入力欄のサブクラス：Enter・Esc・Tab・F3・Ctrl+… を、アプリの操作につなぐ。`data` は 0 = 検索欄、1 = 置換欄
 unsafe extern "system" fn edit_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM, _id: usize, data: usize) -> LRESULT {
     unsafe {
@@ -619,8 +630,7 @@ unsafe extern "system" fn edit_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam
                 SendMessageW(hwnd, EM_REPLACESEL, Some(WPARAM(1)), Some(LPARAM(w!("").as_ptr() as isize)));
                 return LRESULT(0);
             }
-            // Alt+Enter・Alt+A の文字（ビープ音を鳴らさない）
-            WM_SYSCHAR if char::from_u32(wparam.0 as u32).is_some_and(|c| (data == 0 && c == '\r') || (data == 1 && c.eq_ignore_ascii_case(&'a'))) && with_app(|a| a.is_find_bar()) == Some(true) => return LRESULT(0),
+            WM_SYSCHAR if char::from_u32(wparam.0 as u32).is_some_and(|c| swallows_syschar(data, c, with_app(|a| a.is_find_bar()) == Some(true))) => return LRESULT(0),
             WM_KEYDOWN | WM_SYSKEYDOWN => {
                 let vk = VIRTUAL_KEY(wparam.0 as u16);
                 let ctrl = GetKeyState(VK_CONTROL.0 as i32) < 0;
@@ -714,5 +724,21 @@ mod tests {
         assert!(matches!(alt_action(1, VK_A), Some(FindAct::ReplAll)));
         assert!(alt_action(0, VK_A).is_none() && alt_action(1, VK_RETURN).is_none());
         assert!(alt_action(0, VK_C).is_none() && alt_action(1, VK_R).is_none(), "Alt+C / Alt+R は本体へ渡す");
+    }
+
+    #[test]
+    fn alt_characters_handled_here_do_not_reach_the_menu() {
+        for field in [0, 1] {
+            for c in ['c', 'C', 'r', 'R'] {
+                assert!(swallows_syschar(field, c, true) && swallows_syschar(field, c, false), "Alt+{c}");
+            }
+            // ほかの文字は渡す（Alt+F などで、メニューを開ける）
+            for c in ['f', 'e', 's', 'v', 'd', 'n'] {
+                assert!(!swallows_syschar(field, c, true), "Alt+{c}");
+            }
+        }
+        assert!(swallows_syschar(0, '\r', true) && swallows_syschar(1, 'A', true));
+        assert!(!swallows_syschar(1, '\r', true) && !swallows_syschar(0, 'a', true));
+        assert!(!swallows_syschar(0, '\r', false) && !swallows_syschar(1, 'a', false));
     }
 }
