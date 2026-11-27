@@ -14,7 +14,8 @@
 //! | `files` / `search` / `results` | 開く・再読み込み、検索、結果一覧・GREP |
 //! | `edit` / `lines` / `multi` / `rect` / `wrap` / `complete` | 編集、行の操作と変換、複数カーソル、矩形選択、折り返し、補完 |
 //! | `csv_view` / `diffview` / `bookmarks` / `markers` | CSV 表示、差分・分割表示、ブックマーク、カラーマーカー |
-//! | `tabs` / `caption` / `toolbar` / `status_menu` / `view` / `theme` / `dark` | タブ、ウィンドウ幅、ツールバーとモードバー、ステータスバー、表示設定、配色 |
+//! | `tabs` / `caption` / `toolbar` / `chrome` / `status_menu` / `view` / `theme` / `dark` | タブ、ウィンドウ幅、ツールバーとモードバー、ステータスバーとそのメニュー、表示設定、配色 |
+//! | `autosave` / `tray` / `macros` / `mdview` / `hexview` / `markers` / `scrollmarks` / `timefilter` / `linestats` | 自動保存、通知領域、マクロ、Markdown・16 進の表示、印、ログの時刻の操作、行の統計 |
 //! | `findrow` / `findbar` / `palette` | 検索・置換の行（本文の上に固定。標準の入力欄とボタン）、行へ移動・列フィルタの入力欄、コマンドパレット |
 //! | `find_dialog` / `settings_dialog` / `keys_dialog` | 各ダイアログ（検索ダイアログは GREP 用） |
 
@@ -694,6 +695,8 @@ impl App {
                         }
                     }
                     if done {
+                        // 読み直して短くなったときに、表示の先頭が末尾より後ろに残らないように
+                        self.clamp_top();
                         self.apply_pending_goto();
                     }
                     if self.stick_bottom {

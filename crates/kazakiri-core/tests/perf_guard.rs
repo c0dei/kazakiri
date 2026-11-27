@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 
 use kazakiri_core::loglevel::{filter_level, LevelSpec};
 use kazakiri_core::logtime::{filter_time, TimeRange};
-use kazakiri_core::{Document, EditKind, Editor, Query, SearchControl, SearchOptions};
+use kazakiri_core::{Document, EditKind, Editor, Query, Refresh, SearchControl, SearchOptions};
 
 struct Guard {
     slack: f64,
@@ -182,6 +182,23 @@ fn large_file_operations_stay_within_budget() {
     let rows = kazakiri_core::diff::diff(&hashes, &changed);
     g.check("差分：2% の行が違う", t.elapsed(), 3.0);
     assert!(rows.is_some(), "差分：違いが散らばっていても比較できる");
+
+    // マップせずメモリに読み込んで開く（上限以下のファイル）と、追記の読み込み（追従中は繰り返される）
+    {
+        let t = Instant::now();
+        let mem = Document::open_with_limit(&path, None, u64::MAX).unwrap();
+        std::hint::black_box(mem.lines(0, 50));
+        g.check("メモリに読み込んで開く", t.elapsed(), 0.5);
+        assert!(!mem.is_mapped());
+        wait_index(&mem);
+        std::fs::OpenOptions::new().append(true).open(&path).unwrap().write_all(b"appended
+").unwrap();
+        let t = Instant::now();
+        let Refresh::Appended(new) = mem.refresh().unwrap() else { panic!("追記と判定されない") };
+        wait_index(&new);
+        g.check("メモリ上のファイルの追記の読み込み", t.elapsed(), 0.3);
+        assert!(!new.is_mapped());
+    }
 
     // 巨大な 1 行（minify した JSON 相当）の窓の取り出しと編集
     let mut one = String::from("[");

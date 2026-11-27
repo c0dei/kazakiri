@@ -2,6 +2,7 @@
 
 use kazakiri_core::DiskState;
 
+use super::results::ResultKind;
 use super::*;
 
 impl App {
@@ -10,7 +11,8 @@ impl App {
     pub(super) fn open_keep(&mut self, path: PathBuf, forced: Option<&'static Encoding>, keep_view: bool) {
         self.cancel_search();
         self.layout_cache.borrow_mut().clear();
-        match Document::open_with(&path, forced) {
+        let memory_limit = (self.settings.memory_load_mb as u64) << 20;
+        match Document::open_with_limit(&path, forced, memory_limit) {
             Ok(doc) => {
                 let doc = Arc::new(doc);
                 self.editor = Some(Editor::new(doc.clone()));
@@ -86,6 +88,7 @@ impl App {
                 let path = doc.path().map(|p| p.to_path_buf());
                 if let Some(path) = path {
                     self.open_keep(path, doc.forced_encoding(), true);
+                    self.forget_stale_positions();
                     self.message = "ファイルが置き換わったため開き直しました".into();
                     if self.follow {
                         self.stick_bottom = true;
@@ -99,6 +102,32 @@ impl App {
                 }
             }
         }
+    }
+
+    /// 中身が置き換わった（短くなったかもしれない）ファイルを読み直したあと、前の内容を指す位置を捨てる。
+    /// 表示の先頭の行は、行索引ができた時点で範囲に収める（`TIMER_INDEX`）
+    fn forget_stale_positions(&mut self) {
+        let Some(doc) = self.doc.clone() else { return };
+        let (start, len) = (doc.text_start() as u64, doc.len());
+        // 選択は解除して、カーソルだけを範囲内に残す（前の範囲が別の内容を選んだまま、入力で置き換わらないように）
+        self.sel = self.sel.map(|(_, caret)| {
+            let c = caret.clamp(start.min(len), len);
+            (c, c)
+        });
+        self.rect = None;
+        self.multi = None;
+        self.dabbrev = None;
+        self.pending_goto = None;
+        self.dlg_scope = None;
+        self.replace_scope = None;
+        if matches!(self.results.as_ref().map(|r| &r.kind), Some(ResultKind::InDoc { .. })) {
+            self.results = None;
+        }
+        if self.hexview.is_some() {
+            self.hex_scroll(0);
+        }
+        self.update_scrollbars();
+        self.invalidate();
     }
 
     /// 外部での変更の定期確認（表示中のタブ）。
@@ -144,6 +173,9 @@ impl App {
             self.stick_bottom = true;
         }
         self.message = format!("末尾の追従: {}", on_off(on));
+        if on && self.doc.as_ref().is_some_and(|d| d.is_mapped()) {
+            self.message.push_str("（大きいファイルのため、開いている間、ほかのアプリはこのファイルを切り詰められません）");
+        }
         self.invalidate();
     }
 }

@@ -1,6 +1,6 @@
 //! 開いているファイル 1 つぶんの状態。
 //!
-//! 編集していないあいだは、元ファイル（メモリマップ）と行インデックスをそのまま使う。
+//! 編集していないあいだは、元ファイル（メモリマップ。小さなファイルはメモリに読み込んだ内容）と行インデックスをそのまま使う。
 //! 編集するとピーステーブル（`pieces`）を作り、以降の読み出しはそれを通す。
 //! `Document` は複製が安く（中身は `Arc`）、編集は新しい `Document` を返す。
 
@@ -15,7 +15,7 @@ use encoding_rs::{Encoding, UTF_16BE, UTF_16LE};
 use crate::encoding::{self, Detected};
 use crate::line_index::{line_start_at_or_after, line_start_at_or_before, next_line_start, LineIndex, Newline, Progress};
 use crate::pieces::{Ctx, Pieces};
-use crate::source::Source;
+use crate::source::{Source, DEFAULT_MEMORY_LIMIT};
 
 /// 編集できなかった理由
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,6 +61,8 @@ pub struct Document {
     text: Option<Arc<Pieces>>,
     /// 開いた（読み込んだ）ときのディスク上の更新時刻。外部での変更の検知に使う
     mtime: Option<std::time::SystemTime>,
+    /// この大きさ以下のファイルは、マップせずメモリに読み込む（読み直すときにも使う）
+    memory_limit: u64,
 }
 
 /// ディスク上のファイルが、開いたときから変わったか
@@ -94,10 +96,18 @@ impl Document {
 
     /// 文字コードを指定して開く（`None` なら自動判定）
     pub fn open_with(path: &Path, forced: Option<&'static Encoding>) -> io::Result<Document> {
-        let source = Source::open(path)?;
+        Self::open_with_limit(path, forced, DEFAULT_MEMORY_LIMIT)
+    }
+
+    /// `open_with` で、マップせずメモリに読み込む大きさの上限（バイト）を指定する（0 なら常にマップ）
+    pub fn open_with_limit(path: &Path, forced: Option<&'static Encoding>, memory_limit: u64) -> io::Result<Document> {
+        // 更新時刻は読む前に取る（読んでいる間の書き換えを、次の確認で見つけられるように）
+        let mtime = std::fs::metadata(path).and_then(|m| m.modified()).ok();
+        let source = Source::open(path, memory_limit)?;
         let mut doc = Self::from_source(source, forced);
         doc.path = Some(path.to_path_buf());
-        doc.mtime = std::fs::metadata(path).and_then(|m| m.modified()).ok();
+        doc.mtime = mtime;
+        doc.memory_limit = memory_limit;
         Ok(doc)
     }
 
@@ -108,15 +118,16 @@ impl Document {
 
     /// `open_scan` で文字コードを指定する（`None` なら自動判定）
     pub fn open_scan_with(path: &Path, forced: Option<&'static Encoding>) -> io::Result<Document> {
-        let source = Arc::new(Source::open(path)?);
+        // 走査はすぐ終わって閉じるので、読み込みの写しを作らないマップで開く
+        let mtime = std::fs::metadata(path).and_then(|m| m.modified()).ok();
+        let source = Arc::new(Source::open(path, 0)?);
         let detected = match forced {
             None => encoding::detect(source.bytes()),
             Some(enc) => encoding::forced(enc, source.bytes()),
         };
         let kind = newline_kind(&detected, source.bytes());
         let index = Arc::new(LineIndex::none(source.clone(), kind, detected.bom_len as u64));
-        let mtime = std::fs::metadata(path).and_then(|m| m.modified()).ok();
-        Ok(Document { path: Some(path.to_path_buf()), source, detected, index, forced, text: None, mtime })
+        Ok(Document { path: Some(path.to_path_buf()), source, detected, index, forced, text: None, mtime, memory_limit: 0 })
     }
 
     pub fn from_bytes(bytes: Vec<u8>) -> Document {
@@ -135,7 +146,7 @@ impl Document {
         };
         let kind = newline_kind(&detected, source.bytes());
         let index = Arc::new(LineIndex::build(source.clone(), kind, detected.bom_len as u64));
-        Document { path: None, source, detected, index, forced, text: None, mtime: None }
+        Document { path: None, source, detected, index, forced, text: None, mtime: None, memory_limit: DEFAULT_MEMORY_LIMIT }
     }
 
     /// ディスク上のファイルを確認し、追記だけなら索引を引き継いで読み直す
@@ -149,7 +160,7 @@ impl Document {
         let new_len = meta.len();
         let old_len = self.source.len();
         if new_len == old_len {
-            // 大きさが同じでも、更新時刻が変わっていれば中身を書き換えられている（マップには新しい内容が見えるが、索引は古い）
+            // 大きさが同じでも、更新時刻が変わっていれば中身を書き換えられている（読み込んだ内容や索引は古い）
             if self.mtime.is_some() && meta.modified().ok() != self.mtime {
                 return Ok(Refresh::Replaced);
             }
@@ -158,15 +169,8 @@ impl Document {
         if new_len < old_len || old_len == 0 {
             return Ok(Refresh::Replaced);
         }
-        let source = Source::open(path)?;
         // 先頭と、元の末尾付近が同じなら「追記」とみなす
-        let old = self.source.bytes();
-        let new = source.bytes();
-        let head = old.len().min(4096);
-        let tail = old.len().saturating_sub(4096);
-        if new.len() < old.len() || old[..head] != new[..head] || old[tail..] != new[tail..old.len()] {
-            return Ok(Refresh::Replaced);
-        }
+        let Some(source) = self.source.reopen_appended(path, new_len, self.memory_limit)? else { return Ok(Refresh::Replaced) };
         let source = Arc::new(source);
         let Some(index) = LineIndex::extend(&self.index, source.clone()) else { return Ok(Refresh::Replaced) };
         Ok(Refresh::Appended(Document {
@@ -177,6 +181,7 @@ impl Document {
             forced: self.forced,
             text: None,
             mtime: meta.modified().ok(),
+            memory_limit: self.memory_limit,
         }))
     }
 
@@ -194,6 +199,11 @@ impl Document {
                 }
             }
         }
+    }
+
+    /// 元ファイルをメモリマップで開いているか（開いている間、ほかのアプリはこのファイルを切り詰められない）
+    pub fn is_mapped(&self) -> bool {
+        self.source.is_mapped()
     }
 
     /// 文字コードを指定して開いたか（`None` なら自動判定）

@@ -74,6 +74,7 @@ const ID_AUTOMIN: i32 = 236;
 const ID_CSVW: i32 = 242;
 const ID_CSVTRUNC: i32 = 243;
 const ID_CORNER: i32 = 244;
+const ID_MEMLOAD: i32 = 245;
 const ID_KEYS: i32 = 240;
 const ID_CLOSE: i32 = 241;
 
@@ -601,6 +602,9 @@ fn sync() {
     if unsafe { GetFocus() } != ctl(ID_CSVW) {
         set_text(ID_CSVW, &s.csv_max_col_width.to_string());
     }
+    if unsafe { GetFocus() } != ctl(ID_MEMLOAD) {
+        set_text(ID_MEMLOAD, &s.memory_load_mb.to_string());
+    }
     if unsafe { GetFocus() } != ctl(ID_BKDIR) {
         set_text(ID_BKDIR, &s.backup_dir);
     }
@@ -840,6 +844,7 @@ fn commit_edits() {
     let csv_trunc = is_checked(ID_CSVTRUNC);
     let corner = is_checked(ID_CORNER);
     let csv_w = text_of(ID_CSVW).trim().parse::<usize>().ok().map(|n| n.min(10_000));
+    let mem_load = text_of(ID_MEMLOAD).trim().parse::<usize>().ok().map(|n| n.min(settings::MAX_MEMORY_LOAD_MB));
     with_app(|app| {
         if bk_dir != app.settings.backup_dir {
             app.settings.backup_dir = bk_dir.clone();
@@ -862,6 +867,11 @@ fn commit_edits() {
             app.settings.csv_truncate = csv_trunc;
             app.settings.save();
             app.apply_csv_limits();
+        }
+        // 開いているファイルには、開き直すまで影響しない
+        if let Some(n) = mem_load.filter(|&n| n != app.settings.memory_load_mb) {
+            app.settings.memory_load_mb = n;
+            app.settings.save();
         }
         if let Some(n) = auto_min.filter(|&n| n != app.settings.autosave_min) {
             app.settings.autosave_min = n;
@@ -936,7 +946,7 @@ unsafe fn on_command(dlg: HWND, id: i32, code: u32) {
             return;
         }
         // 入力欄を書き換えた：下書きを変えただけ（反映は「保存」のとき）
-        if matches!(id, ID_FONT | ID_SIZE | ID_TAB | ID_UIFONT | ID_UISIZE | ID_WHEEL | ID_BKDIR | ID_AUTOMIN | ID_CSVW) {
+        if matches!(id, ID_FONT | ID_SIZE | ID_TAB | ID_UIFONT | ID_UISIZE | ID_WHEEL | ID_BKDIR | ID_AUTOMIN | ID_CSVW | ID_MEMLOAD) {
             if code == EN_CHANGE_CODE {
                 mark_dirty(dlg);
             }
@@ -1141,6 +1151,11 @@ unsafe fn create(owner: HWND) {
         let y = card(&mut rows, &mut cur, 0, "タブの幅", "半角の文字数", None, None);
         put(0, ID_TAB, w!("EDIT"), "", edit | ES_NUMBER as u32 | flat, 0, right - 60, mid(y, 26), 60, 26);
         places.push(Place { id: ID_TAB, anchor: cr(right - 60), x: right - 60, y: mid(y, 26), w: 60, h: 26 });
+        let y = card(&mut rows, &mut cur, 0, "メモリに読み込む上限", "MB。0 で読み込まない", None, None);
+        put(0, ID_MEMLOAD, w!("EDIT"), "", edit | ES_NUMBER as u32 | flat, 0, right - 60, mid(y, 26), 60, 26);
+        places.push(Place { id: ID_MEMLOAD, anchor: cr(right - 60), x: right - 60, y: mid(y, 26), w: 60, h: 26 });
+        put(0, 44, w!("STATIC"), "この大きさまでのファイルは、開いていても、ほかのアプリが切り詰められます。\nログのローテーションを妨げません。次に開くファイルから反映します。", 0, 0, PAGE_X, PAGE_Y + cur[0] + 4, CARD_W, 44);
+        places.push(Place { id: 44, anchor: Anchor::CardWidth, x: PAGE_X, y: PAGE_Y + cur[0] + 4, w: CARD_W, h: 44 });
         // スクロール
         let y = card(&mut rows, &mut cur, 1, "マウスホイール", "1 回で動かす行数", None, None);
         put(1, ID_WHEEL, w!("EDIT"), "", edit | ES_NUMBER as u32 | flat, 0, right - 60, mid(y, 26), 60, 26);
@@ -1218,7 +1233,7 @@ unsafe fn create(owner: HWND) {
         put(8, ID_KEYS, w!("BUTTON"), "変更...", push, 0, right - 90, mid(y, 28), 90, 28);
         places.push(Place { id: ID_KEYS, anchor: cr(right - 90), x: right - 90, y: mid(y, 28), w: 90, h: 28 });
         // ページごとの内容の高さ（末尾の説明文の分と、下の余白を含む）。表示領域より長ければ、スクロールする
-        let notes = [0, 0, 0, 0, 0, 44, 84, 44, 0];
+        let notes = [48, 0, 0, 0, 0, 44, 84, 44, 0];
         let page_h: Vec<i32> = (0..cur.len()).map(|i| cur[i] + notes[i] + 8).collect();
         put(ALL, IDOK.0, w!("BUTTON"), "保存", BS_DEFPUSHBUTTON as u32 | WS_TABSTOP.0, 0, 520, 520, 90, 30);
         places.push(Place { id: IDOK.0, anchor: Anchor::Corner(200, 46), x: 520, y: 520, w: 90, h: 30 });
