@@ -153,6 +153,8 @@ enum FindAct {
     ReplAll,
     /// 選んでいる範囲の中だけを、すべて置換
     ReplSel,
+    /// すべて検索して一覧にする
+    All,
     Case,
     Regex,
     Word,
@@ -342,8 +344,9 @@ struct App {
     gfx: Option<Gfx>,
     menus: Menus,
     keymap: keymap::Keymap,
-    /// ブックマークの行（0 始まり）と、そのときの総行数
+    /// ブックマークの行（0 始まり）
     bookmarks: std::collections::BTreeSet<u64>,
+    /// 直前の編集の前の総行数（ブックマークのずらし方に使う）
     bm_lines: u64,
     /// 直前の編集が行頭から始まったか（ブックマークのずらし方に使う）
     bm_col0: bool,
@@ -1049,8 +1052,8 @@ impl App {
                 }
                 WM_KEYDOWN => (DONE, self.on_key(VIRTUAL_KEY(wparam.0 as u16))),
                 // Alt+C / Alt+R：検索オプションの切り替え。
-                // DefWindowProc にも渡す（渡さないと Alt を離したときにメニューが開いてしまう）
-                // 検索欄で Alt+Enter：すべて検索して一覧に。置換欄で Alt+A：すべて置換
+                // DefWindowProc にも渡す（渡さないと Alt を離したときにメニューが開いてしまう）。
+                // 検索欄の Alt+Enter と置換欄の Alt+A は、入力欄が受ける（findrow.rs）
                 WM_SYSKEYUP if self.alt_used && VIRTUAL_KEY(wparam.0 as u16) == VK_MENU => {
                     self.alt_used = false;
                     (DONE, None)

@@ -126,8 +126,10 @@ impl App {
     /// エディタを操作する。表示用の Document の参照をいったん手放すので、
     /// 編集はピース列を複製せずにその場で行える
     pub(super) fn with_editor<R>(&mut self, f: impl FnOnce(&mut Editor) -> R) -> Option<R> {
-        // ブックマークをずらす目安：編集が行頭から始まったか
+        // ブックマークをずらす目安：編集の直前の総行数と、編集が行頭から始まったか。
+        // 行数はここで数える（外の追記の読み込みや開き直しで増減した分を、編集によるものと数えないように）
         if !self.bookmarks.is_empty() {
+            self.bm_lines = self.doc.as_ref().map_or(0, |d| d.line_count().0);
             let at = self.sel.map_or(0, |(a, b)| a.min(b));
             self.bm_col0 = self.doc.as_ref().and_then(|d| d.line_of_offset(at).and_then(|l| d.line_range(l))).is_some_and(|(s, _)| s == at);
         }

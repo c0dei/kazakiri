@@ -231,6 +231,11 @@ impl App {
         match act {
             FindAct::Next => self.find_and_remember(Direction::Forward),
             FindAct::Prev => self.find_and_remember(Direction::Backward),
+            FindAct::All => {
+                let q = self.last_find.clone();
+                self.history.push(crate::history::Kind::Find, &q);
+                self.find_all();
+            }
             FindAct::ReplOne => {
                 self.history.push(crate::history::Kind::Replace, &self.last_replace.clone());
                 self.replace_next(true);

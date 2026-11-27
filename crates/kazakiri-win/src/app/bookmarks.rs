@@ -15,9 +15,6 @@ impl App {
 
     pub(super) fn toggle_bookmark(&mut self) {
         let Some(l) = self.caret_line() else { return };
-        if self.bookmarks.is_empty() {
-            self.bm_lines = self.doc.as_ref().map_or(0, |d| d.line_count().0);
-        }
         if !self.bookmarks.remove(&l) {
             self.bookmarks.insert(l);
             self.message = format!("ブックマークを設定しました（{} 件）", self.bookmarks.len());
@@ -199,7 +196,6 @@ impl App {
             self.message = "行数が多い（または索引の作成中）ため、反転できません（500 万行まで）".into();
             return self.invalidate();
         }
-        self.bm_lines = n;
         // 最後の空行（ファイル末尾の改行のあと）には付けない
         let last = if doc.line_range(n - 1).is_some_and(|(s, e)| s == e) { n - 1 } else { n };
         self.bookmarks = (0..last).filter(|l| !self.bookmarks.contains(l)).collect();

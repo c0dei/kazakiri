@@ -36,7 +36,6 @@ pub(super) struct Tab {
     stick_bottom: bool,
     pending_goto: Option<(u64, u64, u64)>,
     bookmarks: std::collections::BTreeSet<u64>,
-    bm_lines: u64,
     /// Markdown のプレビュー（タブごとに持つ）
     md: Option<mdview::MdMode>,
     /// 終了の確認で「保存しない」を選んだ（終了の手続きの間だけ使う）
@@ -120,7 +119,6 @@ impl App {
             stick_bottom: std::mem::take(&mut self.stick_bottom),
             pending_goto: self.pending_goto.take(),
             bookmarks: std::mem::take(&mut self.bookmarks),
-            bm_lines: std::mem::take(&mut self.bm_lines),
             md: self.md.take().map(|v| v.mode),
             discard: std::mem::take(&mut self.discard),
         }
@@ -140,7 +138,6 @@ impl App {
         self.stick_bottom = t.stick_bottom;
         self.pending_goto = t.pending_goto;
         self.bookmarks = t.bookmarks;
-        self.bm_lines = t.bm_lines;
         self.md = t.md.map(mdview::MdView::new);
         self.md_hover = false;
         self.discard = t.discard;

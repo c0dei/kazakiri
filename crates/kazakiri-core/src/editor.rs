@@ -43,6 +43,8 @@ pub struct Editor {
     version: u64,
     next_version: u64,
     saved_version: u64,
+    /// 保存済みの版が、元のファイルの内容そのものか（編集していない文書から始めたか）
+    saved_is_original: bool,
     /// 直前の編集の種類と、そのあとのカーソル位置（まとめる判定用）
     last: Option<(EditKind, u64)>,
     /// いまの状態の選択範囲（やり直しで戻す位置）
@@ -51,7 +53,8 @@ pub struct Editor {
 
 impl Editor {
     pub fn new(doc: Arc<Document>) -> Editor {
-        Editor { doc: Some(doc), undo: Vec::new(), redo: Vec::new(), version: 0, next_version: 1, saved_version: 0, last: None, cur_sel: (0, 0) }
+        let saved_is_original = !doc.is_edited();
+        Editor { doc: Some(doc), undo: Vec::new(), redo: Vec::new(), version: 0, next_version: 1, saved_version: 0, saved_is_original, last: None, cur_sel: (0, 0) }
     }
 
     pub fn doc(&self) -> &Arc<Document> {
@@ -200,6 +203,12 @@ impl Editor {
         self.version = e.version;
         self.cur_sel = e.sel;
         self.last = None;
+        // 元の内容まで戻ったら、編集していない文書に戻す（外で変わったファイルを読み込めるように）。
+        // やり直しの記録は、元の内容に対してそのまま適用できる
+        if self.saved_is_original && !self.is_modified() {
+            let doc = self.doc.take().expect("document");
+            self.doc = Some(Arc::new(Document::without_edits(doc)));
+        }
         Some(back)
     }
 
@@ -276,6 +285,38 @@ mod tests {
         assert_eq!(text(&e), "a-b-c\nd-e\n");
         e.redo();
         assert_eq!(text(&e), "a\nbc\ndX\nYe\n");
+    }
+
+    #[test]
+    fn undoing_everything_returns_to_the_unedited_document() {
+        let mut e = Editor::new(ready(b"a-b\nc-d\n"));
+        e.replace(0, 1, "X", EditKind::Other, (0, 0)).unwrap();
+        e.replace_all(&[(1, 2), (5, 6)], &[b"==".to_vec()], (0, 0)).unwrap();
+        assert_eq!(text(&e), "X==b\nc==d\n");
+        e.undo();
+        assert!(e.doc().is_edited(), "途中まで戻しただけでは編集中のまま");
+        e.undo();
+        assert!(!e.is_modified() && !e.doc().is_edited());
+        assert_eq!(text(&e), "a-b\nc-d\n");
+        // 戻したあとも、やり直し・元に戻す・新しい編集ができる
+        e.redo();
+        e.redo();
+        assert_eq!(text(&e), "X==b\nc==d\n");
+        assert_eq!(e.doc().line_count(), (3, true));
+        e.undo();
+        e.undo();
+        e.replace(2, 3, "B", EditKind::Other, (0, 0)).unwrap();
+        assert_eq!(text(&e), "a-B\nc-d\n");
+    }
+
+    #[test]
+    fn an_editor_started_from_an_edited_document_keeps_its_edits_on_undo() {
+        let edited = ready(b"abc").replace(0, 1, b"X").unwrap();
+        let mut e = Editor::new(Arc::new(edited));
+        e.replace(1, 2, "Y", EditKind::Other, (0, 0)).unwrap();
+        e.undo();
+        assert!(!e.is_modified() && e.doc().is_edited());
+        assert_eq!(text(&e), "Xbc");
     }
 
     #[test]

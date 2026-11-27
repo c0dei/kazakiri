@@ -152,6 +152,21 @@ fn edits_survive_truncation_of_a_small_file() {
 }
 
 #[test]
+fn external_changes_are_loaded_after_undoing_every_edit() {
+    for (name, limit) in [("undone-mem.log", IN_MEMORY), ("undone-map.log", MAPPED)] {
+        let path = tmp(name);
+        std::fs::write(&path, "aaaa\n").unwrap();
+        let mut editor = Editor::new(Arc::new(open(&path, limit)));
+        editor.replace(0, 4, "XXXX", EditKind::Other, (0, 0)).unwrap();
+        editor.undo().unwrap();
+        append(&path, b"bbbb\n");
+        let Refresh::Appended(new) = editor.doc().refresh().unwrap() else { panic!("追記を読み込まない: {name}") };
+        wait(&new);
+        assert_eq!(texts(&new), ["aaaa", "bbbb", ""]);
+    }
+}
+
+#[test]
 fn growing_past_the_limit_switches_to_a_mapping() {
     let path = tmp("grow.log");
     std::fs::write(&path, "1234\n").unwrap();

@@ -583,6 +583,16 @@ unsafe extern "system" fn button_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
     unsafe { DefSubclassProc(hwnd, if msg == WM_LBUTTONDBLCLK { WM_LBUTTONDOWN } else { msg }, wparam, lparam) }
 }
 
+/// 検索の行だけの Alt の組み合わせ：検索欄で Alt+Enter はすべて検索して一覧に、置換欄で Alt+A はすべて置換。
+/// `field` は 0 = 検索欄、1 = 置換欄
+fn alt_action(field: usize, vk: VIRTUAL_KEY) -> Option<FindAct> {
+    match (field, vk) {
+        (0, VK_RETURN) => Some(FindAct::All),
+        (1, VK_A) => Some(FindAct::ReplAll),
+        _ => None,
+    }
+}
+
 /// 入力欄のサブクラス：Enter・Esc・Tab・F3・Ctrl+… を、アプリの操作につなぐ。`data` は 0 = 検索欄、1 = 置換欄
 unsafe extern "system" fn edit_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM, _id: usize, data: usize) -> LRESULT {
     unsafe {
@@ -609,6 +619,8 @@ unsafe extern "system" fn edit_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam
                 SendMessageW(hwnd, EM_REPLACESEL, Some(WPARAM(1)), Some(LPARAM(w!("").as_ptr() as isize)));
                 return LRESULT(0);
             }
+            // Alt+Enter・Alt+A の文字（ビープ音を鳴らさない）
+            WM_SYSCHAR if char::from_u32(wparam.0 as u32).is_some_and(|c| (data == 0 && c == '\r') || (data == 1 && c.eq_ignore_ascii_case(&'a'))) && with_app(|a| a.is_find_bar()) == Some(true) => return LRESULT(0),
             WM_KEYDOWN | WM_SYSKEYDOWN => {
                 let vk = VIRTUAL_KEY(wparam.0 as u16);
                 let ctrl = GetKeyState(VK_CONTROL.0 as i32) < 0;
@@ -668,6 +680,16 @@ unsafe extern "system" fn edit_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam
                 if ctrl && !alt && vk == VK_Y {
                     return LRESULT(0);
                 }
+                if msg == WM_SYSKEYDOWN && !ctrl && !shift {
+                    if let Some(act) = alt_action(data, vk).filter(|_| with_app(|a| a.is_find_bar()) == Some(true)) {
+                        // 押しっぱなしの繰り返し（lparam の 30 ビット目）では実行しない（すべて置換が続けて走らないように）
+                        if lparam.0 & (1 << 30) == 0 {
+                            with_app(|a| a.find_bar_do(act));
+                        }
+                        // 既定の処理にも渡す（渡さないと、Alt を離したときにメニューが開く）
+                        return DefSubclassProc(hwnd, msg, wparam, lparam);
+                    }
+                }
                 // ファンクションキーや Ctrl・Alt の組み合わせは、アプリの操作へ渡す（入力欄が自分で使うものは除く）
                 let function = (VK_F1.0..=VK_F12.0).contains(&vk.0);
                 let native = matches!(vk, VK_A | VK_C | VK_V | VK_X | VK_Z | VK_BACK | VK_DELETE | VK_LEFT | VK_RIGHT | VK_HOME | VK_END | VK_INSERT) && !alt;
@@ -679,5 +701,18 @@ unsafe extern "system" fn edit_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam
             _ => {}
         }
         DefSubclassProc(hwnd, msg, wparam, lparam)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn alt_keys_depend_on_the_field() {
+        assert!(matches!(alt_action(0, VK_RETURN), Some(FindAct::All)));
+        assert!(matches!(alt_action(1, VK_A), Some(FindAct::ReplAll)));
+        assert!(alt_action(0, VK_A).is_none() && alt_action(1, VK_RETURN).is_none());
+        assert!(alt_action(0, VK_C).is_none() && alt_action(1, VK_R).is_none(), "Alt+C / Alt+R は本体へ渡す");
     }
 }

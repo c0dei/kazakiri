@@ -626,6 +626,14 @@ impl Document {
         (doc, r)
     }
 
+    /// 編集の跡（ピーステーブル）を捨てて、元の内容を指す文書にする。
+    /// 内容が元と同じになったと分かっているとき（すべて元に戻したとき）だけ呼ぶ
+    pub(crate) fn without_edits(this: Arc<Document>) -> Document {
+        let mut doc = Arc::try_unwrap(this).unwrap_or_else(|a| (*a).clone());
+        doc.text = None;
+        doc
+    }
+
     fn check_range(&self, a: u64, b: u64) -> Result<(), EditError> {
         self.check_pos(a)?;
         self.check_pos(b)?;
